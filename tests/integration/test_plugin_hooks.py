@@ -14,7 +14,6 @@ from litestar.testing import AsyncTestClient
 
 from litestar_auth.authentication import LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -22,10 +21,10 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
     auth_state,
+    build_test_redis_strategy,
     non_auth_client_exception,
 )
 
@@ -84,8 +83,8 @@ def _build_config(
     )
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-hooks")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-hooks"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend or default_backend],
@@ -148,7 +147,7 @@ async def test_middleware_hook_can_wrap_auth_middleware_without_breaking_cookie_
     cookie_backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=CookieTransport(cookie_name="auth_cookie", secure=False, path="/", samesite="lax"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-hooks-cookie")),
+        strategy=build_test_redis_strategy(key_prefix="plugin-hooks-cookie"),
     )
     config = _build_config(backend=cookie_backend)
     config.csrf_secret = "0123456789abcdef" * 4

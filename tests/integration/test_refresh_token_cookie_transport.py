@@ -9,11 +9,11 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
+from authweave_core import RouteProviderPolicy
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 from sqlalchemy import select
 
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -23,7 +23,11 @@ from litestar_auth.controllers import create_auth_controller, create_session_dev
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
 
 if TYPE_CHECKING:
@@ -185,7 +189,13 @@ def build_app(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[User, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -270,7 +280,10 @@ async def test_cookie_transport_sets_refresh_token_cookie(
     access_digest = hmac.new(_TOKEN_HASH_SECRET.encode(), access_cookie.encode(), hashlib.sha256).hexdigest()
     assert session.scalar(select(AccessToken).where(AccessToken.token == access_digest)) is not None
 
-    refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_cookie})
+    refresh_response = await test_client.post(
+        "/auth/refresh",
+        headers={"Cookie": f"litestar_auth_refresh={refresh_cookie}"},
+    )
 
     assert refresh_response.status_code == HTTP_CREATED
     assert refresh_response.json() is None
@@ -317,11 +330,15 @@ async def test_cookie_transport_session_devices_mark_current_from_refresh_cookie
     )
     assert second_session_id is not None
 
-    test_client.cookies.set("litestar_auth", first_access_cookie)
-    test_client.cookies.set("litestar_auth_refresh", first_refresh_cookie)
-    list_response = await test_client.get("/auth/sessions")
-    revoke_response = await test_client.post("/auth/sessions/revoke-others")
-    after_revoke = await test_client.get("/auth/sessions")
+    first_session_headers = {
+        "Cookie": (f"litestar_auth={first_access_cookie}; litestar_auth_refresh={first_refresh_cookie}"),
+    }
+    list_response = await test_client.get("/auth/sessions", headers=first_session_headers)
+    revoke_response = await test_client.post(
+        "/auth/sessions/revoke-others",
+        headers=first_session_headers,
+    )
+    after_revoke = await test_client.get("/auth/sessions", headers=first_session_headers)
 
     assert list_response.status_code == HTTP_OK
     sessions_by_id = {item["session_id"]: item for item in list_response.json()["sessions"]}
@@ -446,10 +463,13 @@ async def test_refresh_is_rejected_after_logout(
     logout_handler = controller.logout.fn
     await logout_handler(controller, request)
 
-    refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_cookie})
+    refresh_response = await test_client.post(
+        "/auth/refresh",
+        headers={"Cookie": f"litestar_auth_refresh={refresh_cookie}"},
+    )
     surviving_refresh_response = await test_client.post(
         "/auth/refresh",
-        json={"refresh_token": surviving_refresh_cookie},
+        headers={"Cookie": f"litestar_auth_refresh={surviving_refresh_cookie}"},
     )
 
     assert refresh_response.status_code == HTTP_BAD_REQUEST

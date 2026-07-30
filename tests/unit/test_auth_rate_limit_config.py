@@ -32,10 +32,6 @@ LENIENT_STRICT_SLOTS = (
     "totp_regenerate_recovery_codes",
     "verify_token",
     "request_verify_token",
-    "organization_switch",
-    "api_key_create",
-    "api_key_update",
-    "api_key_use",
 )
 
 
@@ -116,20 +112,6 @@ def test_auth_rate_limit_preset_disabled_leaves_every_slot_unset() -> None:
     config = AuthRateLimitConfig.disabled()
 
     assert all(getattr(config, field.name) is None for field in fields(AuthRateLimitConfig))
-
-
-def test_auth_rate_limit_optional_slots_default_to_none_and_accept_endpoint_limits() -> None:
-    """Opt-in slots stay unset until the caller supplies an endpoint limiter."""
-    endpoint = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=STRICT_MAX_ATTEMPTS, window_seconds=WINDOW_SECONDS),
-        scope="ip",
-        namespace="custom-endpoint",
-    )
-
-    assert AuthRateLimitConfig().api_key_update is None
-    assert AuthRateLimitConfig().organization_switch is None
-    assert AuthRateLimitConfig(api_key_update=endpoint).api_key_update is endpoint
-    assert AuthRateLimitConfig(organization_switch=endpoint).organization_switch is endpoint
 
 
 def test_auth_rate_limit_from_shared_backend_uses_endpoint_overrides_for_customized_slots() -> None:

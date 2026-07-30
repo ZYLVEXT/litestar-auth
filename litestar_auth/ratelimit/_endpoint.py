@@ -10,19 +10,13 @@ from litestar.exceptions import TooManyRequestsException
 from litestar_auth._schema_fields import EMAIL_MAX_LENGTH
 
 from ._client_host import _DEFAULT_TRUSTED_HEADERS, _client_host, logger
-from ._identifier_extraction import (
-    _API_KEY_ID_LENGTH,
-    _extract_api_key_id,
-    _extract_email,
-    _has_hmac_api_key_authorization,
-)
+from ._identifier_extraction import _extract_email
 from ._key_derivation import _bounded_hash_part, _safe_key_part
 from ._protocol import KnownRateLimitConnection, RateLimiterBackend, RateLimitKey
 
-type RateLimitScope = Literal["api_key_id", "ip", "ip_email"]
+type RateLimitScope = Literal["ip", "ip_email"]
 
 _DEFAULT_IDENTITY_FIELDS = ("identifier", "username", "email")
-_SIGNED_API_KEY_BUCKET_PART = "signed"
 
 
 @dataclass(slots=True, frozen=True)
@@ -96,13 +90,4 @@ class EndpointRateLimit:
                 email_part = _bounded_hash_part(email, max_length=EMAIL_MAX_LENGTH)
                 if email_part is not None:
                     parts.append(email_part)
-        if self.scope == "api_key_id":
-            key_id = _extract_api_key_id(request)
-            if key_id:
-                key_id_part = _bounded_hash_part(key_id, max_length=_API_KEY_ID_LENGTH)
-                if key_id_part is not None:
-                    parts.append(key_id_part)
-            elif _has_hmac_api_key_authorization(request):
-                parts.append(_safe_key_part(_SIGNED_API_KEY_BUCKET_PART))
-
         return RateLimitKey(":".join(parts))

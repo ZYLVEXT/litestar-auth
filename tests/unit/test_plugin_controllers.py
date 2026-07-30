@@ -26,7 +26,6 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.controller_factory import ControllerFactoryKit
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.totp import InMemoryTotpEnrollmentStore
@@ -36,6 +35,7 @@ from tests.integration.test_orchestrator import (
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 _append_oauth_associate_controllers = oauth_controllers_module._append_oauth_associate_controllers
@@ -417,15 +417,14 @@ def test_controller_factory_kit_requires_runtime_context_factory() -> None:
 
 def test_controller_factory_kit_resolves_cookie_transport() -> None:
     """ControllerFactoryKit exposes the shared cookie-transport resolution helper."""
-    cookie_transport = CookieTransport()
+    cookie_transport = CookieTransport(allow_insecure_cookie_auth=True)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=cookie_transport,
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie")),
+        strategy=build_test_redis_strategy(key_prefix="cookie"),
     )
 
     assert ControllerFactoryKit.cookie_transport(backend) is cookie_transport
-    assert ControllerFactoryKit.cookie_transport(_backend(name="bearer", token_prefix="bearer")) is None
 
 
 async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:
@@ -912,7 +911,7 @@ def _backend(*, name: str, token_prefix: str) -> AuthenticationBackend[ExampleUs
     """
     return AuthenticationBackend[ExampleUser, UUID](
         name=name,
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix=token_prefix)),
     )
 

@@ -6,9 +6,14 @@ from collections.abc import Sequence
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from authweave_core import AuthenticationContext
 from litestar.di import NamedDependency
 
 from litestar_auth._manager.hooks import ExtensionManagerHookEvent, ExtensionManagerHookSubscriber
+from litestar_auth._plugin.extensions._context import (
+    ExtensionAuthenticationProviderContribution,
+    ExtensionTLSEvidenceContribution,
+)
 from litestar_auth._plugin.extensions._contracts import (
     EXTENSION_API_VERSION,
     EXTENSION_ENTRY_POINT_GROUP,
@@ -18,7 +23,7 @@ from litestar_auth._plugin.extensions._contracts import (
     AuthExtensionRegistrationContext,
     AuthExtensionValidationContext,
 )
-from litestar_auth.authentication import AuthenticationBackend
+from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.db import BaseOrganizationStore
 
 if TYPE_CHECKING:
@@ -30,22 +35,17 @@ if TYPE_CHECKING:
     )
     from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
     from litestar_auth.controllers import (
-        ApiKeysControllerConfig,
         AuthControllerConfig,
         OAuthAssociateControllerConfig,
         OAuthControllerConfig,
-        OrganizationControllerConfig,
         RegisterControllerConfig,
         SessionDevicesControllerConfig,
         TotpControllerOptions,
         TotpUserManagerProtocol,
         UsersControllerConfig,
-        backend_supports_organization_tokens,
-        create_api_keys_controllers,
         create_auth_controller,
         create_oauth_associate_controller,
         create_oauth_controller,
-        create_organization_controller,
         create_register_controller,
         create_reset_password_controller,
         create_session_devices_controller,
@@ -65,11 +65,12 @@ UserManagerDependency = NamedDependency[Any]
 AuthBackendsDependency = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 OrganizationStoreDependency = NamedDependency[BaseOrganizationStore[Any, Any, Any, Any]]
 ResolvedPermissionsDependency = NamedDependency[frozenset[str]]
+CurrentPrincipalDependency = NamedDependency[object | None]
+AuthenticationContextDependency = NamedDependency[AuthenticationContext | None]
 
 __all__ = (
     "EXTENSION_API_VERSION",
     "EXTENSION_ENTRY_POINT_GROUP",
-    "ApiKeysControllerConfig",
     "AuthBackendsDependency",
     "AuthCliExtension",
     "AuthControllerConfig",
@@ -77,12 +78,15 @@ __all__ = (
     "AuthExtension",
     "AuthExtensionRegistrationContext",
     "AuthExtensionValidationContext",
+    "AuthenticationContextDependency",
+    "CurrentPrincipalDependency",
+    "ExtensionAuthenticationProviderContribution",
     "ExtensionManagerHookEvent",
     "ExtensionManagerHookSubscriber",
+    "ExtensionTLSEvidenceContribution",
     "OAuthAssociateControllerConfig",
     "OAuthControllerConfig",
     "OrganizationAdminControllerConfig",
-    "OrganizationControllerConfig",
     "OrganizationInvitationControllerConfig",
     "OrganizationStoreDependency",
     "ProviderOAuthControllerConfig",
@@ -94,13 +98,10 @@ __all__ = (
     "TotpUserManagerProtocol",
     "UserManagerDependency",
     "UsersControllerConfig",
-    "backend_supports_organization_tokens",
-    "create_api_keys_controllers",
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_controller",
     "create_organization_admin_controller",
-    "create_organization_controller",
     "create_organization_invitation_controller",
     "create_provider_oauth_controller",
     "create_register_controller",
@@ -113,12 +114,10 @@ __all__ = (
 )
 
 _PUBLIC_EXPORTS = {
-    "ApiKeysControllerConfig": "litestar_auth.controllers",
     "AuthControllerConfig": "litestar_auth.controllers",
     "OAuthAssociateControllerConfig": "litestar_auth.controllers",
     "OAuthControllerConfig": "litestar_auth.controllers",
     "OrganizationAdminControllerConfig": "litestar_auth.contrib.organization_admin",
-    "OrganizationControllerConfig": "litestar_auth.controllers",
     "OrganizationInvitationControllerConfig": "litestar_auth.contrib.organization_admin",
     "ProviderOAuthControllerConfig": "litestar_auth.oauth",
     "RegisterControllerConfig": "litestar_auth.controllers",
@@ -127,13 +126,10 @@ _PUBLIC_EXPORTS = {
     "TotpControllerOptions": "litestar_auth.controllers",
     "TotpUserManagerProtocol": "litestar_auth.controllers",
     "UsersControllerConfig": "litestar_auth.controllers",
-    "backend_supports_organization_tokens": "litestar_auth.controllers",
-    "create_api_keys_controllers": "litestar_auth.controllers",
     "create_auth_controller": "litestar_auth.controllers",
     "create_oauth_associate_controller": "litestar_auth.controllers",
     "create_oauth_controller": "litestar_auth.controllers",
     "create_organization_admin_controller": "litestar_auth.contrib.organization_admin",
-    "create_organization_controller": "litestar_auth.controllers",
     "create_organization_invitation_controller": "litestar_auth.contrib.organization_admin",
     "create_provider_oauth_controller": "litestar_auth.oauth",
     "create_register_controller": "litestar_auth.controllers",

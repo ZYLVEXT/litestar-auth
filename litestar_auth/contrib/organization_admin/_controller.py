@@ -47,7 +47,7 @@ from litestar_auth.exceptions import (
     OrganizationMembershipNotFoundError,
     OrganizationNotFoundError,
 )
-from litestar_auth.guards import is_active, is_superuser, is_verified, requires_password_session
+from litestar_auth.guards import is_active, is_human_authenticated, is_superuser, is_verified
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -198,7 +198,7 @@ def _resolve_admin_guards(settings: OrganizationAdminControllerConfig[Any]) -> l
         ConfigurationError: If an empty guard sequence is supplied.
     """
     if settings.guards is None:
-        return [is_superuser, requires_password_session]
+        return [is_superuser, is_human_authenticated]
     if not settings.guards:
         msg = "create_organization_admin_controller guards must not be empty."
         raise ConfigurationError(msg)
@@ -757,7 +757,7 @@ def _create_organization_invitation_controller_type(
     class OrganizationInvitationController(_OrganizationInvitationControllerBase):
         @post(
             "/organization-invitations/accept",
-            guards=[is_active, is_verified, requires_password_session],
+            guards=[is_active, is_verified, is_human_authenticated],
             status_code=HTTP_200_OK,
             before_request=ctx.accept_before_request,
             security=security,
@@ -784,7 +784,7 @@ def _create_organization_invitation_controller_type(
 
         @post(
             "/organization-invitations/decline",
-            guards=[is_active, is_verified, requires_password_session],
+            guards=[is_active, is_verified, is_human_authenticated],
             status_code=HTTP_204_NO_CONTENT,
             before_request=ctx.decline_before_request,
             security=security,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._plugin.middleware import get_cookie_transports
@@ -34,33 +33,7 @@ def validate_backend_security_config[UP: UserProtocol[Any], ID](config: Litestar
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend strategy security posture for non-test environments."""
-    for backend in config.resolve_startup_backends():
-        _warn_backend_name_strategy_mismatch(
-            backend_name=getattr(backend, "name", None),
-            strategy=getattr(backend, "strategy", None),
-        )
-
-
-def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: object) -> None:
-    """Warn when a backend name implies JWT but the configured strategy is not JWT-backed."""
-    from litestar_auth._plugin.validation._general import (  # ruff: ignore[import-outside-top-level]
-        _current_jwt_strategy_type,
-    )
-
-    if (
-        not isinstance(backend_name, str)
-        or "jwt" not in backend_name.casefold()
-        or isinstance(strategy, _current_jwt_strategy_type())
-    ):
-        return
-
-    warnings.warn(
-        f"AuthenticationBackend name {backend_name!r} suggests JWTStrategy semantics, but the configured "
-        f"strategy is {type(strategy).__name__}. Consider a neutral name like 'bearer' or 'database' "
-        "to avoid misleading logs and configuration.",
-        UserWarning,
-        stacklevel=4,
-    )
+    config.resolve_startup_backends()
 
 
 def validate_rate_limit_config(rate_limit_config: object) -> None:
@@ -93,8 +66,10 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
 
-    unsafe_cookie_transports = [transport for transport in cookie_transports if transport.allow_insecure_cookie_auth]
-    if config.csrf_secret is not None or unsafe_cookie_transports or config.unsafe_testing:
+    all_cookie_transports_explicitly_insecure = all(
+        transport.allow_insecure_cookie_auth for transport in cookie_transports
+    )
+    if config.csrf_secret is not None or all_cookie_transports_explicitly_insecure or config.unsafe_testing:
         return
 
     msg = (

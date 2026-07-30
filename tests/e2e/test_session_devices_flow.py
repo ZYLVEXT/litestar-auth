@@ -10,6 +10,7 @@ import pytest
 from litestar import Litestar
 
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User, import_token_orm_models
@@ -60,6 +61,7 @@ def app(session: Session) -> Litestar:
                     database_token_auth=DatabaseTokenAuthConfig(
                         token_hash_secret=TOKEN_HASH_SECRET,
                         refresh_max_age=timedelta(days=30),
+                        cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
                     ),
                     session_maker=cast(
                         "Any",
@@ -96,21 +98,26 @@ async def _login(client: AsyncTestClient[Litestar], email: str, user_agent: str)
         headers={"User-Agent": user_agent},
     )
     assert response.status_code == HTTP_CREATED
-    return cast("dict[str, str]", response.json())
+    return {
+        "access_token": cast("str", response.cookies.get("litestar_auth")),
+        "refresh_token": cast("str", response.cookies.get("litestar_auth_refresh")),
+    }
 
 
 async def _refresh(client: AsyncTestClient[Litestar], refresh_token: str, user_agent: str) -> dict[str, str]:
     response = await client.post(
         "/auth/refresh",
-        json={"refresh_token": refresh_token},
-        headers={"User-Agent": user_agent},
+        headers={"Cookie": f"litestar_auth_refresh={refresh_token}", "User-Agent": user_agent},
     )
     assert response.status_code == HTTP_CREATED
-    return cast("dict[str, str]", response.json())
+    return {
+        "access_token": cast("str", response.cookies.get("litestar_auth")),
+        "refresh_token": cast("str", response.cookies.get("litestar_auth_refresh")),
+    }
 
 
 def _auth_headers(access_token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {access_token}"}
+    return {"Cookie": f"litestar_auth={access_token}"}
 
 
 async def _list_sessions(
@@ -118,17 +125,19 @@ async def _list_sessions(
     access_token: str,
     refresh_token: str,
 ) -> dict[str, dict[str, object]]:
-    response = await client.post(
+    response = await client.get(
         "/auth/sessions",
-        headers=_auth_headers(access_token),
-        json={"refresh_token": refresh_token},
+        headers={"Cookie": f"litestar_auth={access_token}; litestar_auth_refresh={refresh_token}"},
     )
     assert response.status_code == HTTP_OK
     return {cast("str", item["session_id"]): item for item in response.json()["sessions"]}
 
 
 async def _assert_refresh_token_invalid(client: AsyncTestClient[Litestar], refresh_token: str) -> None:
-    response = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    response = await client.post(
+        "/auth/refresh",
+        headers={"Cookie": f"litestar_auth_refresh={refresh_token}"},
+    )
 
     assert response.status_code == HTTP_BAD_REQUEST
     payload = response.json()
@@ -211,8 +220,11 @@ async def test_db_backed_session_devices_full_plugin_flow(client: AsyncTestClien
 
     revoke_others = await client.post(
         "/auth/sessions/revoke-others",
-        headers=_auth_headers(owner_current["access_token"]),
-        json={"refresh_token": owner_current["refresh_token"]},
+        headers={
+            "Cookie": (
+                f"litestar_auth={owner_current['access_token']}; litestar_auth_refresh={owner_current['refresh_token']}"
+            ),
+        },
     )
     assert revoke_others.status_code == HTTP_NO_CONTENT
     await _assert_refresh_token_invalid(client, owner_extra["refresh_token"])

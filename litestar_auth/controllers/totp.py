@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
     from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
     from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.ratelimit import AuthRateLimitConfig

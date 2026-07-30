@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
     from litestar.response import Response
 
+    from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 
 pytestmark = pytest.mark.unit
@@ -40,6 +41,8 @@ class _RouterTestUser(UserProtocol[object]):
 class _RouterTestTransport:
     """Minimal transport stub satisfying ``TransportProtocol``."""
 
+    cookie_name = "litestar_auth"
+
     async def read_token(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
         """Return no token for tests that only exercise router assembly."""
         return None
@@ -56,7 +59,11 @@ class _RouterTestTransport:
 class _RouterTestStrategy:
     """Minimal strategy stub satisfying ``StrategyProtocol``."""
 
-    async def read_token(self, token: str | None, user_manager: object) -> _RouterTestUser | None:
+    async def read_token(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[_RouterTestUser, object],
+    ) -> _RouterTestUser | None:
         """Return no user for tests that only exercise router assembly."""
         return None
 

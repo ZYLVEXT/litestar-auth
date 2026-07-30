@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.features._config import (
-        ApiKeyConfig,
         DatabaseTokenAuthConfig,
         OAuthConfig,
         OrganizationConfig,
@@ -21,7 +20,6 @@ class FeatureConfigSnapshot:
     """Immutable snapshot of plugin feature configuration inputs."""
 
     database_token_auth: DatabaseTokenAuthConfig | None
-    api_keys: ApiKeyConfig
     totp_config: TotpConfig | None
     oauth_config: OAuthConfig | None
     organization_config: OrganizationConfig
@@ -33,16 +31,6 @@ class ResolvedDatabaseTokenDefaults:
 
     config: DatabaseTokenAuthConfig | None
     backend_name: str | UnsetType
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedApiKeyDefaults:
-    """Resolved API-key feature defaults for one plugin config."""
-
-    config: ApiKeyConfig
-    enabled: bool
-    backend_name: str
-    hash_secret: str | UnsetType
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +64,6 @@ class ResolvedFeatureDefaults:
 
     config_snapshot: FeatureConfigSnapshot
     database_token: ResolvedDatabaseTokenDefaults
-    api_key: ResolvedApiKeyDefaults
     totp: ResolvedTotpDefaults
     oauth: ResolvedOAuthDefaults
     organization: ResolvedOrganizationDefaults

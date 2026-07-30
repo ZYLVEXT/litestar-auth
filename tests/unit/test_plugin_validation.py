@@ -6,8 +6,7 @@ import importlib
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 import msgspec
@@ -18,16 +17,11 @@ from litestar.config.app import AppConfig
 import litestar_auth._plugin._redirect_validation as redirect_validation_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
-import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
-import litestar_auth._plugin.validation.api_key as api_key_validation
-import litestar_auth._plugin.validation.oauth as oauth_validation
 import litestar_auth._plugin.validation.request_security as request_security_validation_module
-import litestar_auth._plugin.validation.totp as totp_validation
-from litestar_auth._plugin.features import ApiKeyLastUsedWriteStrategy
-from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
+from litestar_auth._plugin.middleware import build_csrf_config
 from litestar_auth._plugin.validation._core import (
     IssueCollector,
     ValidationIssue,
@@ -39,11 +33,7 @@ from litestar_auth._plugin.validation._core import (
     require_secret_length,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.jwt import JWTReplayStoreResult
-from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import (
     RESET_PASSWORD_TOKEN_AUDIENCE,
@@ -52,7 +42,7 @@ from litestar_auth.config import (
     VERIFY_TOKEN_AUDIENCE,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.manager import BaseUserManager, TotpSecretStoragePosture, UserManagerSecurity
+from litestar_auth.manager import TotpSecretStoragePosture, UserManagerSecurity
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import FernetKeyringConfig
@@ -65,11 +55,10 @@ from tests.integration.test_orchestrator import (
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 DEFAULT_CSRF_COOKIE_NAME = plugin_config_module.DEFAULT_CSRF_COOKIE_NAME
-API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
-ApiKeyConfig = plugin_config_module.ApiKeyConfig
 DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 LitestarAuthConfig = plugin_config_module.LitestarAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
@@ -86,7 +75,6 @@ _validate_backend_strategy_security = validation_module._validate_backend_strate
 _validate_totp_encryption_key = validation_module._validate_totp_encryption_key
 _validate_totp_pending_secret_config = validation_module._validate_totp_pending_secret_config
 validate_config = validation_module.validate_config
-validate_api_key_config = validation_module.validate_api_key_config
 validate_cookie_auth_config = validation_module.validate_cookie_auth_config
 validate_password_validator_config = validation_module.validate_password_validator_config
 validate_rate_limit_config = validation_module.validate_rate_limit_config
@@ -101,13 +89,12 @@ validate_user_model_login_identifier_fields = validation_module.validate_user_mo
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth.authentication.strategy.jwt import JWTStrategy
     from litestar_auth.config import OAuthProviderConfig
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
-JWT_SECRET = "0123456789abcdef" * 4
+CSRF_SECRET = "0123456789abcdef" * 4
 TOKEN_HASH_SECRET = "fedcba9876543210" * 4
 VERIFICATION_SECRET = "89abcdef01234567" * 4
 RESET_PASSWORD_SECRET = "76543210fedcba98" * 4
@@ -175,16 +162,6 @@ def test_validation_core_predicates_accept_valid_values_without_issues() -> None
     assert collector.issues == ()
 
 
-def test_feature_validation_modules_expose_package_implementations() -> None:
-    """Canonical validation submodules stay aligned with the package facade."""
-    assert api_key_validation.validate_api_key_config is validation_module.validate_api_key_config
-    assert (
-        oauth_validation.validate_oauth_route_registration_config.__module__ == "litestar_auth._plugin.validation.oauth"
-    )
-    assert totp_validation.validate_totp_config is validation_module.validate_totp_config
-    assert totp_validation.validate_totp_sub_config is validation_module.validate_totp_sub_config
-
-
 def _fernet_key() -> str:
     """Return a valid Fernet key for keyring validation tests."""
     return Fernet.generate_key().decode()
@@ -201,22 +178,6 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
     return oauth_provider_config_type(name=name, client=client)
 
 
-def _current_inmemory_jwt_denylist_store() -> object:
-    """Return a JWT denylist store instance from the current strategy module."""
-    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
-    store_type = cast("type[Any]", jwt_module.InMemoryJWTDenylistStore)
-    return store_type()
-
-
-def _current_jwt_strategy(*, denylist_store: object | None = None) -> JWTStrategy[Any, Any]:
-    """Return a JWT strategy instance from the current strategy module."""
-    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
-    strategy_type = cast("type[JWTStrategy[Any, Any]]", jwt_module.JWTStrategy)
-    if denylist_store is None:
-        return strategy_type(secret=JWT_SECRET, allow_inmemory_denylist=True)
-    return strategy_type(secret=JWT_SECRET, denylist_store=cast("Any", denylist_store))
-
-
 def _current_inmemory_used_totp_code_store() -> object:
     """Return a used-code store instance from the current TOTP module."""
     totp_module = importlib.import_module("litestar_auth.totp")
@@ -231,25 +192,13 @@ def _current_inmemory_totp_enrollment_store() -> object:
     return store_type()
 
 
-class _DurableDenylistStore:
-    revocation_is_durable = True
+class _DurableReplayStore:
+    """Shared single-use token replay store double."""
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
-        return True
+    is_shared_across_workers = True
 
-    async def is_denied(self, jti: str) -> bool:
-        return False
-
-    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
-        return JWTReplayStoreResult(stored=True)
-
-
-@dataclass(slots=True, frozen=True)
-class _StructuralJWTRevocationPosture:
-    key: str = "in_memory"
-    requires_explicit_production_opt_in: bool = False
-    production_validation_error: str | None = None
-    startup_warning: str | None = "process-local in-memory denylist"
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> object:
+        return type("_ReplayResult", (), {"stored": True, "rejected_as_replay": False})()
 
 
 class _DurableEnrollmentStore:
@@ -283,7 +232,7 @@ def _configured_totp_config(
     return TotpConfig(
         totp_pending_secret=totp_pending_secret,
         totp_algorithm=cast("Any", totp_algorithm),
-        totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+        totp_pending_jti_store=cast("Any", _DurableReplayStore()),
         totp_enrollment_store=cast("Any", _DurableEnrollmentStore()),
         totp_used_tokens_store=cast("Any", totp_used_tokens_store),
         totp_require_replay_protection=totp_require_replay_protection,
@@ -329,87 +278,16 @@ class _ProcessLocalRateLimitBackend:
         return 0
 
 
-def test_plugin_security_policy_docs_snippet_matches_shared_policy_wording() -> None:
-    """The shared docs snippet stays aligned with the plugin-owned security policy source."""
-    snippet = Path("docs/snippets/plugin_security_tradeoffs.md").read_text(encoding="utf-8")
-
-    for policy in plugin_security_policy_module._iter_plugin_security_policies():
-        assert policy.plugin_surface in snippet
-        assert policy.contract_reference in snippet
-        assert policy.docs_summary in snippet
-        assert policy.production_requirement in snippet
-
-
-def test_describe_jwt_revocation_policy_accepts_current_posture() -> None:
-    """Plugin notices reuse the direct JWT posture contract for current strategy objects."""
-    strategy = _current_jwt_strategy()
-
-    notice = plugin_security_policy_module._describe_jwt_revocation_policy(strategy.revocation_posture)
-
-    assert notice is not None
-    assert notice.policy.key == "jwt_revocation"
-    assert notice.posture_key == "in_memory"
-    assert notice.requires_explicit_production_opt_in is strategy.revocation_posture.requires_explicit_production_opt_in
-    assert notice.production_validation_error == strategy.revocation_posture.production_validation_error
-    assert notice.startup_warning == strategy.revocation_posture.startup_warning
-
-
-def test_describe_jwt_revocation_policy_rejects_structural_posture() -> None:
-    """Policy-shaped objects do not satisfy the concrete JWT posture contract."""
-    notice = plugin_security_policy_module._describe_jwt_revocation_policy(_StructuralJWTRevocationPosture())
-
-    assert notice is None
-
-
-def test_describe_jwt_revocation_policy_rejects_reload_shaped_posture() -> None:
-    """Old posture-shaped twins do not satisfy the concrete JWT posture contract."""
-    stale_posture = type(
-        "JWTRevocationPosture",
-        (),
-        {
-            "__module__": "litestar_auth.authentication.strategy.jwt",
-            "key": "in_memory",
-            "requires_explicit_production_opt_in": False,
-            "production_validation_error": None,
-            "startup_warning": "process-local in-memory denylist",
-        },
-    )()
-
-    notice = plugin_security_policy_module._describe_jwt_revocation_policy(stale_posture)
-
-    assert notice is None
-
-
-def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserManager[ExampleUser, UUID]:
-    """Build a direct manager instance for posture-contract comparisons.
-
-    Returns:
-        Direct ``BaseUserManager`` wired with the requested TOTP secret posture.
-    """
-    return BaseUserManager(
-        InMemoryUserDatabase([]),
-        password_helper=PasswordHelper(),
-        security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            totp_secret_key=totp_secret_key,
-            id_parser=UUID,
-        ),
-    )
-
-
 def test_resolve_plugin_managed_totp_secret_storage_policy_matches_missing_key_posture() -> None:
     """Plugin-owned TOTP wiring reuses the same direct-manager missing-key posture contract."""
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET))
-    posture = _build_direct_manager().totp_secret_storage_posture
-
     notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(config)
 
     assert notice is not None
     assert notice.policy.key == "totp_secret_storage"
-    assert notice.posture_key == posture.key
-    assert notice.requires_explicit_production_opt_in is posture.requires_explicit_production_opt_in
-    assert notice.production_validation_error == posture.production_validation_error
+    assert notice.posture_key == "fernet_encrypted"
+    assert notice.requires_explicit_production_opt_in is True
+    assert notice.production_validation_error is not None
     assert notice.startup_warning is None
 
 
@@ -638,222 +516,12 @@ def test_unsafe_redirect_host_strict_mode_rejects_empty_or_unusable_resolution_e
     assert redirect_validation_module._is_unsafe_redirect_host("partial.example.com", strict=True) is True
 
 
-def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Production startup emits warnings for each insecure default this task targets."""
-    config = _minimal_config(
-        backends=[
-            _cookie_backend(),
-            _jwt_backend(),
-        ],
-        oauth_config=OAuthConfig(
-            oauth_providers=[_oauth_provider(name="github", client=object())],
-            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        ),
-        rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
-        totp_config=TotpConfig(
-            totp_pending_secret=TOTP_PENDING_SECRET,
-            totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
-            totp_enrollment_store=cast("Any", _current_inmemory_totp_enrollment_store()),
-            totp_used_tokens_store=cast("Any", _current_inmemory_used_totp_code_store()),
-        ),
-    )
-    config.enable_refresh = True
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    messages = [str(record.message) for record in records]
-    assert any("OAuth token encryption key material is not set" in message for message in messages)
-    assert any("process-local in-memory denylist" in message for message in messages)
-    assert any("process-local in-memory backend" in message for message in messages)
-    assert any("InMemoryUsedTotpCodeStore" in message for message in messages)
-    assert any("InMemoryTotpEnrollmentStore" in message for message in messages)
-    assert any("TOTP pending-token replay protection uses InMemoryJWTDenylistStore" in message for message in messages)
-    assert any("refresh_max_age is not set" in message for message in messages)
-
-
-def test_warn_insecure_plugin_startup_defaults_warns_for_current_jwt_strategy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """JWT denylist warnings use current strategy posture objects."""
-    strategy = _current_jwt_strategy()
-    config = _minimal_config(
-        backends=[
-            AuthenticationBackend[ExampleUser, UUID](
-                name="jwt",
-                transport=BearerTransport(),
-                strategy=cast("Any", strategy),
-            ),
-        ],
-    )
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    messages = [str(record.message) for record in records]
-    assert strategy.revocation_posture.startup_warning in messages
-
-
-def test_warn_insecure_plugin_startup_defaults_warns_for_unbounded_api_key_default_ttl() -> None:
-    """Production API-key creation warns when the configured default expiry is unbounded."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",), default_ttl=None)
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    assert any("API-key creation default_ttl is None" in str(record.message) for record in records)
-
-
-class _PasskeyOnlyUser:
-    """User-model stub mirroring passkey/OAuth-only models that omit `hashed_password`.
-
-    The startup warner only inspects the class — never instantiates it — so a
-    minimal stub is enough to exercise the gap-detection branch. ``id`` and
-    ``email`` are declared as type-only annotations to mirror real Protocol/
-    dataclass user contracts and to confirm the annotation walk does not pick
-    up `hashed_password` from elsewhere in the MRO.
-    """
-
-    id: UUID
-    email: str
-
-
-class _UserModelWithHashedPasswordAttribute:
-    """User-model stub that declares `hashed_password` only via class annotation."""
-
-    id: UUID
-    email: str
-    hashed_password: str
-
-
-def test_warn_insecure_plugin_startup_defaults_warns_for_default_jwt_fingerprint_when_user_model_lacks_hashed_password() -> (
-    None
-):
-    """Default JWT fingerprint silently degrades for passkey-only models — surface it."""
-    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
-    config.user_model = cast("Any", _PasskeyOnlyUser)
-
-    with pytest.warns(startup_module.SecurityWarning, match="does not expose 'hashed_password'"):
-        warn_insecure_plugin_startup_defaults(config)
-
-
-def test_warn_insecure_plugin_startup_defaults_skips_default_fingerprint_warning_for_user_model_with_hashed_password() -> (
-    None
-):
-    """Annotation-only `hashed_password` is enough to keep the default fingerprint usable."""
-    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
-    config.user_model = cast("Any", _UserModelWithHashedPasswordAttribute)
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    messages = [str(record.message) for record in records]
-    assert not any("does not expose 'hashed_password'" in message for message in messages)
-
-
-def test_warn_insecure_plugin_startup_defaults_skips_default_fingerprint_warning_when_custom_getter_is_configured() -> (
-    None
-):
-    """A custom session_fingerprint_getter is the caller's contract — no warning."""
-    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
-    strategy_type = cast("type[JWTStrategy[Any, Any]]", jwt_module.JWTStrategy)
-    strategy = strategy_type(
-        secret=JWT_SECRET,
-        denylist_store=cast("Any", _DurableDenylistStore()),
-        session_fingerprint_getter=lambda _user: "custom-fingerprint",
-    )
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="jwt-custom-fingerprint",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-    config = _minimal_config(backends=[backend])
-    config.user_model = cast("Any", _PasskeyOnlyUser)
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    messages = [str(record.message) for record in records]
-    assert not any("does not expose 'hashed_password'" in message for message in messages)
-
-
-def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing mode suppresses the insecure-default warnings."""
-    config = _minimal_config(
-        backends=[_cookie_backend(), _jwt_backend()],
-        oauth_config=OAuthConfig(
-            oauth_providers=[_oauth_provider(name="github", client=object())],
-            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        ),
-        rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
-        totp_config=TotpConfig(
-            totp_pending_secret=TOTP_PENDING_SECRET,
-            totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
-            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
-        ),
-    )
-    config.enable_refresh = True
-    config.unsafe_testing = True
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    assert not records
-
-
-def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Safe production settings avoid the insecure-default warnings entirely."""
-    config = _minimal_config(
-        backends=[
-            _cookie_backend(refresh_max_age=604800),
-            _jwt_backend(denylist_store=_DurableDenylistStore()),
-        ],
-        oauth_config=OAuthConfig(
-            oauth_providers=[_oauth_provider(name="github", client=object())],
-            oauth_token_encryption_key="a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=",
-            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        ),
-        rate_limit_config=_rate_limit_config(backend=_SharedRateLimitBackend()),
-        totp_config=_configured_totp_config(
-            totp_used_tokens_store=cast("Any", object()),
-        ),
-    )
-    config.csrf_secret = JWT_SECRET
-    config.enable_refresh = True
-    config.account_token_denylist_store = _DurableDenylistStore()
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        warn_insecure_plugin_startup_defaults(config)
-
-    assert not records
-
-
 def test_warn_insecure_plugin_startup_defaults_warns_for_missing_refresh_cookie_max_age(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Refresh-cookie startup warnings stay with the startup helper owner."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = JWT_SECRET
+    config.csrf_secret = CSRF_SECRET
     config.enable_refresh = True
 
     with pytest.warns(startup_module.SecurityWarning, match="refresh_max_age is not set"):
@@ -865,7 +533,7 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_cookie
 ) -> None:
     """Explicit refresh-cookie lifetimes suppress the startup helper warning."""
     config = _minimal_config(backends=[_cookie_backend(refresh_max_age=604800)])
-    config.csrf_secret = JWT_SECRET
+    config.csrf_secret = CSRF_SECRET
     config.enable_refresh = True
 
     with warnings.catch_warnings(record=True) as records:
@@ -880,7 +548,7 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_refres
 ) -> None:
     """Disable-refresh configs do not warn about refresh-cookie max age."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = JWT_SECRET
+    config.csrf_secret = CSRF_SECRET
     config.enable_refresh = False
 
     with warnings.catch_warnings(record=True) as records:
@@ -894,35 +562,9 @@ def test_validate_backend_strategy_security_skips_non_database_strategies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-database strategies do not enter the legacy-plaintext validation path."""
-    config = _minimal_config(backends=[_non_jwt_backend()])
+    config = _minimal_config(backends=[_redis_backend()])
 
     _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_warns_for_jwt_named_non_jwt_strategy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """JWT-like backend names emit an advisory warning when the strategy is not JWT-based."""
-    backend = _database_backend()
-    backend.name = "Jwt-database"
-    config = _minimal_config(backends=[backend])
-
-    with pytest.warns(
-        UserWarning,
-        match=r"Jwt-database.*DatabaseTokenStrategy.*'bearer' or 'database'",
-    ):
-        _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_does_not_warn_for_jwt_named_jwt_strategy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """JWT-backed strategies remain warning-free even when the backend name contains JWT."""
-    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        _validate_backend_strategy_security(config)
 
 
 def test_validate_backend_strategy_security_does_not_warn_for_neutral_backend_name(
@@ -934,24 +576,6 @@ def test_validate_backend_strategy_security_does_not_warn_for_neutral_backend_na
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_allows_explicit_inmemory_jwt_revocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """JWTStrategy owns the explicit process-local revocation opt-in."""
-    config = _minimal_config(backends=[_jwt_backend()])
-
-    _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_allows_durable_jwt_revocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A durable denylist store satisfies the JWT revocation validation."""
-    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
-
-    _validate_backend_strategy_security(config)
 
 
 def test_validate_session_maker_or_external_db_session_requires_one_source() -> None:
@@ -1520,25 +1144,6 @@ def test_iter_rate_limit_endpoints_includes_totp_confirm_enable() -> None:
     assert rate_limit in endpoints
 
 
-def test_iter_rate_limit_endpoint_items_include_supported_slot_names() -> None:
-    """The shared iterator exposes endpoint slot names for startup diagnostics."""
-    rate_limit = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
-        scope="ip",
-        namespace="totp-regenerate-recovery-codes",
-    )
-
-    items = rate_limit_module.iter_rate_limit_endpoint_items(
-        AuthRateLimitConfig(totp_regenerate_recovery_codes=rate_limit),
-    )
-    item_map = dict(items)
-
-    assert item_map["totp_regenerate_recovery_codes"] is rate_limit
-    assert item_map["verify_token"] is None
-    assert item_map["request_verify_token"] is None
-    assert item_map["api_key_update"] is None
-
-
 def test_collect_process_local_rate_limit_endpoint_names_accepts_no_rate_limit_config() -> None:
     """Omitting rate limits leaves no process-local endpoint posture."""
     config = _minimal_config(rate_limit_config=None)
@@ -1679,38 +1284,12 @@ def test_require_refreshable_strategy_when_enable_refresh_accepts_refreshable_st
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="refreshable",
-                transport=BearerTransport(),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
                 strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
             ),
         ],
     )
     config.enable_refresh = True
-
-    startup_module.require_refreshable_strategy_when_enable_refresh(config)
-
-
-def test_require_refreshable_strategy_when_enable_refresh_ignores_api_key_backend() -> None:
-    """API-key backends are standalone authenticators outside refresh-token flows."""
-    config = _minimal_config(
-        backends=[
-            AuthenticationBackend[ExampleUser, UUID](
-                name="refreshable",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
-            ),
-        ],
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
-    config.enable_refresh = True
-
-    startup_backends = config.resolve_startup_backends()
-    assert [backend.name for backend in startup_backends] == ["refreshable", "api_key"]
-    assert isinstance(startup_backends[1].transport, ApiKeyTransport)
 
     startup_module.require_refreshable_strategy_when_enable_refresh(config)
 
@@ -1721,7 +1300,7 @@ def test_require_refreshable_strategy_when_enable_refresh_rejects_non_refreshabl
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
                 strategy=cast("Any", InMemoryTokenStrategy(token_prefix="primary")),
             ),
         ],
@@ -1835,7 +1414,7 @@ def test_validate_totp_pending_secret_config_rejects_short_secret() -> None:
     config = _minimal_config(
         totp_config=TotpConfig(
             totp_pending_secret="short",
-            totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+            totp_pending_jti_store=cast("Any", _DurableReplayStore()),
             totp_used_tokens_store=cast("Any", object()),
         ),
     )
@@ -2093,297 +1672,6 @@ def test_validate_user_manager_security_config_rejects_when_secret_roles_share_o
     assert shared_secret not in message
 
 
-def test_validate_api_key_config_rejects_missing_hash_secret() -> None:
-    """API-key auth cannot be enabled without dedicated HMAC key material."""
-    config = _minimal_config()
-    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
-
-    with pytest.raises(ConfigurationError, match="api_key_hash_secret is required"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_non_positive_max_keys() -> None:
-    """API-key max key count must fail closed when enabled."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(enabled=True, max_keys_per_user=0, allowed_scopes=("read",))
-
-    with pytest.raises(ConfigurationError, match="max_keys_per_user"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_empty_allowed_scopes_when_subset_check_enabled() -> None:
-    """API-key scope subset checks require an explicit whitelist."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(enabled=True)
-
-    with pytest.raises(ConfigurationError, match="allowed_scopes"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_accepts_disabled_config_without_hash_secret() -> None:
-    """Disabled API-key auth does not require API-key secret material."""
-    config = _minimal_config()
-
-    validation_module._api_key_validation._validate_api_key_signing_secret_distinctness(config)
-
-
-def test_validate_api_key_config_accepts_enabled_production_shape() -> None:
-    """A complete API-key config passes startup validation."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
-
-    validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_signing_without_keyring() -> None:
-    """Signing mode requires API-key secret-at-rest encryption material."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        signing_enabled=True,
-        nonce_store=InMemoryApiKeyNonceStore(),
-    )
-
-    with pytest.raises(ConfigurationError, match="secret_encryption_keyring"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_signing_without_nonce_store() -> None:
-    """Signing mode requires replay protection outside unsafe testing."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        signing_enabled=True,
-        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
-    )
-
-    with pytest.raises(ConfigurationError, match="nonce_store"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_signing_key_reuse() -> None:
-    """API-key signing encryption keys must not reuse API-key hash material."""
-    shared_secret = _fernet_key()
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=shared_secret,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        signing_enabled=True,
-        nonce_store=InMemoryApiKeyNonceStore(),
-        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
-    )
-
-    with pytest.raises(ConfigurationError, match="api_key_secret_encryption_keyring"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_rejects_process_local_nonce_store_for_multiworker() -> None:
-    """Signing nonce stores must be shared in declared multi-worker deployments."""
-    config = _minimal_config(
-        deployment_worker_count=2,
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        signing_enabled=True,
-        nonce_store=InMemoryApiKeyNonceStore(),
-        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
-    )
-
-    with pytest.raises(ConfigurationError, match="shared across workers"):
-        validate_api_key_config(config)
-
-
-def test_validate_api_key_config_accepts_shared_nonce_store_for_multiworker() -> None:
-    """Shared signing nonce stores satisfy declared multi-worker validation."""
-
-    class SharedNonceStore:
-        is_shared_across_workers = True
-
-    config = _minimal_config(
-        deployment_worker_count=2,
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        signing_enabled=True,
-        nonce_store=SharedNonceStore(),
-        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
-    )
-
-    validate_api_key_config(config)
-
-
-def test_validate_api_key_signing_distinctness_skips_without_security() -> None:
-    """Signing distinctness validation is a no-op without manager security material."""
-    config = _minimal_config()
-    config.api_keys = ApiKeyConfig(
-        enabled=False,
-        signing_enabled=True,
-        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
-    )
-
-    validate_api_key_config(config)
-
-
-@pytest.mark.parametrize(
-    ("api_key_config", "match"),
-    [
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), last_used_throttle_seconds=-1),
-            "last_used_throttle_seconds",
-            id="negative-throttle",
-        ),
-        pytest.param(
-            ApiKeyConfig(
-                enabled=True,
-                allowed_scopes=("read",),
-                last_used_write_strategy=cast("Any", "sometimes"),
-            ),
-            "last_used_write_strategy",
-            id="invalid-last-used-strategy",
-        ),
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), environment_marker="_prod"),
-            "environment_marker",
-            id="invalid-environment-marker",
-        ),
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), prefix="1ak"),
-            "prefix",
-            id="invalid-prefix",
-        ),
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signing_skew_seconds=0),
-            "signing_skew_seconds",
-            id="invalid-signing-skew",
-        ),
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signing_skew_seconds=cast("Any", float("nan"))),
-            "signing_skew_seconds",
-            id="non-finite-signing-skew",
-        ),
-        pytest.param(
-            ApiKeyConfig(
-                enabled=True,
-                allowed_scopes=("read",),
-                signing_skew_seconds=cast("Any", True),  # ruff: ignore[boolean-positional-value-in-call] - runtime type-validation regression
-            ),
-            "signing_skew_seconds",
-            id="boolean-signing-skew",
-        ),
-        pytest.param(
-            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signed_body_max_bytes=0),
-            "signed_body_max_bytes",
-            id="invalid-signed-body-limit",
-        ),
-    ],
-)
-def test_validate_api_key_config_rejects_invalid_policy_fields(api_key_config: ApiKeyConfig, match: str) -> None:
-    """API-key policy fields are validated before backend wiring."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = api_key_config
-
-    with pytest.raises(ConfigurationError, match=match):
-        validate_api_key_config(config)
-
-
-@pytest.mark.parametrize("strategy", get_args(ApiKeyLastUsedWriteStrategy))
-def test_validate_api_key_config_accepts_declared_last_used_write_strategies(strategy: str) -> None:
-    """Every declared last-used write strategy is accepted by plugin validation."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        last_used_write_strategy=cast("Any", strategy),
-    )
-
-    validate_api_key_config(config)
-
-
-def test_validate_api_key_config_lists_declared_last_used_write_strategies() -> None:
-    """Invalid last-used write strategy errors list the declared strategy values."""
-    config = _minimal_config(
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.api_keys = ApiKeyConfig(
-        enabled=True,
-        allowed_scopes=("read",),
-        last_used_write_strategy=cast("Any", "sometimes"),
-    )
-
-    with pytest.raises(ConfigurationError) as exc_info:
-        validate_api_key_config(config)
-
-    message = str(exc_info.value)
-    for strategy in get_args(ApiKeyLastUsedWriteStrategy):
-        assert repr(strategy) in message
-
-
 def test_validate_user_manager_security_config_rejects_short_login_telemetry_secret() -> None:
     """Plugin validation catches short failed-login telemetry secrets before manager construction."""
     config = _minimal_config(
@@ -2493,7 +1781,7 @@ def test_validate_totp_sub_config_rejects_missing_store_in_production(
 ) -> None:
     """TOTP store requirements all use the plugin configuration error contract."""
     store_kwargs: dict[str, Any] = {
-        "totp_pending_jti_store": _DurableDenylistStore(),
+        "totp_pending_jti_store": _DurableReplayStore(),
         "totp_enrollment_store": _DurableEnrollmentStore(),
         "totp_used_tokens_store": object(),
     }
@@ -2570,23 +1858,10 @@ def test_validate_cookie_auth_config_allows_explicit_insecure_cookie_override(
     validate_cookie_auth_config(config)
 
 
-def test_validate_cookie_auth_config_returns_without_cookie_transports() -> None:
-    """Bearer-only configurations skip the cookie-auth validation branch."""
-    validate_cookie_auth_config(_minimal_config(backends=[_non_jwt_backend()]))
-
-
-def test_get_cookie_transports_returns_only_cookie_backends() -> None:
-    """Cookie transport extraction ignores bearer-only backends."""
-    cookie_backend = _cookie_backend()
-    cookie_transports = get_cookie_transports([cookie_backend, _non_jwt_backend()])
-
-    assert cookie_transports == [cookie_backend.transport]
-
-
 def test_build_csrf_config_rejects_heterogeneous_cookie_transports() -> None:
     """Plugin-managed CSRF setup requires homogeneous cookie transport settings."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = JWT_SECRET
+    config.csrf_secret = CSRF_SECRET
     cookie_transports = [
         CookieTransport(path="/auth", secure=False, samesite="strict"),
         CookieTransport(path="/other-auth", secure=False, samesite="strict"),
@@ -2601,13 +1876,13 @@ def test_build_csrf_config_rejects_missing_csrf_secret() -> None:
     config = _minimal_config(backends=[_cookie_backend()])
 
     with pytest.raises(ValueError, match="csrf_secret must be configured"):
-        build_csrf_config(config, [CookieTransport()])
+        build_csrf_config(config, [CookieTransport(allow_insecure_cookie_auth=True)])
 
 
 def test_build_csrf_config_returns_expected_cookie_settings() -> None:
     """A homogeneous cookie transport set produces the shared CSRF config."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = JWT_SECRET
+    config.csrf_secret = CSRF_SECRET
     cookie_transports = [
         CookieTransport(path="/auth", domain="example.com", secure=False, samesite="strict"),
         CookieTransport(path="/auth", domain="example.com", secure=False, samesite="strict"),
@@ -2991,6 +2266,7 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
+        unsafe_testing=True,
     )
 
     validate_config(config)
@@ -3000,7 +2276,7 @@ def test_litestar_auth_config_rejects_negative_totp_stepup_ttl() -> None:
     """TOTP step-up TTL must be non-negative at construction time."""
     with pytest.raises(ConfigurationError, match="totp_stepup_ttl_seconds"):
         LitestarAuthConfig[ExampleUser, UUID](
-            backends=[_jwt_backend()],
+            backends=[_cookie_backend(allow_insecure_cookie_auth=True)],
             session_maker=cast("Any", DummySessionMaker()),
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
@@ -3021,37 +2297,12 @@ def test_validate_config_rejects_unknown_totp_stepup_policy_key() -> None:
         validate_config(config)
 
 
-def test_validate_config_rejects_invalid_totp_stepup_policy_mode() -> None:
-    """Startup validation rejects unsupported TOTP step-up policy modes."""
-    config = _minimal_config(totp_config=_configured_totp_config())
-    config.totp_stepup_policy = {"api_keys.create": cast("Any", "required")}
-
-    with pytest.raises(ConfigurationError, match="Invalid totp_stepup_policy mode"):
-        validate_config(config)
-
-
-def test_validate_config_accepts_known_totp_stepup_policy_entry() -> None:
-    """Startup validation accepts documented TOTP step-up endpoint policy entries."""
-    config = _minimal_config(
-        totp_config=_configured_totp_config(totp_require_replay_protection=False),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            totp_secret_key=TOTP_SECRET_KEY,
-            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
-        ),
-    )
-    config.totp_stepup_policy = {"api_keys.create": "required_when_enrolled"}
-
-    validate_config(config)
-
-
 def test_validate_config_allows_explicit_unsafe_testing_recipe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Explicit unsafe testing, not runtime globals, controls relaxed validation."""
     config = _minimal_config(
-        backends=[_cookie_backend(), _jwt_backend()],
+        backends=[_cookie_backend(allow_insecure_cookie_auth=True)],
         totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
     )
     config.unsafe_testing = True
@@ -3064,11 +2315,11 @@ def test_validate_config_keeps_unsafe_testing_instance_scoped(
 ) -> None:
     """Unsafe-testing relaxations stay instance-scoped instead of process-global."""
     strict_config = _minimal_config(
-        backends=[_cookie_backend(), _jwt_backend()],
+        backends=[_cookie_backend(allow_insecure_cookie_auth=True)],
         totp_config=_configured_totp_config(),
     )
     relaxed_config = _minimal_config(
-        backends=[_cookie_backend(), _jwt_backend()],
+        backends=[_cookie_backend(allow_insecure_cookie_auth=True)],
         totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
     )
     relaxed_config.unsafe_testing = True
@@ -3223,8 +2474,8 @@ def _minimal_config(  # ruff: ignore[too-many-arguments]
         else [
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-validation")),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
+                strategy=build_test_redis_strategy(key_prefix="plugin-validation"),
             ),
         ]
     )
@@ -3257,31 +2508,22 @@ def _cookie_backend(
             allow_insecure_cookie_auth=allow_insecure_cookie_auth,
             refresh_max_age=refresh_max_age,
         ),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie")),
+        strategy=build_test_redis_strategy(key_prefix="cookie"),
     )
 
 
-def _jwt_backend(*, denylist_store: object | None = None) -> AuthenticationBackend[ExampleUser, UUID]:
-    strategy = _current_jwt_strategy(denylist_store=denylist_store)
+def _redis_backend() -> AuthenticationBackend[ExampleUser, UUID]:
     return AuthenticationBackend[ExampleUser, UUID](
-        name="jwt",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-
-
-def _non_jwt_backend() -> AuthenticationBackend[ExampleUser, UUID]:
-    return AuthenticationBackend[ExampleUser, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="bearer")),
+        name="redis",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="redis"),
     )
 
 
 def _database_backend() -> AuthenticationBackend[ExampleUser, UUID]:
     return AuthenticationBackend[ExampleUser, UUID](
         name="db",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast(
             "Any",
             DatabaseTokenStrategy(

@@ -1,0 +1,77 @@
+static_resources:
+  listeners:
+    - name: mtls
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 8443}
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_params:
+                  tls_minimum_protocol_version: TLSv1_3
+                  tls_maximum_protocol_version: TLSv1_3
+                tls_certificates:
+                  - certificate_chain: {filename: /pki/envoy/envoy.crt}
+                    private_key: {filename: /pki/envoy/envoy.key}
+                validation_context:
+                  trusted_ca: {filename: /pki/public/ca.crt}
+                  crl: {filename: /pki/public/ca.crl}
+              require_client_certificate: true
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: auth_reference
+                route_config:
+                  name: local
+                  virtual_hosts:
+                    - name: application
+                      domains: ["*"]
+                      routes:
+                        - match: {prefix: /}
+                          route: {cluster: application}
+                      request_headers_to_remove:
+                        - x-auth-tls-verified
+                        - x-auth-tls-version
+                        - x-auth-client-cert-sha256
+                        - x-auth-client-cert-not-before
+                        - x-auth-client-cert-not-after
+                        - x-auth-client-cert-trust-anchor
+                      request_headers_to_add:
+                        - header: {key: x-auth-tls-verified, value: SUCCESS}
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                        - header: {key: x-auth-tls-version, value: "%DOWNSTREAM_TLS_VERSION%"}
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                        - header: {key: x-auth-client-cert-sha256, value: "%DOWNSTREAM_PEER_FINGERPRINT_256%"}
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                        - header:
+                            key: x-auth-client-cert-not-before
+                            value: "%DOWNSTREAM_PEER_CERT_V_START(%Y-%m-%dT%H:%M:%S%z)%"
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                        - header:
+                            key: x-auth-client-cert-not-after
+                            value: "%DOWNSTREAM_PEER_CERT_V_END(%Y-%m-%dT%H:%M:%S%z)%"
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                        - header: {key: x-auth-client-cert-trust-anchor, value: local-ca}
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: application
+      connect_timeout: 1s
+      type: STATIC
+      load_assignment:
+        cluster_name: application
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    pipe: {path: /shared/upstream.sock}
+
+admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}

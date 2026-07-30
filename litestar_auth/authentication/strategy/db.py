@@ -17,7 +17,9 @@ from typing import (
     runtime_checkable,
 )
 
+from authweave_core import FailureCode, Invalid, Unavailable
 from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
 from litestar_auth.authentication.strategy._db_refresh import _DatabaseRefreshSessionMixin
@@ -28,6 +30,7 @@ from litestar_auth.authentication.strategy._opaque_tokens import (
     validate_token_bytes,
 )
 from litestar_auth.authentication.strategy.base import (
+    HumanSessionAuthenticated,
     RefreshableStrategy,
     Strategy,
     UserManagerProtocol,
@@ -238,25 +241,33 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         refresh_rowcount = getattr(refresh_result, "rowcount", 0) or 0
         return access_rowcount + linked_access_rowcount + refresh_rowcount
 
-    @override
-    async def read_token(
+    async def authenticate_token(
         self,
-        token: str | None,
-        user_manager: UserManagerProtocol[UP, ID],
-    ) -> UP | None:
-        """Resolve a user from an opaque database token.
+        token: str,
+        user_manager: UserManagerProtocol[UP, ID],  # ruff: ignore[unused-method-argument]
+    ) -> HumanSessionAuthenticated[UP] | Invalid | Unavailable:
+        """Resolve a database session with an explicit terminal failure.
 
         Returns:
-            Related user when the token exists and is not expired, otherwise ``None``.
+            Authenticated session metadata or a typed invalid decision.
         """
-        if token is None:
-            return None
+        try:
+            access_token = await self._resolve_access_token(token)
+        except SQLAlchemyError:
+            return Unavailable()
+        if access_token is None:
+            return Invalid(FailureCode.INVALID)
 
-        access_token = await self._resolve_access_token(token)
-        if access_token is None or self._is_token_expired(access_token.created_at, self.max_age):
-            return None
-
-        return access_token.user
+        issued_at = self._normalize_timestamp(access_token.created_at)
+        expires_at = issued_at + self.max_age
+        if expires_at <= datetime.now(tz=UTC):
+            return Invalid(FailureCode.EXPIRED)
+        return HumanSessionAuthenticated(
+            user=access_token.user,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            credential_id=access_token.session_id,
+        )
 
     async def _resolve_access_token(self, raw_token: str) -> _AccessTokenRow[UP] | None:
         """Return the persisted access-token row for ``raw_token`` when present."""

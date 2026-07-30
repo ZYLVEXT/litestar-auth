@@ -42,14 +42,6 @@ class _StrategyBackendProtocol[UP](Protocol):
     strategy: object
 
 
-@runtime_checkable
-class _ApiKeyBulkDeleteStoreProtocol[ID](Protocol):
-    """API-key store surface required for hard-delete cleanup."""
-
-    async def delete_for_user(self, user_id: ID) -> int:
-        """Delete API-key rows owned by ``user_id``."""
-
-
 class UserLifecycleService[UP, ID]:
     """Handle persistence-oriented user lifecycle operations."""
 
@@ -247,8 +239,6 @@ class UserLifecycleService[UP, ID]:
         """Invalidate tokens and issue re-verification token where required."""
         if email_changed or password_changed or deactivated:
             await self.invalidate_all_tokens(updated_user)
-        if deactivated:
-            await self._delete_api_keys_for_user(_managed_user(updated_user).id)
         if email_changed and self._manager.reset_verification_on_email_change:
             token = self._manager.write_verify_token(updated_user)
             await self._hook_bus.fire("after_request_verify_token", updated_user, token)
@@ -261,7 +251,6 @@ class UserLifecycleService[UP, ID]:
 
         await self._hook_bus.fire("before_delete", user)
         await self.invalidate_all_tokens(user)
-        await self._delete_api_keys_for_user(user_id)
         await self._manager.user_db.delete(user_id)
         await self._hook_bus.fire("after_delete", user)
 
@@ -273,9 +262,3 @@ class UserLifecycleService[UP, ID]:
             if isinstance(backend.strategy, TokenInvalidationCapable):
                 strategy = cast("TokenInvalidationCapable[Any]", backend.strategy)
                 await strategy.invalidate_all_tokens(user)
-
-    async def _delete_api_keys_for_user(self, user_id: ID) -> None:
-        """Delete API keys when the manager has a bulk-delete-capable store."""
-        api_key_store = getattr(self._manager, "api_key_store", None)
-        if isinstance(api_key_store, _ApiKeyBulkDeleteStoreProtocol):
-            await api_key_store.delete_for_user(user_id)

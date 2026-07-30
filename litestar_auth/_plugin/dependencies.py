@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from advanced_alchemy.extensions.litestar import async_autocommit_handler_maker
+from authweave_core import AuthenticationContext
 from litestar.datastructures.state import State
 from litestar.di import NamedDependency, Provide
 from litestar.types import Scope
@@ -17,9 +18,11 @@ from litestar_auth._current_organization import read_scope_current_organization_
 from litestar_auth._permissions import resolve_connection_permissions
 from litestar_auth._plugin._hooks import iter_feature_wiring
 from litestar_auth._plugin.config import (
+    DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
     DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+    DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
     DEFAULT_DB_SESSION_DEPENDENCY_KEY,
     DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
@@ -55,6 +58,8 @@ _NON_OVERRIDABLE_EXTENSION_DEPENDENCY_KEYS = frozenset(
         DEFAULT_BACKENDS_DEPENDENCY_KEY,
         OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
         DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+        DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
+        DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
         DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
         DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     ),
@@ -236,6 +241,18 @@ def provide_current_organization(request: ASGIConnection[Any, Any, Any, Any]) ->
     return read_scope_current_organization_context(request)
 
 
+def provide_current_principal(request: ASGIConnection[Any, Any, Any, Any]) -> object | None:
+    """Return the middleware-projected authenticated principal."""
+    return request.user
+
+
+def provide_authentication_context(
+    request: ASGIConnection[Any, Any, Any, Any],
+) -> AuthenticationContext | None:
+    """Return the verified neutral authentication context."""
+    return request.auth if isinstance(request.auth, AuthenticationContext) else None
+
+
 def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
@@ -366,6 +383,8 @@ def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
             DEFAULT_BACKENDS_DEPENDENCY_KEY,
             DEFAULT_USER_MODEL_DEPENDENCY_KEY,
             DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+            DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
+            DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
             DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
             DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
             config.db_session_dependency_key or DEFAULT_DB_SESSION_DEPENDENCY_KEY,
@@ -401,6 +420,14 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
         "resolved_permissions": _DependencyRegistration(
             DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
             provide_resolved_permissions,
+        ),
+        "current_principal": _DependencyRegistration(
+            DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
+            provide_current_principal,
+        ),
+        "authentication_context": _DependencyRegistration(
+            DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
+            provide_authentication_context,
         ),
         "current_organization": _DependencyRegistration(
             DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
@@ -442,15 +469,7 @@ def _resolve_organization_store_registration[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> _DependencyRegistration | None:
     organization_config = config.organization_config
-    if (
-        not organization_config.enabled
-        or not (
-            organization_config.include_switch_organization
-            or organization_config.include_organization_admin
-            or organization_config.include_organization_invitations
-        )
-        or organization_config.store_factory is None
-    ):
+    if not organization_config.enabled or organization_config.store_factory is None:
         return None
     return _DependencyRegistration(
         DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,

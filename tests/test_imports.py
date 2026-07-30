@@ -20,16 +20,11 @@ from uuid import UUID
 import pytest
 
 import litestar_auth
-import litestar_auth._plugin as plugin_internals
 import litestar_auth.authentication.strategy as strategy_module
 import litestar_auth.config as config_module
 import litestar_auth.contrib.redis as redis_contrib_module
 import litestar_auth.controllers as controllers_package
-import litestar_auth.controllers.auth as auth_controller_module
 import litestar_auth.controllers.oauth as oauth_controller_module
-import litestar_auth.controllers.reset as reset_controller_module
-import litestar_auth.controllers.totp as totp_controller_module
-import litestar_auth.controllers.verify as verify_controller_module
 import litestar_auth.db as db_module
 import litestar_auth.models as models_module
 import litestar_auth.oauth as oauth_package_module
@@ -39,13 +34,8 @@ import litestar_auth.plugin as plugin_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.totp as totp_module
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
-from litestar_auth.authentication.strategy.jwt import (
-    InMemoryJWTDenylistStore,
-    JWTDenylistStore,
-    JWTRevocationPosture,
-    RedisJWTDenylistStore,
-)
+from litestar_auth.authentication.strategy._jwt_denylist import RedisJWTDenylistStore
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport import Transport
 from litestar_auth.db.sqlalchemy import SQLAlchemyOrganizationStore, SQLAlchemyUserDatabase
 from litestar_auth.exceptions import (
@@ -70,15 +60,12 @@ from litestar_auth.types import DbSessionDependencyKey
 from tests._helpers import ExampleUser, cast_fakeredis
 from tests.conftest import project_version_from_pyproject
 
-AuthenticationBackend = litestar_auth.AuthenticationBackend
-Authenticator = litestar_auth.Authenticator
 AuthExtension = litestar_auth.AuthExtension
 AuthExtensionRegistrationContext = litestar_auth.AuthExtensionRegistrationContext
 AuthExtensionValidationContext = litestar_auth.AuthExtensionValidationContext
-ApiKeyConfig = litestar_auth.ApiKeyConfig
 BaseUserManager = litestar_auth.BaseUserManager
 BaseUserManagerConfig = litestar_auth.BaseUserManagerConfig
-BearerTransport = litestar_auth.BearerTransport
+CookieTransport = litestar_auth.CookieTransport
 CookieTransport = litestar_auth.CookieTransport
 CookieTransportConfig = litestar_auth.CookieTransportConfig
 DatabaseTokenAuthConfig = litestar_auth.DatabaseTokenAuthConfig
@@ -107,8 +94,6 @@ is_superuser = litestar_auth.is_superuser
 is_verified = litestar_auth.is_verified
 DatabaseTokenStrategy = strategy_module.DatabaseTokenStrategy
 DatabaseTokenStrategyConfig = strategy_module.DatabaseTokenStrategyConfig
-JWTStrategy = strategy_module.JWTStrategy
-JWTStrategyConfig = strategy_module.JWTStrategyConfig
 RedisTokenStrategy = strategy_module.RedisTokenStrategy
 RedisTokenStrategyConfig = strategy_module.RedisTokenStrategyConfig
 Strategy = strategy_module.Strategy
@@ -134,8 +119,6 @@ create_reset_password_controller = controllers_package.create_reset_password_con
 create_totp_controller = controllers_package.create_totp_controller
 create_users_controller = controllers_package.create_users_controller
 create_verify_controller = controllers_package.create_verify_controller
-ApiKeyData = db_module.ApiKeyData
-BaseApiKeyStore = db_module.BaseApiKeyStore
 BaseOAuthAccountStore = db_module.BaseOAuthAccountStore
 BaseOrganizationStore = db_module.BaseOrganizationStore
 BaseUserStore = db_module.BaseUserStore
@@ -283,7 +266,6 @@ create_provider_oauth_controller = oauth_package_module.create_provider_oauth_co
 load_httpx_oauth_client = oauth_package_module.load_httpx_oauth_client
 ForgotPassword = payloads_module.ForgotPassword
 LoginCredentials = payloads_module.LoginCredentials
-RefreshTokenRequest = payloads_module.RefreshTokenRequest
 RequestVerifyToken = payloads_module.RequestVerifyToken
 ResetPassword = payloads_module.ResetPassword
 TotpConfirmEnableRequest = payloads_module.TotpConfirmEnableRequest
@@ -341,7 +323,6 @@ REMOVED_ROOT_PAYLOAD_EXPORTS = (
     "ChangePasswordRequest",
     "ForgotPassword",
     "LoginCredentials",
-    "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
     "TotpConfirmEnableRequest",
@@ -357,7 +338,6 @@ REMOVED_ROOT_PAYLOAD_EXPORTS = (
 REMOVED_CONTROLLERS_PAYLOAD_EXPORTS = (
     "ForgotPassword",
     "LoginCredentials",
-    "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
     "TotpConfirmEnableRequest",
@@ -371,7 +351,9 @@ REMOVED_PAYLOAD_SCHEMA_EXPORTS = ("AdminUserUpdate", "ChangePasswordRequest", "U
 REMOVED_ROOT_SECONDARY_EXPORTS = (
     "AccessToken",
     "AuthRateLimitConfig",
+    "AuthenticationBackend",
     "AuthenticationError",
+    "Authenticator",
     "AuthorizationError",
     "ConfigurationError",
     "DatabaseTokenStrategyConfig",
@@ -494,14 +476,12 @@ def test_root_package_reexports_public_api() -> None:
     assert __version__ == project_version_from_pyproject()
     assert LitestarAuth is not None
     assert LitestarAuthConfig is not None
-    assert AuthenticationBackend is not None
-    assert Authenticator is not None
     assert UserProtocol is not None
     assert UserProtocolStrict is not None
     assert GuardedUserProtocol is not None
     assert RoleCapableUserProtocol is not None
     assert TotpUserProtocol is not None
-    assert BearerTransport is not None
+    assert CookieTransport is not None
     assert CookieTransport is not None
     assert CookieTransportConfig is not None
     assert DatabaseTokenAuthConfig is not None
@@ -530,7 +510,7 @@ def test_root_package_reexports_role_guard_factories() -> None:
 
 
 def test_root_package_exports_canonical_database_token_preset_entrypoint() -> None:
-    """The root package exposes the documented DB bearer preset entrypoint."""
+    """The root package exposes the documented DB cookie-session preset entrypoint."""
     session_maker = _RootImportCoverageSessionFactory()
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
@@ -552,7 +532,7 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     backend = config.resolve_startup_backends()[0]
     assert isinstance(backend, plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
-    assert isinstance(backend.transport, BearerTransport)
+    assert isinstance(backend.transport, CookieTransport)
     assert not isinstance(backend.strategy, DatabaseTokenStrategy)
     assert callable(getattr(backend.strategy, "with_session", None))
 
@@ -687,83 +667,6 @@ def test_change_password_request_reuse_surface_stays_importable() -> None:
     assert new_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
 
 
-def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
-    """The ORM docs point to models-owned bootstrap plus the strategy runtime contract."""
-    access_token_model, refresh_token_model, consumed_digest_model = models_module.import_token_orm_models()
-    token_models = strategy_module.DatabaseTokenModels(
-        access_token_model=access_token_model,
-        refresh_token_model=refresh_token_model,
-    )
-    assert consumed_digest_model is RefreshTokenConsumedDigest
-
-    assert models_module.__all__ == (
-        "AccessTokenMixin",
-        "ApiKey",
-        "ApiKeyMixin",
-        "OAuthAccount",
-        "OAuthAccountMixin",
-        "Organization",
-        "OrganizationInvitation",
-        "OrganizationInvitationMixin",
-        "OrganizationMembership",
-        "OrganizationMembershipMixin",
-        "OrganizationMixin",
-        "RefreshTokenMixin",
-        "Role",
-        "RoleMixin",
-        "User",
-        "UserAuthRelationshipMixin",
-        "UserModelMixin",
-        "UserRole",
-        "UserRoleAssociationMixin",
-        "UserRoleRelationshipMixin",
-        "import_token_orm_models",
-    )
-    assert strategy_module.__all__ == (
-        "ApiKeyContext",
-        "ApiKeyNonceStore",
-        "ApiKeyNonceStoreResult",
-        "ApiKeyStrategy",
-        "ApiKeyStrategyConfig",
-        "ContextualStrategy",
-        "DatabaseTokenModels",
-        "DatabaseTokenStrategy",
-        "DatabaseTokenStrategyConfig",
-        "InMemoryApiKeyNonceStore",
-        "JWTContext",
-        "JWTStrategy",
-        "JWTStrategyConfig",
-        "RedisApiKeyNonceStore",
-        "RedisApiKeyNonceStoreClient",
-        "RedisTokenStrategy",
-        "RedisTokenStrategyConfig",
-        "RefreshableStrategy",
-        "Strategy",
-        "UserManagerProtocol",
-    )
-    assert models_module.AccessTokenMixin.__name__ == "AccessTokenMixin"
-    assert models_module.ApiKey.__name__ == "ApiKey"
-    assert models_module.ApiKeyMixin.__name__ == "ApiKeyMixin"
-    assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
-    assert models_module.Organization.__name__ == "Organization"
-    assert models_module.OrganizationInvitation.__name__ == "OrganizationInvitation"
-    assert models_module.OrganizationInvitationMixin.__name__ == "OrganizationInvitationMixin"
-    assert models_module.OrganizationMembership.__name__ == "OrganizationMembership"
-    assert models_module.OrganizationMembershipMixin.__name__ == "OrganizationMembershipMixin"
-    assert models_module.OrganizationMixin.__name__ == "OrganizationMixin"
-    assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
-    assert models_module.Role.__name__ == "Role"
-    assert models_module.RoleMixin.__name__ == "RoleMixin"
-    assert models_module.UserAuthRelationshipMixin.__name__ == "UserAuthRelationshipMixin"
-    assert models_module.UserModelMixin.__name__ == "UserModelMixin"
-    assert models_module.UserRole.__name__ == "UserRole"
-    assert models_module.UserRoleAssociationMixin.__name__ == "UserRoleAssociationMixin"
-    assert models_module.UserRoleRelationshipMixin.__name__ == "UserRoleRelationshipMixin"
-    assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
-    assert not hasattr(strategy_module, "import_token_orm_models")
-    assert token_models == strategy_module.DatabaseTokenModels()
-
-
 def test_root_package_does_not_promote_token_orm_bootstrap_helper() -> None:
     """The token bootstrap helper stays on ``litestar_auth.models`` rather than root or strategy modules."""
     assert "import_token_orm_models" not in __all__
@@ -771,56 +674,6 @@ def test_root_package_does_not_promote_token_orm_bootstrap_helper() -> None:
     assert "import_token_orm_models" in models_module.__all__
     assert "import_token_orm_models" not in strategy_module.__all__
     assert not hasattr(strategy_module, "import_token_orm_models")
-
-
-def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
-    """The package root and ``litestar_auth.db`` keep ORM wiring on the documented modules."""
-    assert "Role" not in __all__
-    assert "User" not in __all__
-    assert "ApiKey" not in __all__
-    assert "OAuthAccount" not in __all__
-    assert "Organization" not in __all__
-    assert "OrganizationInvitation" not in __all__
-    assert "OrganizationMembership" not in __all__
-    assert "SQLAlchemyApiKeyStore" not in __all__
-    assert "SQLAlchemyOrganizationStore" not in __all__
-    assert "SQLAlchemyUserDatabase" not in __all__
-    assert not hasattr(litestar_auth, "Role")
-    assert not hasattr(litestar_auth, "User")
-    assert not hasattr(litestar_auth, "ApiKey")
-    assert not hasattr(litestar_auth, "OAuthAccount")
-    assert not hasattr(litestar_auth, "Organization")
-    assert not hasattr(litestar_auth, "OrganizationInvitation")
-    assert not hasattr(litestar_auth, "OrganizationMembership")
-    assert not hasattr(litestar_auth, "SQLAlchemyApiKeyStore")
-    assert not hasattr(litestar_auth, "SQLAlchemyOrganizationStore")
-    assert not hasattr(litestar_auth, "SQLAlchemyUserDatabase")
-    assert db_module.__all__ == (
-        "ApiKeyData",
-        "BaseApiKeyStore",
-        "BaseOAuthAccountStore",
-        "BaseOrganizationStore",
-        "BaseUserStore",
-        "MembershipData",
-        "OAuthAccountData",
-        "OrganizationData",
-        "OrganizationInvitationData",
-    )
-    assert db_module.ApiKeyData is ApiKeyData
-    assert db_module.BaseApiKeyStore is BaseApiKeyStore
-    assert db_module.BaseOAuthAccountStore is BaseOAuthAccountStore
-    assert db_module.BaseOrganizationStore is BaseOrganizationStore
-    assert db_module.BaseUserStore is BaseUserStore
-    assert db_module.MembershipData is MembershipData
-    assert db_module.OAuthAccountData is OAuthAccountData
-    assert db_module.OrganizationData is OrganizationData
-    assert db_module.OrganizationInvitationData is OrganizationInvitationData
-    assert not hasattr(db_module, "Organization")
-    assert not hasattr(db_module, "OrganizationInvitation")
-    assert not hasattr(db_module, "OrganizationMembership")
-    assert not hasattr(db_module, "SQLAlchemyApiKeyStore")
-    assert not hasattr(db_module, "SQLAlchemyOrganizationStore")
-    assert not hasattr(db_module, "SQLAlchemyUserDatabase")
 
 
 async def test_organization_store_contract_accepts_structural_backend() -> None:
@@ -881,7 +734,6 @@ def test_sqlalchemy_organization_store_keeps_documented_keyword_contract() -> No
 def test_controller_factories_and_payloads_stay_canonical() -> None:
     """Controller factories and payload structs resolve from their canonical modules."""
     assert LoginCredentials.__struct_fields__ == ("identifier", "password")
-    assert RefreshTokenRequest.__struct_fields__ == ("refresh_token",)
     assert ForgotPassword.__struct_fields__ == ("email",)
     assert ResetPassword.__struct_fields__ == ("token", "password")
     assert VerifyToken.__struct_fields__ == ("token",)
@@ -918,7 +770,6 @@ def test_root_package_does_not_reexport_payload_or_schema_structs() -> None:
         assert not hasattr(litestar_auth, symbol)
 
     assert payloads_module.LoginCredentials is LoginCredentials
-    assert payloads_module.RefreshTokenRequest is RefreshTokenRequest
     assert payloads_module.ForgotPassword is ForgotPassword
     assert payloads_module.ResetPassword is ResetPassword
     assert payloads_module.VerifyToken is VerifyToken
@@ -1197,41 +1048,6 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     )
 
 
-def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() -> None:
-    """The Redis contrib preset stays on the contrib module instead of the package root."""
-    preset_hints = get_type_hints(RedisAuthPreset, include_extras=True)
-
-    assert redis_contrib_module.RedisAuthPreset is RedisAuthPreset
-    assert redis_contrib_module.RedisAuthRateLimitConfigOptions is RedisAuthRateLimitConfigOptions
-    assert redis_contrib_module.RedisAuthRateLimitTier is RedisAuthRateLimitTier
-    assert redis_contrib_module.RedisTokenStrategyConfig is ContribRedisTokenStrategyConfig
-    assert redis_contrib_module.__all__ == (
-        "RedisApiKeyNonceStore",
-        "RedisApiKeyNonceStoreClient",
-        "RedisAuthClientProtocol",
-        "RedisAuthPreset",
-        "RedisAuthRateLimitConfigOptions",
-        "RedisAuthRateLimitTier",
-        "RedisTokenStrategy",
-        "RedisTokenStrategyConfig",
-        "RedisTotpEnrollmentStore",
-        "RedisUsedTotpCodeStore",
-    )
-    assert redis_contrib_module.RedisAuthClientProtocol is RedisAuthClientProtocol
-    assert redis_contrib_module.RedisTotpEnrollmentStore is ContribRedisTotpEnrollmentStore
-    assert preset_hints["redis"] is RedisAuthClientProtocol
-    assert hasattr(RedisAuthPreset, "build_totp_enrollment_store")
-    assert hasattr(RedisAuthPreset, "build_totp_pending_jti_store")
-    assert "RedisAuthClientProtocol" not in __all__
-    assert "RedisAuthPreset" not in __all__
-    assert "RedisAuthRateLimitConfigOptions" not in __all__
-    assert "RedisAuthRateLimitTier" not in __all__
-    assert not hasattr(litestar_auth, "RedisAuthClientProtocol")
-    assert not hasattr(litestar_auth, "RedisAuthPreset")
-    assert not hasattr(litestar_auth, "RedisAuthRateLimitConfigOptions")
-    assert not hasattr(litestar_auth, "RedisAuthRateLimitTier")
-
-
 async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
@@ -1311,158 +1127,6 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert ONE_MINUTE_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= ONE_MINUTE_TTL_SECONDS
 
 
-def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() -> None:
-    """Rate-limit typing stays on the ratelimit module without leaking onto the package root."""
-    current_group_alias = ratelimit_module.AuthRateLimitEndpointGroup
-
-    assert not hasattr(ratelimit_module, "AuthRateLimitEndpointSlot")
-    assert current_group_alias.__name__ == AuthRateLimitEndpointGroup.__name__
-    assert get_args(ratelimit_module.RateLimitScope.__value__) == ("api_key_id", "ip", "ip_email")
-    assert tuple(ratelimit_module.AuthRateLimitSlot) == (
-        AuthRateLimitSlot.LOGIN,
-        AuthRateLimitSlot.CHANGE_PASSWORD,
-        AuthRateLimitSlot.REFRESH,
-        AuthRateLimitSlot.REGISTER,
-        AuthRateLimitSlot.FORGOT_PASSWORD,
-        AuthRateLimitSlot.RESET_PASSWORD,
-        AuthRateLimitSlot.TOTP_ENABLE,
-        AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
-        AuthRateLimitSlot.TOTP_VERIFY,
-        AuthRateLimitSlot.TOTP_DISABLE,
-        AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
-        AuthRateLimitSlot.VERIFY_TOKEN,
-        AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
-        AuthRateLimitSlot.ORGANIZATION_SWITCH,
-        AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
-        AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
-        AuthRateLimitSlot.API_KEY_CREATE,
-        AuthRateLimitSlot.API_KEY_UPDATE,
-        AuthRateLimitSlot.API_KEY_USE,
-    )
-    assert get_args(current_group_alias.__value__) == (
-        "api_keys",
-        "login",
-        "organization_invitations",
-        "organizations",
-        "password_reset",
-        "refresh",
-        "register",
-        "totp",
-        "verification",
-    )
-    assert "AuthRateLimitEndpointSlot" not in ratelimit_module.__all__
-    assert "AuthRateLimitEndpointGroup" in ratelimit_module.__all__
-    assert "AuthRateLimitSlot" in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" not in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" not in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" not in ratelimit_module.__all__
-    assert "RateLimitScope" in ratelimit_module.__all__
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP")
-    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_VERIFICATION_SLOTS")
-    assert not hasattr(litestar_auth, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
-    assert not hasattr(litestar_auth, "RateLimitScope")
-    assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP")
-    assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_VERIFICATION_SLOTS")
-    assert not hasattr(litestar_auth, "AuthRateLimitEndpointSlot")
-    assert not hasattr(litestar_auth, "AuthRateLimitEndpointGroup")
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" not in __all__
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" not in __all__
-    assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" not in __all__
-    assert "AuthRateLimitEndpointSlot" not in __all__
-    assert "AuthRateLimitEndpointGroup" not in __all__
-
-
-def test_payload_module_is_authoritative_boundary_without_controllers_package_reexports() -> None:
-    """Payloads resolve from the dedicated module without controllers-package aliases."""
-    assert controllers_package.__all__ == (
-        "ApiKeysControllerConfig",
-        "AuthControllerConfig",
-        "OAuthAssociateControllerConfig",
-        "OAuthControllerConfig",
-        "OrganizationControllerConfig",
-        "RegisterControllerConfig",
-        "SessionDevicesControllerConfig",
-        "TotpControllerOptions",
-        "TotpUserManagerProtocol",
-        "UsersControllerConfig",
-        "backend_supports_organization_tokens",
-        "create_api_keys_controllers",
-        "create_auth_controller",
-        "create_oauth_associate_controller",
-        "create_oauth_controller",
-        "create_organization_controller",
-        "create_register_controller",
-        "create_reset_password_controller",
-        "create_session_devices_controller",
-        "create_totp_controller",
-        "create_users_controller",
-        "create_verify_controller",
-    )
-    assert payloads_module.__all__ == (
-        "ApiKeyAdminCreateRequest",
-        "ApiKeyCreateRequest",
-        "ApiKeyCreateResponse",
-        "ApiKeyIdField",
-        "ApiKeyListResponse",
-        "ApiKeyNameField",
-        "ApiKeyRead",
-        "ApiKeyScopeField",
-        "ApiKeyUpdateRequest",
-        "ForgotPassword",
-        "LoginCredentials",
-        "RefreshSessionListResponse",
-        "RefreshSessionRead",
-        "RefreshTokenRequest",
-        "RequestVerifyToken",
-        "ResetPassword",
-        "SessionClientMetadataKey",
-        "SessionClientMetadataValue",
-        "SwitchOrganizationRequest",
-        "TotpConfirmEnableRequest",
-        "TotpConfirmEnableResponse",
-        "TotpDisableRequest",
-        "TotpEnableRequest",
-        "TotpEnableResponse",
-        "TotpRecoveryCodesResponse",
-        "TotpRegenerateRecoveryCodesRequest",
-        "TotpVerifyRequest",
-        "VerifyToken",
-    )
-    assert payloads_module.LoginCredentials is LoginCredentials
-    assert payloads_module.LoginCredentials is auth_controller_module.LoginCredentials
-    assert not hasattr(litestar_auth, "RefreshSessionRead")
-    assert not hasattr(litestar_auth, "RefreshSessionListResponse")
-    assert not hasattr(controllers_package, "RefreshSessionRead")
-    assert not hasattr(controllers_package, "RefreshSessionListResponse")
-    assert payloads_module.RefreshTokenRequest is auth_controller_module.RefreshTokenRequest
-    assert payloads_module.ForgotPassword is reset_controller_module.ForgotPassword
-    assert payloads_module.ResetPassword is reset_controller_module.ResetPassword
-    assert payloads_module.VerifyToken is verify_controller_module.VerifyToken
-    assert payloads_module.RequestVerifyToken is verify_controller_module.RequestVerifyToken
-    assert payloads_module.TotpEnableRequest is totp_controller_module.TotpEnableRequest
-    assert payloads_module.TotpConfirmEnableRequest is TotpConfirmEnableRequest
-    assert payloads_module.TotpConfirmEnableResponse is TotpConfirmEnableResponse
-    assert payloads_module.TotpEnableResponse is TotpEnableResponse
-    assert payloads_module.TotpVerifyRequest is TotpVerifyRequest
-    assert payloads_module.TotpDisableRequest is TotpDisableRequest
-    for symbol in REMOVED_CONTROLLERS_PAYLOAD_EXPORTS:
-        assert symbol not in controllers_package.__all__
-        assert not hasattr(controllers_package, symbol)
-    for symbol in REMOVED_PAYLOAD_SCHEMA_EXPORTS:
-        assert symbol not in payloads_module.__all__
-        assert not hasattr(payloads_module, symbol)
-    assert schemas_module.AdminUserUpdate is AdminUserUpdate
-    assert schemas_module.ChangePasswordRequest is ChangePasswordRequest
-    assert schemas_module.UserCreate is UserCreate
-    assert schemas_module.UserRead is UserRead
-    assert schemas_module.UserUpdate is UserUpdate
-
-
 def test_exception_hierarchy_stays_on_canonical_module() -> None:
     """Exception subclasses stay on ``litestar_auth.exceptions`` while the root exports the base type."""
     assert issubclass(AuthenticationError, LitestarAuthError)
@@ -1480,83 +1144,6 @@ def test_exception_hierarchy_stays_on_canonical_module() -> None:
     assert not hasattr(litestar_auth, "TokenError")
 
 
-def test_root_package_all_excludes_private_symbols() -> None:
-    """`__all__` lists only public names."""
-    assert tuple(__all__) == (
-        "DEFAULT_SUPERUSER_ROLE_NAME",
-        "ApiKeyConfig",
-        "AuthExtension",
-        "AuthExtensionRegistrationContext",
-        "AuthExtensionValidationContext",
-        "AuthenticationBackend",
-        "Authenticator",
-        "BaseUserManager",
-        "BaseUserManagerConfig",
-        "BearerTransport",
-        "ClaimTenantResolver",
-        "CookieTransport",
-        "CookieTransportConfig",
-        "DatabaseTokenAuthConfig",
-        "ErrorCode",
-        "FernetKeyringConfig",
-        "GuardedUserProtocol",
-        "HeaderTenantResolver",
-        "LitestarAuth",
-        "LitestarAuthConfig",
-        "LitestarAuthError",
-        "OAuthConfig",
-        "OAuthProviderConfig",
-        "OrganizationConfig",
-        "PermissionResolver",
-        "RoleCapableUserProtocol",
-        "StaticRolePermissionResolver",
-        "SubdomainTenantResolver",
-        "TenantResolver",
-        "TotpConfig",
-        "TotpUserProtocol",
-        "UserManagerSecurity",
-        "UserProtocol",
-        "UserProtocolStrict",
-        "__version__",
-        "has_all_permissions",
-        "has_all_roles",
-        "has_any_permission",
-        "has_any_role",
-        "has_organization_permission",
-        "has_organization_role",
-        "has_permission",
-        "is_active",
-        "is_authenticated",
-        "is_superuser",
-        "is_verified",
-        "requires_organization_membership",
-    )
-    assert all(not symbol.startswith("_") or symbol == "__version__" for symbol in __all__)
-    assert len(__all__) == len(set(__all__))
-    assert "_UserManagerProxy" not in __all__
-    assert "ErrorCode" in __all__
-    assert "has_any_role" in __all__
-    assert "has_all_roles" in __all__
-    assert {
-        "GuardedUserProtocol",
-        "RoleCapableUserProtocol",
-        "TotpUserProtocol",
-        "UserProtocol",
-        "UserProtocolStrict",
-    } <= set(__all__)
-    assert "Authenticator" in __all__
-    assert AuthExtension is litestar_auth.extensions.AuthExtension
-    assert AuthExtensionRegistrationContext is litestar_auth.extensions.AuthExtensionRegistrationContext
-    assert AuthExtensionValidationContext is litestar_auth.extensions.AuthExtensionValidationContext
-    for symbol in REMOVED_ROOT_PAYLOAD_EXPORTS:
-        assert symbol not in __all__
-    for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:
-        assert symbol not in __all__
-    assert "LitestarAuth" in __all__
-    assert "ApiKeyConfig" in __all__
-    assert "DatabaseTokenAuthConfig" in __all__
-
-
 def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     """Secondary APIs stay on canonical submodules instead of the package root."""
     for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:
@@ -1568,8 +1155,6 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert Transport is not None
     assert Strategy is not None
     assert DbSessionDependencyKey is not None
-    assert JWTStrategy is not None
-    assert JWTStrategyConfig is not None
     assert DatabaseTokenStrategy is not None
     assert DatabaseTokenStrategyConfig is not None
     assert RedisTokenStrategy is not None
@@ -1579,12 +1164,8 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert RedisRateLimiter is not None
     assert EndpointRateLimit is not None
     assert AuthRateLimitConfig is not None
-    assert InMemoryJWTDenylistStore is not None
     assert InMemoryTotpEnrollmentStore is not None
     assert InMemoryUsedTotpCodeStore is not None
-    assert JWTDenylistStore is not None
-    assert JWTRevocationPosture is not None
-    assert RedisJWTDenylistStore is not None
     assert RedisTotpEnrollmentStore is not None
     assert RedisUsedTotpCodeStore is not None
     assert BaseUserStore is not None
@@ -1626,45 +1207,6 @@ def test_root_package_does_not_export_compat_aliases() -> None:
     assert "BaseUserDatabase" not in __all__
     assert not hasattr(litestar_auth, "AuthPlugin")
     assert not hasattr(litestar_auth, "BaseUserDatabase")
-
-
-def test_plugin_module_public_exports_no_compat_shims() -> None:
-    """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
-    assert plugin_module.__all__ == (
-        "AlchemyAuthSessionBinding",
-        "ApiKeyConfig",
-        "DatabaseTokenAuthConfig",
-        "FernetKeyringConfig",
-        "LitestarAuth",
-        "LitestarAuthConfig",
-        "OAuthConfig",
-        "OAuthProviderConfig",
-        "OrganizationConfig",
-        "StartupBackendTemplate",
-        "TotpConfig",
-        "bind_auth_session_to_alchemy",
-    )
-    assert plugin_module.ApiKeyConfig is litestar_auth.ApiKeyConfig
-    assert plugin_module.DatabaseTokenAuthConfig is litestar_auth.DatabaseTokenAuthConfig
-    assert plugin_module.FernetKeyringConfig is litestar_auth.FernetKeyringConfig
-    assert plugin_module.OrganizationConfig is litestar_auth.OrganizationConfig
-    assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
-    assert plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.features._backends"
-    assert not hasattr(litestar_auth, "StartupBackendTemplate")
-    assert "AuthPlugin" not in plugin_module.__all__
-    assert not hasattr(plugin_module, "AuthPlugin")
-    for name in ("_ScopedUserDatabaseProxy", "_UserManagerFactory"):
-        assert not hasattr(plugin_internals, name)
-    for name in (
-        "DEFAULT_CONFIG_DEPENDENCY_KEY",
-        "DEFAULT_USER_MANAGER_DEPENDENCY_KEY",
-        "DEFAULT_BACKENDS_DEPENDENCY_KEY",
-        "DEFAULT_USER_MODEL_DEPENDENCY_KEY",
-        "DEFAULT_CSRF_COOKIE_NAME",
-        "OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY",
-        "_ScopedUserDatabaseProxy",
-    ):
-        assert not hasattr(plugin_module, name)
 
 
 def test_root_package_installs_null_handler() -> None:

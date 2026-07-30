@@ -16,7 +16,8 @@ from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig, TotpConfig
 from litestar_auth._totp_primitive import _generate_totp_code
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User, import_token_orm_models
@@ -101,6 +102,7 @@ def app() -> Iterator[Litestar]:
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
             refresh_max_age=timedelta(days=30),
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
         ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
@@ -149,12 +151,12 @@ async def test_totp_enable_verify_disable_flow(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert initial_login_response.status_code == HTTP_CREATED
-    initial_access_token = initial_login_response.json()["access_token"]
+    initial_access_token = initial_login_response.cookies.get("litestar_auth")
 
     enable_response = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     assert enable_response.status_code == HTTP_CREATED
     enable_payload = enable_response.json()
@@ -177,7 +179,7 @@ async def test_totp_enable_verify_disable_flow(
             "enrollment_token": enable_payload["enrollment_token"],
             "code": confirm_code,
         },
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     assert confirm_response.status_code == HTTP_CREATED
     assert confirm_response.json()["enabled"] is True
@@ -203,12 +205,12 @@ async def test_totp_enable_verify_disable_flow(
         json={"pending_token": pending_payload["pending_token"], "code": valid_code},
     )
     assert verify_response.status_code == HTTP_CREATED
-    verified_access_token = verify_response.json()["access_token"]
-    assert verify_response.json()["refresh_token"]
+    verified_access_token = verify_response.cookies.get("litestar_auth")
+    assert verify_response.cookies.get("litestar_auth_refresh")
 
     protected_response = await client.get(
         "/protected",
-        headers={"Authorization": f"Bearer {verified_access_token}"},
+        headers={"Cookie": f"litestar_auth={verified_access_token}"},
     )
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": "user@example.com"}
@@ -218,7 +220,7 @@ async def test_totp_enable_verify_disable_flow(
     disable_response = await client.post(
         "/auth/2fa/disable",
         json={"code": disable_code},
-        headers={"Authorization": f"Bearer {verified_access_token}"},
+        headers={"Cookie": f"litestar_auth={verified_access_token}"},
     )
     assert disable_response.status_code == HTTP_CREATED
 
@@ -227,8 +229,8 @@ async def test_totp_enable_verify_disable_flow(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert final_login_response.status_code == HTTP_CREATED
-    assert final_login_response.json()["token_type"] == "bearer"
-    assert "access_token" in final_login_response.json()
+    assert final_login_response.json() is None
+    assert final_login_response.cookies.get("litestar_auth")
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
@@ -244,12 +246,12 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert initial_login_response.status_code == HTTP_CREATED
-    initial_access_token = initial_login_response.json()["access_token"]
+    initial_access_token = initial_login_response.cookies.get("litestar_auth")
 
     enable_response = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     assert enable_response.status_code == HTTP_CREATED
     enable_payload = enable_response.json()
@@ -260,7 +262,7 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
             "enrollment_token": enable_payload["enrollment_token"],
             "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
         },
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     assert confirm_response.status_code == HTTP_CREATED
     recovery_code = confirm_response.json()["recovery_codes"][0]
@@ -276,11 +278,11 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
         json={"pending_token": pending_login_response.json()["pending_token"], "code": recovery_code},
     )
     assert verify_response.status_code == HTTP_CREATED
-    verified_access_token = verify_response.json()["access_token"]
+    verified_access_token = verify_response.cookies.get("litestar_auth")
 
     protected_response = await client.get(
         "/protected",
-        headers={"Authorization": f"Bearer {verified_access_token}"},
+        headers={"Cookie": f"litestar_auth={verified_access_token}"},
     )
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": "user@example.com"}
@@ -298,11 +300,11 @@ async def test_totp_login_stepup_allows_email_change_without_inline_code(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    initial_access_token = initial_login_response.json()["access_token"]
+    initial_access_token = initial_login_response.cookies.get("litestar_auth")
     enable_response = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     enable_payload = enable_response.json()
     confirm_response = await client.post(
@@ -311,7 +313,7 @@ async def test_totp_login_stepup_allows_email_change_without_inline_code(
             "enrollment_token": enable_payload["enrollment_token"],
             "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
         },
-        headers={"Authorization": f"Bearer {initial_access_token}"},
+        headers={"Cookie": f"litestar_auth={initial_access_token}"},
     )
     assert confirm_response.status_code == HTTP_CREATED
     pending_login_response = await client.post(
@@ -325,11 +327,11 @@ async def test_totp_login_stepup_allows_email_change_without_inline_code(
             "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
         },
     )
-    verified_access_token = verify_response.json()["access_token"]
+    verified_access_token = verify_response.cookies.get("litestar_auth")
 
     response = await client.patch(
         "/users/me",
-        headers={"Authorization": f"Bearer {verified_access_token}"},
+        headers={"Cookie": f"litestar_auth={verified_access_token}"},
         json={"email": "updated@example.com", "current_password": "correct-password"},
     )
 

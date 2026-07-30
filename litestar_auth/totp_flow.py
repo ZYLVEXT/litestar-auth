@@ -33,7 +33,7 @@ from litestar_auth.types import TotpUserProtocol
 if TYPE_CHECKING:
     from litestar import Request
 
-    from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
 
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 _PENDING_JTI_HEX_LENGTH = 32

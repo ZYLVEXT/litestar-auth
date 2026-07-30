@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth._plugin.config import LitestarAuthConfig
-    from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
+    from litestar_auth.db.base import BaseUserStore
     from litestar_auth.manager import BaseUserManager
     from litestar_auth.password import PasswordHelper
 
@@ -56,7 +56,6 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
     config: LitestarAuthConfig[UP, ID]
     password_helper: PasswordHelper
     password_validator: Callable[[str], None] | None
-    api_key_store: BaseApiKeyStore[Any, ID] | None = None
     backends: tuple[object, ...] = ()
 
     @property
@@ -80,9 +79,6 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
         constructor_kwargs = manager_inputs.build_kwargs()
         constructor_kwargs["password_helper"] = self.password_helper
         constructor_kwargs["password_validator"] = self.password_validator
-        if self.config.api_keys.enabled:
-            constructor_kwargs["api_key_store"] = self.api_key_store
-            constructor_kwargs["api_key_config"] = self.config.api_keys
         constructor_kwargs["unsafe_testing"] = self.config.unsafe_testing
         constructor_kwargs["superuser_role_name"] = self.config.superuser_role_name
         if self.config.account_token_denylist_store is not None:
@@ -106,7 +102,6 @@ def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
     *,
     password_helper: PasswordHelper,
     password_validator: Callable[[str], None] | None,
-    api_key_store: BaseApiKeyStore[Any, ID] | None = None,
     backends: tuple[object, ...] = (),
 ) -> _DefaultUserManagerBuilderContract[UP, ID]:
     """Return the shared contract for plugin-owned default manager construction."""
@@ -114,7 +109,6 @@ def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
         config=config,
         password_helper=password_helper,
         password_validator=password_validator,
-        api_key_store=api_key_store,
         backends=backends,
     )
 
@@ -169,22 +163,15 @@ def build_user_manager[UP: UserProtocol[Any], ID](
             is also unset.
 
     """
+    _ = session
     user_manager_class = config.user_manager_class
     if user_manager_class is None:
         msg = "user_manager_class must be configured when user_manager_factory is unset."
         raise ConfigurationError(msg)
-    api_key_store = None
-    if config.api_keys.enabled:
-        from litestar_auth._plugin.api_key import (  # ruff: ignore[import-outside-top-level]
-            resolve_api_key_store_factory,
-        )
-
-        api_key_store = resolve_api_key_store_factory(config.api_keys)(session)
     constructor_kwargs = _build_default_user_manager_contract(
         config,
         password_helper=config.resolve_password_helper(),
         password_validator=resolve_password_validator(config),
-        api_key_store=api_key_store,
         backends=backends,
     ).build_kwargs()
     return user_manager_class(user_db, **constructor_kwargs)

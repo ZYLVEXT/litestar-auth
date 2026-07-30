@@ -12,15 +12,13 @@ from litestar.routes import HTTPRoute
 from litestar.testing import AsyncTestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.db.sqlalchemy import SQLAlchemyOrganizationStore, SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import Organization, OrganizationInvitation, OrganizationMembership, User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OrganizationConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OrganizationConfig
 from tests.integration.conftest import enable_aiosqlite_foreign_keys
 from tests.integration.test_contrib_role_admin import _login_headers
 
@@ -109,20 +107,11 @@ async def _build_flag_mount_app(
     password_helper = PasswordHelper()
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     state = await _seed_database(session_maker, password_helper)
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-organization-admin-flag-secret-123456789012345",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="organization-admin-flag-session-secret-123456",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", session_maker),
         user_model=User,
         user_manager_class=OrganizationFlagMountUserManager,
@@ -230,7 +219,7 @@ async def test_config_flag_mounts_exact_organization_admin_routes_guards_and_ope
             "/organizations/invitations/{invitation_id}": ("DELETE", "OPTIONS"),
         }
         for route in _organization_routes(flag_app.app, prefix="/organizations"):
-            assert _owner_guard_names(route) == ("is_superuser", "requires_password_session")
+            assert _owner_guard_names(route) == ("is_superuser", "is_human_authenticated")
         assert all(
             security is None
             for security in _openapi_security_by_operation(flag_app.app, prefix="/organizations").values()
@@ -255,11 +244,11 @@ async def test_config_flag_mounts_exact_invitation_routes_guards_and_openapi_sec
             assert _handler_guard_names(route, "POST") == (
                 "is_active",
                 "is_verified",
-                "requires_password_session",
+                "is_human_authenticated",
             )
         assert _openapi_security_by_operation(flag_app.app, prefix="/auth/organization-invitations") == {
-            ("/auth/organization-invitations/accept", "post"): [{"bearer": []}],
-            ("/auth/organization-invitations/decline", "post"): [{"bearer": []}],
+            ("/auth/organization-invitations/accept", "post"): [{"database": []}],
+            ("/auth/organization-invitations/decline", "post"): [{"database": []}],
         }
     finally:
         await flag_app.engine.dispose()

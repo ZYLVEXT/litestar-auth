@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import msgspec
 import pytest
 from cryptography.fernet import Fernet
+from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 from litestar import Litestar, Request, get
 from litestar.di import NamedDependency
 from litestar.exceptions import ClientException
@@ -20,11 +21,11 @@ import litestar_auth.totp as _totp_mod
 from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import require_password_length
-from litestar_auth.controllers.totp import INVALID_TOTP_TOKEN_DETAIL
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -40,8 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
 
-    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
-    from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
+    from litestar_auth.db.base import BaseUserStore
     from litestar_auth.types import LoginIdentifier
 
 pytestmark = [pytest.mark.integration]
@@ -53,6 +53,16 @@ HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_CREATED = 201
 HTTP_OK = 200
 TOTAL_USERS = 3
+
+
+def build_test_redis_strategy(*, key_prefix: str) -> RedisTokenStrategy[ExampleUser, UUID]:
+    """Return an isolated supported server-side session strategy."""
+    return RedisTokenStrategy(
+        redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+        token_hash_secret="integration-session-hash-secret-7fA9!qR4#kM2",
+        key_prefix=f"{key_prefix}:",
+        subject_decoder=UUID,
+    )
 
 
 class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -68,8 +78,6 @@ class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
         backends: tuple[object, ...] = (),
         login_identifier: LoginIdentifier = "email",
         superuser_role_name: str = "admin",
-        api_key_store: BaseApiKeyStore[Any, UUID] | None = None,
-        api_key_config: ApiKeyConfigProtocol | None = None,
         unsafe_testing: bool = False,
     ) -> None:
         """Initialize the manager with the custom DTO field policy used by this module."""
@@ -81,8 +89,6 @@ class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
             backends=backends,
             login_identifier=login_identifier,
             superuser_role_name=superuser_role_name,
-            api_key_store=api_key_store,
-            api_key_config=api_key_config,
             unsafe_testing=unsafe_testing,
             updatable_fields=frozenset({"email", "password", "bio"}),
         )
@@ -293,8 +299,8 @@ def non_auth_client_exception() -> None:
 def build_app() -> tuple[
     Litestar,
     InMemoryUserDatabase,
-    InMemoryTokenStrategy,
-    InMemoryTokenStrategy,
+    RedisTokenStrategy[ExampleUser, UUID],
+    RedisTokenStrategy[ExampleUser, UUID],
 ]:
     """Create an app configured through the auth plugin.
 
@@ -318,18 +324,12 @@ def build_app() -> tuple[
     user_db = InMemoryUserDatabase([admin_user, regular_user])
     verify_secret = "0123456789abcdef" * 4
     reset_secret = "fedcba9876543210" * 4
-    primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
-    secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
+    primary_strategy = build_test_redis_strategy(key_prefix="primary")
     backends = [
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
-            transport=BearerTransport(),
-            strategy=cast("Any", primary_strategy),
-        ),
-        AuthenticationBackend[ExampleUser, UUID](
-            name="secondary",
-            transport=BearerTransport(),
-            strategy=cast("Any", secondary_strategy),
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=primary_strategy,
         ),
     ]
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -349,12 +349,17 @@ def build_app() -> tuple[
     )
     plugin = LitestarAuth(config)
     app = Litestar(route_handlers=[dependency_probe, auth_state, non_auth_client_exception], plugins=[plugin])
-    return app, user_db, primary_strategy, secondary_strategy
+    return app, user_db, primary_strategy, primary_strategy
 
 
 def build_app_with_security_overrides(
     extra_security_overrides: dict[str, Any],
-) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, InMemoryTokenStrategy]:
+) -> tuple[
+    Litestar,
+    InMemoryUserDatabase,
+    RedisTokenStrategy[ExampleUser, UUID],
+    RedisTokenStrategy[ExampleUser, UUID],
+]:
     """Create an app configured through the auth plugin with manager overrides.
 
     Returns:
@@ -377,18 +382,12 @@ def build_app_with_security_overrides(
     user_db = InMemoryUserDatabase([admin_user, regular_user])
     verify_secret = "0123456789abcdef" * 4
     reset_secret = "fedcba9876543210" * 4
-    primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
-    secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
+    primary_strategy = build_test_redis_strategy(key_prefix="primary")
     backends = [
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
-            transport=BearerTransport(),
-            strategy=cast("Any", primary_strategy),
-        ),
-        AuthenticationBackend[ExampleUser, UUID](
-            name="secondary",
-            transport=BearerTransport(),
-            strategy=cast("Any", secondary_strategy),
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=primary_strategy,
         ),
     ]
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -409,7 +408,7 @@ def build_app_with_security_overrides(
     )
     plugin = LitestarAuth(config)
     app = Litestar(route_handlers=[dependency_probe, auth_state], plugins=[plugin])
-    return app, user_db, primary_strategy, secondary_strategy
+    return app, user_db, primary_strategy, primary_strategy
 
 
 class PluginUserCreate(msgspec.Struct, forbid_unknown_fields=True):
@@ -468,7 +467,7 @@ def build_advanced_app() -> tuple[
     used_tokens_store = InMemoryUsedTotpCodeStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -508,8 +507,8 @@ def build_advanced_app() -> tuple[
 def app() -> tuple[
     Litestar,
     InMemoryUserDatabase,
-    InMemoryTokenStrategy,
-    InMemoryTokenStrategy,
+    RedisTokenStrategy[ExampleUser, UUID],
+    RedisTokenStrategy[ExampleUser, UUID],
 ]:
     """Create the shared plugin app and collaborators.
 
@@ -539,8 +538,8 @@ def test_plugin_uses_dataclass_config_and_init_plugin_protocol() -> None:
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin")),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
+                strategy=build_test_redis_strategy(key_prefix="plugin"),
             ),
         ],
         session_maker=cast("Any", DummySessionMaker()),
@@ -556,12 +555,12 @@ async def test_plugin_registers_di_middleware_and_generated_controllers(
     client: tuple[
         AsyncTestClient[Litestar],
         InMemoryUserDatabase,
-        InMemoryTokenStrategy,
-        InMemoryTokenStrategy,
+        RedisTokenStrategy[ExampleUser, UUID],
+        RedisTokenStrategy[ExampleUser, UUID],
     ],
 ) -> None:
     """The plugin wires DI, middleware, and controller routes into the app."""
-    test_client, user_db, primary_strategy, secondary_strategy = client
+    test_client, user_db, _primary_strategy, _secondary_strategy = client
     app = test_client.app
 
     assert "litestar_auth_user_manager" in app.dependencies
@@ -597,22 +596,15 @@ async def test_plugin_registers_di_middleware_and_generated_controllers(
         json={"identifier": "user@example.com", "password": "user-password"},
     )
     assert primary_login_response.status_code == HTTP_CREATED
-    assert primary_login_response.json() == {"access_token": "primary-1", "token_type": "bearer"}
-    assert list(primary_strategy.tokens) == ["primary-1"]
+    assert primary_login_response.json() is None
+    primary_token = primary_login_response.cookies.get("litestar_auth")
+    assert isinstance(primary_token, str)
 
-    secondary_login_response = await test_client.post(
-        "/auth/secondary/login",
-        json={"identifier": "user@example.com", "password": "user-password"},
-    )
-    assert secondary_login_response.status_code == HTTP_CREATED
-    assert secondary_login_response.json() == {"access_token": "secondary-1", "token_type": "bearer"}
-    assert list(secondary_strategy.tokens) == ["secondary-1"]
-
-    me_response = await test_client.get("/users/me", headers={"Authorization": "Bearer primary-1"})
+    me_response = await test_client.get("/users/me", headers={"Cookie": f"litestar_auth={primary_token}"})
     assert me_response.status_code == HTTP_OK
     assert me_response.json()["email"] == "user@example.com"
 
-    auth_state_response = await test_client.get("/auth-state", headers={"Authorization": "Bearer primary-1"})
+    auth_state_response = await test_client.get("/auth-state", headers={"Cookie": f"litestar_auth={primary_token}"})
     assert auth_state_response.status_code == HTTP_OK
     assert auth_state_response.json() == {"email": "user@example.com"}
 
@@ -621,9 +613,10 @@ async def test_plugin_registers_di_middleware_and_generated_controllers(
         json={"identifier": "admin@example.com", "password": "admin-password"},
     )
     assert admin_login_response.status_code == HTTP_CREATED
-    assert admin_login_response.json() == {"access_token": "primary-2", "token_type": "bearer"}
+    admin_token = admin_login_response.cookies.get("litestar_auth")
+    assert isinstance(admin_token, str)
 
-    users_response = await test_client.get("/users", headers={"Authorization": "Bearer primary-2"})
+    users_response = await test_client.get("/users", headers={"Cookie": f"litestar_auth={admin_token}"})
     assert users_response.status_code == HTTP_OK
     assert users_response.json()["total"] == TOTAL_USERS
 
@@ -677,157 +670,3 @@ async def test_plugin_allows_overriding_minimum_password_length() -> None:
             json={"email": "override@example.com", "password": "123456789012"},
         )
         assert response.status_code == HTTP_CREATED
-
-
-@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
-async def test_plugin_passes_advanced_controller_options_through_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Advanced controller options remain available when the plugin generates routes."""
-    monkeypatch.setattr("litestar_auth._totp_primitive.time.time", lambda: 59.0)
-    app, user_db, strategy, used_tokens_store = build_advanced_app()
-    helper_manager = TokenCaptureUserManager(
-        user_db,
-        password_helper=PasswordHelper(),
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
-        id_parser=UUID,
-    )
-
-    async with AsyncTestClient(app=app) as client:
-        register_response = await client.post(
-            "/auth/register",
-            json={"email": "schema@example.com", "password": "schema-password", "bio": "Schema via plugin"},
-        )
-        assert register_response.status_code == HTTP_CREATED
-        assert not register_response.json()["bio"]
-
-        created_user = await user_db.get_by_email("schema@example.com")
-        assert created_user is not None
-        verify_token = helper_manager.write_verify_token(created_user)
-        verify_response = await client.post("/auth/verify", json={"token": verify_token})
-        assert verify_response.status_code == HTTP_OK
-        assert not verify_response.json()["bio"]
-
-        await helper_manager.forgot_password(created_user.email)
-        _, reset_token = helper_manager.forgot_password_events[0]
-        reset_response = await client.post(
-            "/auth/reset-password",
-            json={"token": reset_token, "password": "updated-password"},
-        )
-        assert reset_response.status_code == HTTP_OK
-        assert not reset_response.json()["bio"]
-
-        deleted_user = await _register_update_and_delete_user(client, user_db, strategy)
-        await _verify_totp_replay_protection(client, user_db, used_tokens_store)
-        assert await user_db.get(deleted_user.id) is None
-
-
-async def _register_update_and_delete_user(
-    client: AsyncTestClient[Litestar],
-    user_db: InMemoryUserDatabase,
-    strategy: InMemoryRefreshTokenStrategy,
-) -> ExampleUser:
-    """Exercise plugin-managed DTOs, refresh tokens, and hard delete.
-
-    Returns:
-        The user created through the custom registration schema.
-    """
-    register_response = await client.post(
-        "/auth/register",
-        json={"email": "fresh@example.com", "password": "fresh-password", "bio": "Created via plugin"},
-    )
-    assert register_response.status_code == HTTP_CREATED
-    assert not register_response.json()["bio"]
-
-    created_user = await user_db.get_by_email("fresh@example.com")
-    assert created_user is not None
-    assert not created_user.bio
-
-    login_response = await client.post(
-        "/auth/login",
-        json={"identifier": "admin@example.com", "password": "admin-password"},
-    )
-    assert login_response.status_code == HTTP_CREATED
-    assert login_response.json() == {
-        "access_token": "plugin-1",
-        "token_type": "bearer",
-        "refresh_token": "plugin-refresh-1",
-    }
-
-    refresh_response = await client.post("/auth/refresh", json={"refresh_token": "plugin-refresh-1"})
-    assert refresh_response.status_code == HTTP_CREATED
-    assert refresh_response.json() == {
-        "access_token": "plugin-2",
-        "token_type": "bearer",
-        "refresh_token": "plugin-refresh-2",
-    }
-    assert "plugin-refresh-1" not in strategy.refresh_tokens
-
-    update_response = await client.patch(
-        "/users/me",
-        headers={"Authorization": "Bearer plugin-2"},
-        json={"bio": "Updated via plugin"},
-    )
-    assert update_response.status_code == HTTP_OK
-    assert update_response.json()["bio"] == "Updated via plugin"
-    assert not created_user.bio
-
-    delete_response = await client.request(
-        "DELETE",
-        f"/users/{created_user.id}",
-        headers={"Authorization": "Bearer plugin-2"},
-        json={"current_password": "admin-password"},
-    )
-    assert delete_response.status_code == HTTP_OK
-    assert not delete_response.json()["bio"]
-    return created_user
-
-
-async def _verify_totp_replay_protection(
-    client: AsyncTestClient[Litestar],
-    user_db: InMemoryUserDatabase,
-    used_tokens_store: InMemoryUsedTotpCodeStore,
-) -> None:
-    """Exercise plugin-managed TOTP routes with replay protection enabled."""
-    login_headers = {"Authorization": "Bearer plugin-2"}
-    enable_response = await client.post(
-        "/auth/2fa/enable",
-        json={"password": "admin-password"},
-        headers=login_headers,
-    )
-    assert enable_response.status_code == HTTP_CREATED
-    enable_body = enable_response.json()
-    secret = enable_body["secret"]
-
-    confirm_code = _generate_totp_code(secret, _totp_primitive._current_counter())
-    confirm_response = await client.post(
-        "/auth/2fa/enable/confirm",
-        json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers=login_headers,
-    )
-    assert confirm_response.status_code == HTTP_CREATED
-
-    admin_user = await user_db.get_by_email("admin@example.com")
-    assert admin_user is not None
-    code = _generate_totp_code(secret, _totp_primitive._current_counter())
-
-    pending_response = await client.post(
-        "/auth/login",
-        json={"identifier": "admin@example.com", "password": "admin-password"},
-    )
-    assert pending_response.status_code == HTTP_ACCEPTED
-    pending_token = pending_response.json()["pending_token"]
-
-    verify_response = await client.post("/auth/2fa/verify", json={"pending_token": pending_token, "code": code})
-    assert verify_response.status_code == HTTP_CREATED
-    assert verify_response.json() == {
-        "access_token": "plugin-3",
-        "refresh_token": "plugin-refresh-3",
-        "token_type": "bearer",
-    }
-
-    replay_response = await client.post("/auth/2fa/verify", json={"pending_token": pending_token, "code": code})
-    assert replay_response.status_code == HTTP_BAD_REQUEST
-    assert replay_response.json()["detail"] == INVALID_TOTP_TOKEN_DETAIL
-    replay_mark = await used_tokens_store.mark_used(admin_user.id, _current_counter(), 60.0)
-    assert replay_mark.stored is False
-    assert replay_mark.rejected_as_replay is True

@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
+from authweave_core import Invalid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -19,7 +20,12 @@ import litestar_auth.authentication.strategy.db as db_strategy_module
 from litestar_auth.authentication.strategy import DatabaseTokenModels
 from litestar_auth.authentication.strategy._db_time import _DatabaseTokenTimeMixin
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
-from litestar_auth.authentication.strategy.base import RefreshableStrategy, RefreshSessionManagementStrategy, Strategy
+from litestar_auth.authentication.strategy.base import (
+    HumanSessionAuthenticated,
+    RefreshableStrategy,
+    RefreshSessionManagementStrategy,
+    Strategy,
+)
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import (
@@ -53,6 +59,16 @@ EXPECTED_LINKED_CLEANUP_DELETIONS = 3
 EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 CONCURRENT_REFRESH_ROTATION_COUNT = 2
+
+
+async def _authenticated_user(strategy: Any, token: str, user_manager: Any) -> Any:  # ruff: ignore[any-type]
+    attempt = await strategy.authenticate_token(token, user_manager)
+    assert isinstance(attempt, HumanSessionAuthenticated)
+    return attempt.user
+
+
+async def _assert_invalid(strategy: Any, token: str, user_manager: Any) -> None:  # ruff: ignore[any-type]
+    assert isinstance(await strategy.authenticate_token(token, user_manager), Invalid)
 
 
 class DatabaseTokenTimeHarness(_DatabaseTokenTimeMixin):
@@ -358,7 +374,7 @@ async def test_database_token_strategy_writes_and_reads_tokens(session: Session)
 
     token = await strategy.write_token(user)
     persisted_token = session.scalar(select(AccessToken).where(AccessToken.user_id == user.id))
-    resolved_user = await strategy.read_token(token, UnusedUserManager())
+    resolved_user = await _authenticated_user(strategy, token, UnusedUserManager())
 
     assert persisted_token is not None
     assert persisted_token.user_id == user.id
@@ -385,7 +401,7 @@ async def test_database_token_strategy_initializes_defaults_and_rebinds_session(
     token = await strategy.write_token(user)
     rebound_session = _strategy_session(session)
     rebound_strategy = strategy.with_session(rebound_session)
-    resolved_user = await rebound_strategy.read_token(token, UnusedUserManager())
+    resolved_user = await _authenticated_user(rebound_strategy, token, UnusedUserManager())
 
     assert rebound_strategy is not strategy
     assert rebound_strategy.session is rebound_session
@@ -412,7 +428,7 @@ async def test_database_token_strategy_supports_custom_token_model_contract(sess
 
     access_token = await strategy.write_token(user)
     refresh_token = await strategy.write_refresh_token(user)
-    resolved_user = await strategy.read_token(access_token, UnusedCustomUserManager())
+    resolved_user = await _authenticated_user(strategy, access_token, UnusedCustomUserManager())
     rotation = await strategy.rotate_refresh_token(refresh_token, UnusedCustomUserManager())
     await strategy.destroy_token(access_token, user)
 
@@ -450,7 +466,7 @@ async def test_database_token_strategy_supports_password_column_name_hook(sessio
 
     access_token = await strategy.write_token(user)
     refresh_token = await strategy.write_refresh_token(user)
-    resolved_user = await strategy.read_token(access_token, UnusedPasswordHashColumnUserManager())
+    resolved_user = await _authenticated_user(strategy, access_token, UnusedPasswordHashColumnUserManager())
     rotation = await strategy.rotate_refresh_token(refresh_token, UnusedPasswordHashColumnUserManager())
     stored_hash = session.execute(select(PasswordHashColumnUser.__table__.c.password_hash)).scalar_one()
 
@@ -544,7 +560,7 @@ async def test_database_token_strategy_rejects_legacy_plaintext_access_tokens_by
         token_hash_secret=_TOKEN_HASH_SECRET,
     )
 
-    assert await strategy.read_token(legacy_token, UnusedUserManager()) is None
+    await _assert_invalid(strategy, legacy_token, UnusedUserManager())
 
 
 async def test_database_token_strategy_rejects_legacy_plaintext_refresh_tokens_by_default(session: Session) -> None:
@@ -594,9 +610,9 @@ async def test_database_token_strategy_destroy_token_revokes_only_its_refresh_se
 
     await strategy.destroy_token(first_access, user)
 
-    assert await strategy.read_token(first_access, UnusedUserManager()) is None
+    await _assert_invalid(strategy, first_access, UnusedUserManager())
     assert await strategy.rotate_refresh_token(first_refresh, UnusedUserManager()) is None
-    assert await strategy.read_token(second_access, UnusedUserManager()) is not None
+    assert await _authenticated_user(strategy, second_access, UnusedUserManager()) is user
     assert await strategy.rotate_refresh_token(second_refresh, UnusedUserManager()) is not None
 
 
@@ -629,11 +645,10 @@ async def test_database_token_strategy_rejects_missing_and_expired_tokens(sessio
         max_age=timedelta(minutes=10),
     )
 
-    assert await strict_strategy.read_token(None, UnusedUserManager()) is None
-    assert await strict_strategy.read_token("missing-token", UnusedUserManager()) is None
-    assert await strict_strategy.read_token("expired-token", UnusedUserManager()) is None
+    await _assert_invalid(strict_strategy, "missing-token", UnusedUserManager())
+    await _assert_invalid(strict_strategy, "expired-token", UnusedUserManager())
 
-    resolved_user = await relaxed_strategy.read_token("fresh-token", UnusedUserManager())
+    resolved_user = await _authenticated_user(relaxed_strategy, "fresh-token", UnusedUserManager())
 
     assert resolved_user is not None
     assert resolved_user.id == user.id
@@ -686,9 +701,9 @@ async def test_database_token_strategy_normalizes_timestamps_and_rejects_boundar
         max_age=timedelta(minutes=5),
     )
 
-    assert await strategy.read_token(expired_boundary_token, UnusedUserManager()) is None
+    await _assert_invalid(strategy, expired_boundary_token, UnusedUserManager())
 
-    resolved_user = await strategy.read_token(offset_aware_token, UnusedUserManager())
+    resolved_user = await _authenticated_user(strategy, offset_aware_token, UnusedUserManager())
 
     assert resolved_user is not None
     assert resolved_user.id == user.id
@@ -1143,7 +1158,7 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
     assert len(reuse_events) == 1
     assert getattr(reuse_events[0], "session_id", None) == session_id
     session.rollback()
-    assert await strategy.read_token(access_token, UnusedUserManager()) is None
+    await _assert_invalid(strategy, access_token, UnusedUserManager())
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
     assert (
         session.scalar(

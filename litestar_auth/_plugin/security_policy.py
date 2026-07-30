@@ -1,17 +1,13 @@
-"""Plugin-managed JWT/TOTP security policy descriptions and notices."""
+"""Plugin-managed TOTP security policy descriptions and notices."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib import import_module
-from typing import TYPE_CHECKING, Literal, TypeGuard, cast
+from typing import Literal
 
 from litestar_auth._manager.totp_secrets import TotpSecretStoragePosture
 
-if TYPE_CHECKING:
-    from litestar_auth.authentication.strategy.jwt import JWTRevocationPosture
-
-type _PluginSecurityPolicyKey = Literal["jwt_revocation", "totp_secret_storage"]
+type _PluginSecurityPolicyKey = Literal["totp_secret_storage"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,19 +32,6 @@ class _PluginSecurityNotice:
     startup_warning: str | None
 
 
-_JWT_REVOCATION_POLICY = _PluginSecurityPolicy(
-    key="jwt_revocation",
-    plugin_surface="JWTStrategy(allow_inmemory_denylist=True)",
-    contract_reference="JWTStrategy.revocation_posture",
-    docs_summary=(
-        "`JWTStrategy` requires an explicit `denylist_store`, or `allow_inmemory_denylist=True` for "
-        "single-process in-memory revocation."
-    ),
-    production_requirement=(
-        "Plugin-managed production has no separate JWT revocation compatibility flag; startup warns when "
-        "a strategy is explicitly wired to process-local in-memory revocation."
-    ),
-)
 _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
     key="totp_secret_storage",
     plugin_surface="user_manager_security.totp_secret_keyring",
@@ -64,35 +47,6 @@ _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
         "`user_manager_factory` explicitly owns that wiring."
     ),
 )
-
-
-def _current_jwt_revocation_posture_type() -> type[JWTRevocationPosture]:
-    """Return the live JWT revocation posture class."""
-    jwt_module = import_module("litestar_auth.authentication.strategy.jwt")
-    return cast("type[JWTRevocationPosture]", jwt_module.JWTRevocationPosture)
-
-
-def _is_current_jwt_revocation_posture(posture: object) -> TypeGuard[JWTRevocationPosture]:
-    """Return whether ``posture`` is a concrete JWT revocation posture."""
-    return isinstance(posture, _current_jwt_revocation_posture_type())
-
-
-def _describe_jwt_revocation_policy(posture: object) -> _PluginSecurityNotice | None:
-    """Resolve the shared plugin notice for a JWT revocation policy.
-
-    Returns:
-        The shared plugin notice when ``posture`` satisfies the JWT revocation
-        contract, otherwise ``None``.
-    """
-    if not _is_current_jwt_revocation_posture(posture):
-        return None
-    return _PluginSecurityNotice(
-        policy=_JWT_REVOCATION_POLICY,
-        posture_key=posture.key,
-        requires_explicit_production_opt_in=posture.requires_explicit_production_opt_in,
-        production_validation_error=posture.production_validation_error,
-        startup_warning=posture.startup_warning,
-    )
 
 
 def _describe_totp_secret_storage_policy(
@@ -119,8 +73,5 @@ def _describe_totp_secret_storage_policy(
 
 
 def _iter_plugin_security_policies() -> tuple[_PluginSecurityPolicy, ...]:
-    """Return the shared plugin-managed JWT/TOTP security policy descriptions."""
-    return (
-        _JWT_REVOCATION_POLICY,
-        _TOTP_SECRET_STORAGE_POLICY,
-    )
+    """Return the shared plugin-managed TOTP security policy descriptions."""
+    return (_TOTP_SECRET_STORAGE_POLICY,)

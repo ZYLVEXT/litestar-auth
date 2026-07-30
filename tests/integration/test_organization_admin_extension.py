@@ -11,9 +11,7 @@ from litestar import Litestar
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from litestar_auth._tenant_resolution import HeaderTenantResolver
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.contrib.organization_admin import OrganizationAdminExtension
 from litestar_auth.db.sqlalchemy import SQLAlchemyOrganizationStore, SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
@@ -21,7 +19,7 @@ from litestar_auth.guards import has_organization_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import Organization, OrganizationInvitation, OrganizationMembership, User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OrganizationConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OrganizationConfig
 from tests.integration.conftest import enable_aiosqlite_foreign_keys
 from tests.integration.test_contrib_role_admin import _login_headers
 
@@ -117,20 +115,11 @@ async def app(tmp_path: Path) -> AsyncIterator[tuple[Litestar, _OrganizationAdmi
     password_helper = PasswordHelper()
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     state = await _seed_database(session_maker, password_helper)
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-organization-admin-extension-secret-123456789012345",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="organization-admin-extension-session-secret-1234",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", session_maker),
         user_model=User,
         user_manager_class=OrganizationAdminTestUserManager,
@@ -150,7 +139,6 @@ async def app(tmp_path: Path) -> AsyncIterator[tuple[Litestar, _OrganizationAdmi
                 membership_model=OrganizationMembership,
                 invitation_model=OrganizationInvitation,
             ),
-            include_switch_organization=True,
             tenant_resolver=HeaderTenantResolver(),
         ),
         include_users=False,
@@ -224,20 +212,11 @@ async def test_organization_admin_extension_mounts_functional_tenant_scoped_rout
 
 def test_organization_admin_extension_fails_closed_when_organizations_are_disabled() -> None:
     """Startup validation rejects organization-admin extension use when organizations are disabled."""
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-disabled-organization-admin-extension-secret-123456789012345",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="disabled-organization-session-secret-123456789",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", object()),
         user_model=User,
         user_manager_class=OrganizationAdminTestUserManager,

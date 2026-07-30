@@ -12,7 +12,7 @@ from litestar.testing import AsyncTestClient
 
 from litestar_auth._manager import account_tokens as account_tokens_module
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import (
     create_auth_controller,
     create_register_controller,
@@ -148,7 +148,7 @@ def build_app(
     user_manager = TrackingUserManager(user_db, helper)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="test-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("StrategyProtocol[ExampleUser, UUID]", NoopStrategy()),
     )
     app = litestar_app_with_user_manager(

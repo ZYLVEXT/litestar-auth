@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 type TotpStepUpEndpoint = Literal[
     "totp.disable",
     "totp.regenerate_recovery_codes",
-    "api_keys.create",
-    "api_keys.update",
-    "api_keys.revoke",
     "users.update",
     "users.delete",
     "users.update_self",
@@ -35,9 +32,6 @@ type StepUpCallback = Callable[[], Awaitable[None]]
 _DEFAULT_TOTP_STEPUP_POLICY: dict[TotpStepUpEndpoint, TotpStepUpPolicyMode] = {
     "totp.disable": "required_when_enrolled",
     "totp.regenerate_recovery_codes": "required_when_enrolled",
-    "api_keys.create": "required_when_enrolled",
-    "api_keys.update": "required_when_enrolled",
-    "api_keys.revoke": "required_when_enrolled",
     "users.update": "required_when_enrolled",
     "users.delete": "required_when_enrolled",
     "users.update_self": "required_when_enrolled",

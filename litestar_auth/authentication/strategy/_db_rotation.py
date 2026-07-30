@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlalchemy import delete, insert, select, update
 
-from litestar_auth.authentication.strategy._db_metadata import _DatabaseRefreshTokenMetadataMixin
+from litestar_auth.authentication.strategy._db_metadata import _RefreshTokenMetadataMixin
 from litestar_auth.authentication.strategy._db_time import _DatabaseTokenTimeMixin
 from litestar_auth.authentication.strategy._opaque_tokens import mint_opaque_token
 from litestar_auth.types import UserProtocol
@@ -38,7 +38,7 @@ class _RefreshTokenRow(Protocol):
 
 class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
     _DatabaseTokenTimeMixin,
-    _DatabaseRefreshTokenMetadataMixin,
+    _RefreshTokenMetadataMixin,
 ):
     """Refresh-token rotation operations for database-backed sessions."""
 

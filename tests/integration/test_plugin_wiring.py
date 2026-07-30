@@ -28,9 +28,8 @@ from litestar_auth._plugin import (
 )
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
-from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.guards import is_authenticated
@@ -45,10 +44,9 @@ from tests.integration import _di_probes  # ruff: ignore[typing-only-first-party
 from .test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryRefreshTokenStrategy,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 if TYPE_CHECKING:
@@ -115,8 +113,8 @@ def _minimal_litestar_auth_config(
     strategies = backends or [
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
-            transport=BearerTransport(),
-            strategy=_as_any(InMemoryTokenStrategy(token_prefix="plugin-wiring")),
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=build_test_redis_strategy(key_prefix="plugin-wiring"),
         ),
     ]
     return LitestarAuthConfig[ExampleUser, UUID](
@@ -172,7 +170,7 @@ def test_cookie_transport_registers_litestar_csrf_config() -> None:
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=CookieTransport(cookie_name="custom_auth", path="/auth", secure=False, samesite="strict"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="csrf-wiring")),
+        strategy=build_test_redis_strategy(key_prefix="csrf-wiring"),
     )
     config = _minimal_litestar_auth_config(backends=[backend])
     config.csrf_secret = "0123456789abcdef" * 4
@@ -236,8 +234,8 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="username-login")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="username-login"),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -267,7 +265,8 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
             json={"identifier": "pluginuser", "password": "correct-password"},
         )
         assert response.status_code == HTTP_CREATED
-        assert "access_token" in response.json()
+        assert response.json() is None
+        assert response.cookies.get("litestar_auth")
 
 
 def test_oauth_associate_dependency_registered_when_enabled() -> None:
@@ -476,38 +475,6 @@ def test_plugin_mounts_oauth_routes_from_the_single_provider_inventory(
         assert expected_associate_path in mounted_paths
 
 
-def test_plugin_openapi_security_uses_alternative_requirements_for_multiple_backends() -> None:
-    """Protected plugin routes allow any configured backend in OpenAPI."""
-    config = _minimal_litestar_auth_config(
-        backends=[
-            AuthenticationBackend[ExampleUser, UUID](
-                name="bearer",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="bearer-openapi")),
-            ),
-            AuthenticationBackend[ExampleUser, UUID](
-                name="cookie",
-                transport=CookieTransport(
-                    cookie_name="auth_cookie",
-                    allow_insecure_cookie_auth=True,
-                    secure=False,
-                ),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-openapi")),
-            ),
-        ],
-    )
-    config.csrf_secret = "0123456789abcdef" * 4
-    app = Litestar(
-        plugins=[LitestarAuth(config)],
-        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
-    )
-
-    paths = cast("Any", app.openapi_schema.paths)
-    logout_operation = paths["/auth/logout"].post
-
-    assert logout_operation.security == [{"bearer": []}, {"cookie": []}]
-
-
 def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> None:
     """Plugin-owned OAuth associate authorize and callback operations share the same security metadata."""
     config = _minimal_litestar_auth_config()
@@ -594,8 +561,8 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="public-contract")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="public-contract"),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -646,11 +613,11 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
             json={"identifier": "public@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         me_response = await client.get(
             "/api/members/me",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert me_response.status_code == HTTP_OK
         assert me_response.json()["email"] == "public@example.com"
@@ -663,173 +630,9 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
 
         default_users_path_response = await client.get(
             "/users/me",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert default_users_path_response.status_code == HTTP_NOT_FOUND
-
-
-def test_session_bound_backends_applies_with_session_to_strategies() -> None:
-    """Plugin binds SessionBindable strategies when assembling request-scoped backends."""
-
-    class StrategyWithSession(InMemoryTokenStrategy):
-        def __init__(self) -> None:
-            super().__init__(token_prefix="session-bound")
-            self.sessions_seen: list[object] = []
-
-        def with_session(self, session: object) -> InMemoryTokenStrategy:
-            self.sessions_seen.append(session)
-            return self
-
-    strategy = StrategyWithSession()
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-    config = _minimal_litestar_auth_config(backends=[backend])
-    plugin = LitestarAuth(config)
-    dummy_session = _DummyAsyncSession()
-
-    bound_backends = plugin._session_bound_backends(cast("Any", dummy_session))
-
-    assert len(bound_backends) == 1
-    assert bound_backends[0] is backend
-    assert strategy.sessions_seen == [dummy_session]
-
-
-def test_manual_backends_dependency_preserves_order_and_binds_request_session() -> None:
-    """The request DI surface returns manual backends in startup order with request-bound strategies."""
-
-    class _SessionAwareStrategy(InMemoryTokenStrategy):
-        def __init__(self, *, token_prefix: str) -> None:
-            super().__init__(token_prefix=token_prefix)
-            self.bound_session: object | None = None
-
-        def with_session(self, session: object) -> _SessionAwareStrategy:
-            self.bound_session = session
-            return self
-
-    primary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", _SessionAwareStrategy(token_prefix="primary")),
-    )
-    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="secondary",
-        transport=BearerTransport(),
-        strategy=cast("Any", _SessionAwareStrategy(token_prefix="secondary")),
-    )
-    config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
-    app_config = LitestarAuth(config).on_app_init(AppConfig())
-    backends_dependency = app_config.dependencies[DEFAULT_BACKENDS_DEPENDENCY_KEY]
-    assert isinstance(backends_dependency, Provide)
-    provider = backends_dependency.dependency
-    db_session = _DummyAsyncSession()
-
-    backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", provider(db_session=db_session))
-
-    assert [configured_backend.name for configured_backend in backends] == ["primary", "secondary"]
-    assert [
-        getattr(configured_backend.strategy, "bound_session", None) is db_session for configured_backend in backends
-    ] == [True, True]
-
-
-def test_totp_backend_resolves_named_backend() -> None:
-    """_totp_backend returns the backend matching the configured name."""
-    primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
-    secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
-    primary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", primary_strategy),
-    )
-    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="secondary",
-        transport=BearerTransport(),
-        strategy=cast("Any", secondary_strategy),
-    )
-    config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
-    config.totp_config = TotpConfig(
-        totp_pending_secret="pending-secret-for-totp-pending-jwt-secret-123",
-        totp_backend_name="secondary",
-        totp_pending_jti_store=InMemoryJWTDenylistStore(),
-        totp_used_tokens_store=cast("Any", object()),
-        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-    )
-    config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
-        totp_secret_key=Fernet.generate_key().decode(),
-        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
-        id_parser=UUID,
-    )
-    plugin = LitestarAuth(config)
-
-    startup_backend = plugin._totp_backend()
-
-    assert startup_backend.name == secondary_backend.name
-    assert startup_backend.transport is secondary_backend.transport
-    assert startup_backend.strategy is secondary_backend.strategy
-
-
-def test_totp_backend_unknown_name_raises_value_error() -> None:
-    """_totp_backend raises ValueError when the configured name is not found."""
-    primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", primary_strategy),
-    )
-    config = _minimal_litestar_auth_config(backends=[backend])
-    config.totp_config = TotpConfig(
-        totp_pending_secret="pending-secret-for-totp-pending-jwt-secret-123",
-        totp_backend_name="unknown-backend",
-        totp_pending_jti_store=InMemoryJWTDenylistStore(),
-        totp_used_tokens_store=cast("Any", object()),
-        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-    )
-    config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
-        totp_secret_key=Fernet.generate_key().decode(),
-        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
-        id_parser=UUID,
-    )
-    plugin = LitestarAuth(config)
-
-    with pytest.raises(ValueError, match="unknown-backend"):
-        plugin._totp_backend()
-
-
-def test_refresh_enabled_bearer_backends_mount_refresh_routes_in_backend_order() -> None:
-    """Refresh-enabled bearer backends keep primary/secondary route names and ordering stable."""
-    primary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="primary")),
-    )
-    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="secondary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="secondary")),
-    )
-    config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
-    config.enable_refresh = True
-    config.include_register = False
-    config.include_verify = False
-    config.include_reset_password = False
-
-    app = Litestar(plugins=[LitestarAuth(config)])
-    auth_route_paths = [route.path_format for route in app.routes if route.path_format.startswith("/auth")]
-
-    assert auth_route_paths == [
-        "/auth/login",
-        "/auth/logout",
-        "/auth/refresh",
-        "/auth/secondary/login",
-        "/auth/secondary/logout",
-        "/auth/secondary/refresh",
-    ]
 
 
 def test_plugin_totp_routes_include_recovery_code_regeneration() -> None:
@@ -862,6 +665,7 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="0123456789abcdef" * 4,
             backend_name="opaque-db",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -914,6 +718,7 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="0123456789abcdef" * 4,
                 backend_name="opaque-db",
+                cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
             ),
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
@@ -973,6 +778,7 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="0123456789abcdef" * 4,
                 backend_name="opaque-db",
+                cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
             ),
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,

@@ -18,7 +18,6 @@ import litestar_auth.controllers.auth as auth_controller_module
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._auth_helpers import (
     _LOGIN_EMAIL_MAX_LENGTH,
@@ -103,7 +102,7 @@ async def test_resolve_access_token_session_id_fails_closed_for_unresolved_fresh
 
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", SessionAwareStrategy()),
     )
 
@@ -125,16 +124,6 @@ async def test_resolve_access_token_session_id_fails_closed_for_unresolved_fresh
         )
 
 
-def test_attach_refresh_token_without_cookie_sets_json_body() -> None:
-    """When cookie_transport is None, refresh_token is added to response content and media_type is JSON."""
-    response = Response(content={"access_token": "at"}, media_type=MediaType.JSON)
-    out = _attach_refresh_token(response, "rt", cookie_transport=None)
-
-    assert out is response
-    assert out.content == {"access_token": "at", "refresh_token": "rt"}
-    assert out.media_type == MediaType.JSON
-
-
 def test_attach_refresh_token_with_cookie_sets_cookie() -> None:
     """When cookie_transport is set, body is unchanged and same response is returned (cookie path taken)."""
     response = Response(content={"access_token": "at"}, media_type=MediaType.JSON)
@@ -143,17 +132,6 @@ def test_attach_refresh_token_with_cookie_sets_cookie() -> None:
 
     assert out is response
     assert out.content == {"access_token": "at"}
-
-
-def test_attach_refresh_token_with_non_mapping_content_replaces_payload() -> None:
-    """Non-mapping response bodies are replaced with a JSON payload containing the refresh token."""
-    response = Response(content=None, media_type=MediaType.TEXT)
-
-    out = _attach_refresh_token(response, "rt", cookie_transport=None)
-
-    assert out is response
-    assert out.content == {"refresh_token": "rt"}
-    assert out.media_type == MediaType.JSON
 
 
 def test_resolve_cookie_transport_returns_cookie_transport() -> None:
@@ -168,17 +146,6 @@ def test_resolve_cookie_transport_returns_cookie_transport() -> None:
     assert _resolve_cookie_transport(backend) is transport
 
 
-def test_resolve_cookie_transport_returns_none_for_non_cookie_transport() -> None:
-    """Non-cookie backends keep refresh-token attachment on the response body path."""
-    backend = AuthenticationBackend(
-        name="test",
-        transport=BearerTransport(),
-        strategy=cast("Any", _make_minimal_strategy()),
-    )
-
-    assert _resolve_cookie_transport(backend) is None
-
-
 def test_logout_guard_raises_not_authorized_when_no_credentials() -> None:
     """Guard protecting logout raises NotAuthorizedException when connection.user is None."""
     connection = MagicMock()
@@ -189,51 +156,6 @@ def test_logout_guard_raises_not_authorized_when_no_credentials() -> None:
         is_authenticated(connection, handler)
 
     assert "credentials" in exc_info.value.detail.lower() or "authorized" in exc_info.value.detail.lower()
-
-
-async def test_logout_raises_not_authorized_when_transport_returns_no_token() -> None:
-    """Logout handler raises NotAuthorizedException when transport.read_token returns None."""
-    transport = _TransportReturningNone()
-    strategy = _make_minimal_strategy()
-
-    backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
-    controller_class = create_auth_controller(
-        backend=backend,
-    )
-    controller = cast("Any", controller_class(owner=MagicMock()))
-
-    request = MagicMock()
-    request.user = _MinimalUser()
-
-    logout_handler = controller.logout.fn
-    with pytest.raises(NotAuthorizedException) as exc_info:
-        await logout_handler(controller, request)
-
-    assert "credentials" in exc_info.value.detail.lower() or "authorized" in exc_info.value.detail.lower()
-
-
-async def test_logout_delegates_session_termination_to_backend() -> None:
-    """Controller logout delegates session termination orchestration to backend."""
-    transport = MagicMock()
-    transport.read_token = AsyncMock(return_value="transport-token")
-    strategy = _make_minimal_strategy()
-    backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
-    backend_any = cast("Any", backend)
-    backend_any.terminate_session = AsyncMock(return_value=Response(content=None))
-    controller_class = create_auth_controller(
-        backend=backend,
-    )
-    controller = cast("Any", controller_class(owner=MagicMock()))
-
-    request = MagicMock()
-    request.user = _MinimalUser()
-
-    logout_handler = controller.logout.fn
-    response = await logout_handler(controller, request)
-
-    assert isinstance(response, Response)
-    backend_any.terminate_session.assert_awaited_once_with(request, request.user)
-    transport.read_token.assert_not_called()
 
 
 class _MinimalUser:
@@ -305,7 +227,7 @@ def _make_refresh_strategy() -> Strategy[_MinimalUser, UUID]:
     return S()
 
 
-class _TransportReturningNone(BearerTransport):
+class _TransportReturningNone(CookieTransport):
     """Transport whose read_token returns None to exercise logout credential check."""
 
     async def read_token(self, connection: object) -> None:
@@ -394,7 +316,7 @@ def test_create_auth_controller_accepts_manual_cookie_auth_with_external_csrf_co
     """Manual cookie route tables can acknowledge app-owned CSRF protection."""
     backend = AuthenticationBackend(
         name="cookie",
-        transport=CookieTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -410,7 +332,7 @@ def test_create_auth_controller_accepts_config_object() -> None:
     """The public auth controller factory can receive settings as one typed config."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -424,7 +346,7 @@ def test_create_auth_controller_warns_when_login_rate_limit_is_missing() -> None
     """Public login controllers emit an explicit signal when unthrottled."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -436,7 +358,7 @@ def test_create_auth_controller_warns_when_refresh_rate_limit_is_missing() -> No
     """Refresh-capable controllers identify the missing refresh slot."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_refresh_strategy()),
     )
     login_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="login")
@@ -453,7 +375,7 @@ def test_create_auth_controller_does_not_warn_when_public_slots_are_configured()
     """Configured login and refresh slots preserve controller assembly without warnings."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_refresh_strategy()),
     )
     login_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="login")
@@ -474,7 +396,7 @@ def test_create_auth_controller_unsafe_testing_suppresses_missing_rate_limit_war
     """The existing testing escape hatch suppresses missing public-rate-limit warnings."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_refresh_strategy()),
     )
 
@@ -489,7 +411,7 @@ def test_auth_controller_context_validates_login_minimum_response_seconds() -> N
     """Auth controller settings expose the configurable login timing floor."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
@@ -528,7 +450,7 @@ def test_create_auth_controller_rejects_config_combined_with_keyword_options() -
     """The auth controller factory accepts either config or keyword options."""
     backend = AuthenticationBackend(
         name="bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -570,7 +492,7 @@ async def test_login_rate_limit_before_request_is_a_noop_when_rate_limit_cell_is
     rate_limit.before_request = AsyncMock()
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _RateLimitedStrategy()),
     )
     controller_class = create_auth_controller(
@@ -621,7 +543,7 @@ async def test_refresh_rate_limit_before_request_is_a_noop_when_rate_limit_cell_
     rate_limit.before_request = AsyncMock()
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     controller_class = create_auth_controller(
@@ -673,7 +595,7 @@ async def test_refresh_rejects_inactive_user_without_global_invalidation_hook() 
 
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     um = MagicMock()
@@ -684,12 +606,12 @@ async def test_refresh_rejects_inactive_user_without_global_invalidation_hook() 
     )
     controller = cast("Any", controller_class(owner=MagicMock()))
     request = MagicMock()
+    request.cookies = {"litestar_auth_refresh": "refresh-token"}
 
     with pytest.raises(ClientException) as exc_info:
         await controller.refresh.fn(
             controller,
             request,
-            data=cast("Any", MagicMock(refresh_token="refresh-token")),
             **{DEFAULT_USER_MANAGER_DEPENDENCY_KEY: um},
         )
 
@@ -731,7 +653,7 @@ async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -
     strategy = _RefreshEnabledStrategy()
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     um = MagicMock()
@@ -742,12 +664,12 @@ async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -
     )
     controller = cast("Any", controller_class(owner=MagicMock()))
     request = MagicMock()
+    request.cookies = {"litestar_auth_refresh": "refresh-token"}
 
     with pytest.raises(ClientException) as exc_info:
         await controller.refresh.fn(
             controller,
             request,
-            data=cast("Any", MagicMock(refresh_token="refresh-token")),
             **{DEFAULT_USER_MANAGER_DEPENDENCY_KEY: um},
         )
 
@@ -774,7 +696,7 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
 
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _LoginStrategy()),
     )
     controller_class = create_auth_controller(backend=backend)
@@ -810,7 +732,7 @@ async def test_login_returns_bad_credentials_and_rate_limits_on_account_state_fa
     """
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     limiter_backend = MagicMock()
@@ -830,6 +752,7 @@ async def test_login_returns_bad_credentials_and_rate_limits_on_account_state_fa
         ),
     )
     request = MagicMock()
+    request.cookies = {"litestar_auth_refresh": "invalid-refresh-token"}
     request.client.host = "127.0.0.1"
     request.headers = {}
     data = LoginCredentials(identifier="user@example.com", password="correct-password")
@@ -856,7 +779,7 @@ async def test_login_rejects_invalid_identifier_before_authentication() -> None:
     """Login raises a 422 when the identifier does not match the configured login mode."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
@@ -898,7 +821,7 @@ async def test_login_returns_pending_token_when_totp_enabled() -> None:
 
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
@@ -949,7 +872,7 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
 
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
@@ -982,7 +905,8 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
     )
 
     assert isinstance(response, Response)
-    assert response.content == {"access_token": "t", "token_type": "bearer"}
+    assert response.content is None
+    assert any(cookie.key == "litestar_auth" and cookie.value == "t" for cookie in response.cookies)
     user_manager.on_after_login.assert_awaited_once_with(user)
 
 
@@ -1018,7 +942,7 @@ async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None
     refresh_rate_limit.reset = AsyncMock()
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     ctx = _make_auth_controller_context(
@@ -1038,7 +962,6 @@ async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None
         await auth_controller_module._handle_auth_refresh(
             request,
             ctx=ctx,
-            data=auth_controller_module.RefreshTokenRequest(refresh_token="invalid-refresh-token"),
             user_manager=cast("Any", MagicMock()),
         )
 
@@ -1080,7 +1003,7 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
     refresh_rate_limit.reset = AsyncMock()
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     ctx = _make_auth_controller_context(
@@ -1095,20 +1018,20 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
         ),
     )
     request = MagicMock()
+    request.cookies = {"litestar_auth_refresh": "refresh-token"}
     user_manager = MagicMock()
     user_manager.require_account_state = MagicMock()
 
     response = await auth_controller_module._handle_auth_refresh(
         request,
         ctx=ctx,
-        data=auth_controller_module.RefreshTokenRequest(refresh_token="refresh-token"),
         user_manager=cast("Any", user_manager),
     )
 
-    assert response.content == {
-        "access_token": "new-access-token",
-        "token_type": "bearer",
-        "refresh_token": "rotated-refresh-token",
+    assert response.content is None
+    assert {cookie.key: cookie.value for cookie in response.cookies} == {
+        "litestar_auth": "new-access-token",
+        "litestar_auth_refresh": "rotated-refresh-token",
     }
     refresh_rate_limit.increment.assert_not_awaited()
     refresh_rate_limit.reset.assert_awaited_once_with(request)
@@ -1121,7 +1044,7 @@ def test_create_auth_controller_validates_totp_pending_secret_outside_testing(
     """The factory validates TOTP pending-secret strength unless unsafe testing is enabled."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
     validate_production_secret = MagicMock()
@@ -1221,7 +1144,7 @@ def test_resolve_login_identifier_username_mode_at_max_length_ok() -> None:
 
 def test_make_auth_controller_context_stores_login_identifier() -> None:
     """Context records email and username login_identifier modes."""
-    transport = BearerTransport()
+    transport = CookieTransport(allow_insecure_cookie_auth=True)
     strategy = _make_minimal_strategy()
     backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
 
@@ -1254,7 +1177,7 @@ def test_make_auth_controller_context_stores_login_identifier() -> None:
 
 def test_create_auth_controller_accepts_username_login_identifier() -> None:
     """Factory accepts login_identifier=username and returns a controller class."""
-    transport = BearerTransport()
+    transport = CookieTransport(allow_insecure_cookie_auth=True)
     strategy = _make_minimal_strategy()
     backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
 
@@ -1266,7 +1189,7 @@ def test_create_auth_controller_requires_lockout_key_secret_when_lockout_enabled
     """Enabled account lockout needs secret material for digest key derivation."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -1281,7 +1204,7 @@ def test_create_auth_controller_warns_for_low_lockout_response_floor() -> None:
     """Direct controller assembly warns when the locked-account path undercuts the timing floor."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -1298,7 +1221,7 @@ def test_create_auth_controller_skips_lockout_floor_warning_at_default() -> None
     """The default response floor dominates Argon2, so direct assembly emits no timing warning."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 
@@ -1317,7 +1240,7 @@ def test_create_auth_controller_unsafe_testing_suppresses_lockout_floor_warning(
     """The existing testing escape hatch suppresses the lockout timing-floor warning."""
     backend = AuthenticationBackend(
         name="test",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _make_minimal_strategy()),
     )
 

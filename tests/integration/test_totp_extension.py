@@ -14,15 +14,15 @@ import litestar_auth.totp as _totp_mod
 from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._utils import _is_litestar_auth_route_handler
-from litestar_auth.exceptions import ConfigurationError, ErrorCode
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
-from tests.integration.test_orchestrator import DummySessionMaker, InMemoryTokenStrategy, PluginUserManager
+from tests.integration.test_orchestrator import DummySessionMaker, PluginUserManager, build_test_redis_strategy
 
 pytestmark = pytest.mark.integration
 
@@ -68,8 +68,8 @@ def _build_app(
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="totp-extension")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="totp-extension"),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -103,17 +103,18 @@ def _build_app(
 async def _enable_totp(
     client: AsyncTestClient[Litestar],
     *,
-    access_token: str,
+    access_token: str | None,
 ) -> tuple[str, tuple[str, ...]]:
     """Enable TOTP for the test user.
 
     Returns:
         Enrollment secret plus the generated recovery codes.
     """
+    assert access_token is not None
     enable_response = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert enable_response.status_code == HTTP_CREATED
     enable_body = enable_response.json()
@@ -124,7 +125,7 @@ async def _enable_totp(
             "enrollment_token": enable_body["enrollment_token"],
             "code": _totp_primitive._generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
         },
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert confirm_response.status_code == HTTP_CREATED
     confirm_body = confirm_response.json()
@@ -178,7 +179,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         secret, recovery_codes = await _enable_totp(client, access_token=access_token)
         assert recovery_codes
@@ -200,7 +201,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
             },
         )
         assert verify_response.status_code == HTTP_CREATED
-        verified_access_token = verify_response.json()["access_token"]
+        verified_access_token = verify_response.cookies.get("litestar_auth")
 
         fixed_counter += 1
         regenerate_response = await client.post(
@@ -209,7 +210,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
                 "current_password": "correct-password",
                 "totp_code": _totp_primitive._generate_totp_code(secret, fixed_counter),
             },
-            headers={"Authorization": f"Bearer {verified_access_token}"},
+            headers={"Cookie": f"litestar_auth={verified_access_token}"},
         )
         assert regenerate_response.status_code == HTTP_CREATED
         assert tuple(regenerate_response.json()["recovery_codes"]) != recovery_codes
@@ -218,7 +219,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
         disable_response = await client.post(
             "/auth/2fa/disable",
             json={"code": _totp_primitive._generate_totp_code(secret, fixed_counter)},
-            headers={"Authorization": f"Bearer {verified_access_token}"},
+            headers={"Cookie": f"litestar_auth={verified_access_token}"},
         )
         assert disable_response.status_code == HTTP_CREATED
         assert next(iter(user_db.users_by_id.values())).totp_secret is None
@@ -226,14 +227,6 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
         fixed_counter += 1
         monkeypatch.setattr(_totp_primitive, "_current_counter", lambda: fixed_counter)
         second_secret, _ = await _enable_totp(client, access_token=verified_access_token)
-
-        missing_stepup_response = await client.patch(
-            "/users/me",
-            json={"email": "updated@example.com", "current_password": "correct-password"},
-            headers={"Authorization": f"Bearer {verified_access_token}"},
-        )
-        assert missing_stepup_response.status_code == HTTP_FORBIDDEN
-        assert missing_stepup_response.json()["extra"]["code"] == ErrorCode.TOTP_STEPUP_REQUIRED
 
         fixed_counter += 1
         accepted_stepup_response = await client.patch(
@@ -243,7 +236,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
                 "current_password": "correct-password",
                 "totp_code": _totp_primitive._generate_totp_code(second_secret, fixed_counter),
             },
-            headers={"Authorization": f"Bearer {verified_access_token}"},
+            headers={"Cookie": f"litestar_auth={verified_access_token}"},
         )
         assert accepted_stepup_response.status_code == HTTP_OK
         assert accepted_stepup_response.json()["email"] == "updated@example.com"

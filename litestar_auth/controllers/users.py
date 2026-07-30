@@ -48,7 +48,7 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
-from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
 from litestar_auth.types import RoleCapableUserProtocol
 
@@ -700,7 +700,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @post(
         "/me/change-password",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         status_code=204,
         before_request=ctx.change_password_before_request,
         responses=_CHANGE_PASSWORD_OPENAPI_RESPONSES,
@@ -730,7 +730,7 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @get("/{user_id:str}", guards=[is_superuser, requires_password_session])
+    @get("/{user_id:str}", guards=[is_superuser, is_human_authenticated])
     async def get_user(
         self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
@@ -754,7 +754,7 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @patch("/{user_id:str}", guards=[is_superuser, requires_password_session])
+    @patch("/{user_id:str}", guards=[is_superuser, is_human_authenticated])
     async def update_user(
         self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
@@ -782,7 +782,7 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @delete("/{user_id:str}", guards=[is_superuser, requires_password_session], status_code=200)
+    @delete("/{user_id:str}", guards=[is_superuser, is_human_authenticated], status_code=200)
     async def delete_user(
         self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
@@ -830,7 +830,7 @@ def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
         signature=signature,
         annotations=_list_users_handler_annotations(max_limit=ctx.max_limit),
     )
-    return _finalize_route_handler(get(guards=[is_superuser, requires_password_session])(list_users))
+    return _finalize_route_handler(get(guards=[is_superuser, is_human_authenticated])(list_users))
 
 
 def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](

@@ -37,7 +37,7 @@ from litestar_auth.exceptions import (
     InactiveUserError,
     OAuthAccountAlreadyLinkedError,
 )
-from litestar_auth.guards import is_authenticated, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.oauth.service import OAuthAuthorization
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
@@ -1362,8 +1362,8 @@ def test_create_oauth_associate_controller_applies_openapi_security_to_both_prot
     # Associate authorize is POST to enable Litestar's CSRF middleware to
     # enforce a token check and defeat forced-association CSRF; the callback
     # remains GET because OAuth providers redirect there with GET.
-    assert controller.__dict__["authorize"].guards == [is_authenticated, requires_password_session]
-    assert controller.__dict__["callback"].guards == [is_authenticated, requires_password_session]
+    assert controller.__dict__["authorize"].guards == [is_authenticated, is_human_authenticated]
+    assert controller.__dict__["callback"].guards == [is_authenticated, is_human_authenticated]
     assert paths["/auth/associate/github/authorize"].post.security == [{"BearerToken": []}]
     assert paths["/auth/associate/github/callback"].get.security == [{"BearerToken": []}]
 

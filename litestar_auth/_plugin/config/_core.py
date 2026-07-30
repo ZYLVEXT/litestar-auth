@@ -67,6 +67,8 @@ DEFAULT_BACKENDS_DEPENDENCY_KEY = "litestar_auth_backends"
 DEFAULT_USER_MODEL_DEPENDENCY_KEY = "litestar_auth_user_model"
 DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY = "litestar_auth_permissions"
 DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY = "litestar_auth_current_organization"
+DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY = "litestar_auth_current_principal"
+DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY = "litestar_auth_authentication_context"
 DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY = "litestar_auth_organization_store"
 DEFAULT_DB_SESSION_DEPENDENCY_KEY = "db_session"
 DEFAULT_CSRF_COOKIE_NAME = "litestar_auth_csrf"
@@ -75,17 +77,11 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = _features.DEFAULT_DATABASE_TOKEN_BACKEND_N
 DEFAULT_DATABASE_TOKEN_MAX_AGE = _features.DEFAULT_DATABASE_TOKEN_MAX_AGE
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = _features.DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE
 DEFAULT_DATABASE_TOKEN_BYTES = _features.DEFAULT_DATABASE_TOKEN_BYTES
-DEFAULT_API_KEY_BACKEND_NAME = _features.DEFAULT_API_KEY_BACKEND_NAME
-DEFAULT_API_KEY_TTL = _features.DEFAULT_API_KEY_TTL
-DEFAULT_API_KEY_MAX_KEYS_PER_USER = _features.DEFAULT_API_KEY_MAX_KEYS_PER_USER
-DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = _features.DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
-DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = _features.DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_TOTP_STEPUP_TTL_SECONDS = _features.DEFAULT_TOTP_STEPUP_TTL_SECONDS
-ApiKeyConfig = _features.ApiKeyConfig
 DatabaseTokenAuthConfig = _features.DatabaseTokenAuthConfig
 FeatureRegistry = _features.FeatureRegistry
 OAuthConfig = _features.OAuthConfig
@@ -105,7 +101,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     """Configuration for the :class:`~litestar_auth.plugin.LitestarAuth` plugin.
 
     Field declarations below hold defaults and types for manager construction,
-    authentication backends, plugin routes, optional TOTP/OAuth/API-key surfaces,
+    authentication backends, plugin routes, optional TOTP/OAuth surfaces,
     request timing floors, OpenAPI security, and DB-session dependency injection.
     """
 
@@ -115,7 +111,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     user_manager_class: type[BaseUserManager[UP, ID]] | None = None
     backends: Sequence[AuthenticationBackend[UP, ID]] = field(default_factory=tuple)
     database_token_auth: DatabaseTokenAuthConfig | None = None
-    api_keys: ApiKeyConfig = field(default_factory=ApiKeyConfig)
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
@@ -175,6 +170,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     (for example via :func:`~litestar_auth.plugin.bind_auth_session_to_alchemy`).
     """
     login_identifier: LoginIdentifier = "email"
+    principal_issuer: str = "urn:litestar-auth:local"
+    correlation_id_factory: Callable[[Any], str | None] | None = None
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
     role_permissions: Mapping[str, object] = field(default_factory=dict)
     permission_resolver: PermissionResolver | None = None
@@ -393,18 +390,6 @@ def _build_totp_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtensio
     return _TotpExtension()
 
 
-def _has_api_key_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
-    return config.api_keys.enabled
-
-
-def _build_api_key_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth._plugin.api_key_controller._extension import (  # ruff: ignore[import-outside-top-level]
-        _ApiKeyExtension,
-    )
-
-    return _ApiKeyExtension()
-
-
 def _has_organization_cli_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
     return config.organization_config.include_organization_admin
 
@@ -439,7 +424,6 @@ def _build_organization_admin_extension(config: LitestarAuthConfig[Any, Any]) ->
 _INTERNAL_EXTENSION_DESCRIPTORS: tuple[_InternalExtensionDescriptor, ...] = (
     _InternalExtensionDescriptor(_has_oauth_extension, _build_oauth_extension),
     _InternalExtensionDescriptor(_has_totp_extension, _build_totp_extension),
-    _InternalExtensionDescriptor(_has_api_key_extension, _build_api_key_extension),
     _InternalExtensionDescriptor(_has_organization_cli_extension, _build_organization_cli_extension),
     _InternalExtensionDescriptor(_has_organization_admin_extension, _build_organization_admin_extension),
 )

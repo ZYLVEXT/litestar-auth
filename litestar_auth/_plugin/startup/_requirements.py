@@ -95,11 +95,6 @@ def require_shared_account_token_replay_store_for_multiworker(config: LitestarAu
 def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[Any, Any]) -> None:
     """Fail closed when refresh routes are enabled without refresh-capable strategies.
 
-    API-key backends are intentionally excluded because ``ApiKeyTransport``
-    authenticates standalone keys and does not participate in refresh-token flows.
-    The lazy per-request check in generated auth controllers remains as defense-in-depth
-    for direct controller construction that bypasses plugin startup.
-
     Raises:
         ConfigurationError: If ``enable_refresh=True`` and any refresh-relevant
             configured backend strategy does not implement ``RefreshableStrategy``.
@@ -108,12 +103,8 @@ def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[
         return
 
     from litestar_auth.authentication.strategy.base import RefreshableStrategy  # ruff: ignore[import-outside-top-level]
-    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # ruff: ignore[import-outside-top-level]
 
     for backend in config.resolve_startup_backends():
-        if isinstance(backend.transport, ApiKeyTransport):
-            continue
-
         strategy = backend.strategy
         if isinstance(strategy, RefreshableStrategy):
             continue
@@ -121,7 +112,7 @@ def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[
         msg = (
             f"enable_refresh=True but backend {backend.name!r} uses strategy {type(strategy).__name__}, "
             "which does not implement RefreshableStrategy. Configure a refresh-capable strategy "
-            "(e.g. JWTStrategy with refresh_max_age, DatabaseTokenStrategy, RedisTokenStrategy) "
+            "(DatabaseTokenStrategy or RedisTokenStrategy) "
             "or set enable_refresh=False."
         )
         raise ConfigurationError(msg)

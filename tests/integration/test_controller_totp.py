@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
+from authweave_core import RouteProviderPolicy
 from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
 from litestar.exceptions import ClientException, NotAuthorizedException
@@ -32,26 +33,27 @@ import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
 from litestar_auth._secrets_at_rest import FernetKeyring, decode_versioned_fernet_value
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
-from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL, TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, TokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import ApiKeyConfig, LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from litestar_auth.totp_flow import InvalidTotpPendingTokenError
-from tests._helpers import auth_middleware_get_request_session, cast_fakeredis, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    cast_fakeredis,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
-from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMemoryApiKeyStore
 
 _DEFAULT_TOTP_FERNET_KEY_ID = totp_enrollment_module._DEFAULT_TOTP_FERNET_KEY_ID
 _consume_enrollment_secret = totp_enrollment_module._consume_enrollment_secret
@@ -77,7 +79,6 @@ _generate_totp_code = totp_primitive_module._generate_totp_code
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth.authentication.strategy.base import Strategy
     from litestar_auth.db.base import BaseUserStore
     from tests._helpers import AsyncFakeRedis
@@ -162,8 +163,6 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         reset_password_token_secret: str = "fedcba9876543210" * 4,
         *,
         backends: tuple[object, ...] = (),
-        api_key_store: InMemoryApiKeyStore | None = None,
-        api_key_config: ApiKeyConfigProtocol | None = None,
         login_identifier: Literal["email", "username"] = "email",
         totp_secret_key: str | None = TOTP_SECRET_KEY,
         unsafe_testing: bool = False,
@@ -175,13 +174,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_token_secret,
                 reset_password_token_secret=reset_password_token_secret,
-                api_key_hash_secret=API_KEY_HASH_SECRET,
                 totp_secret_key=totp_secret_key,
                 totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             ),
             backends=backends,
-            api_key_store=api_key_store,
-            api_key_config=api_key_config,
             login_identifier=login_identifier,
             unsafe_testing=unsafe_testing,
         )
@@ -228,7 +224,6 @@ def build_app(  # ruff: ignore[too-many-arguments]
     account_state: AccountState | None = None,
     login_identifier: Literal["email", "username"] = "email",
     totp_pending_require_client_binding: bool = True,
-    include_api_keys: bool = False,
     unsafe_testing: bool = False,
     strategy: Strategy[ExampleUser, UUID] | None = None,
     totp_stepup_allow_recovery: bool = False,
@@ -254,32 +249,16 @@ def build_app(  # ruff: ignore[too-many-arguments]
     )
     user_db = InMemoryUserDatabase([user])
     token_strategy = InMemoryTokenStrategy() if strategy is None else strategy
-    api_key_store = InMemoryApiKeyStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", token_strategy),
     )
     backends: list[AuthenticationBackend[ExampleUser, UUID]] = [backend]
-    if include_api_keys:
-        backends.append(
-            AuthenticationBackend[ExampleUser, UUID](
-                name="api_key",
-                transport=ApiKeyTransport(),
-                strategy=ApiKeyStrategy[ExampleUser, UUID](
-                    api_key_store=api_key_store,
-                    api_key_hash_secret=API_KEY_HASH_SECRET,
-                    prefix_env="prod",
-                    unsafe_testing=True,
-                ),
-            ),
-        )
     user_manager = TrackingUserManager(
         user_db,
         password_helper,
         backends=tuple(backends),
-        api_key_store=api_key_store if include_api_keys else None,
-        api_key_config=ApiKeyConfig(enabled=include_api_keys, allowed_scopes=("read",), environment_marker="prod"),
         login_identifier=login_identifier,
         unsafe_testing=not isinstance(token_strategy, RedisTokenStrategy),
     )
@@ -317,7 +296,13 @@ def build_app(  # ruff: ignore[too-many-arguments]
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator(backends, user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -457,9 +442,12 @@ def test_enable_route_omits_request_body_in_openapi_when_step_up_is_disabled() -
     assert regenerate_post.request_body is not None
 
 
-def test_extract_login_session_id_ignores_cookie_style_response() -> None:
-    """TOTP step-up marker extraction is a no-op when the transport does not expose a bearer body."""
-    assert totp_session_handlers_module._extract_login_session_id(SimpleNamespace(content=None)) is None
+def test_extract_login_session_id_reads_auth_cookie() -> None:
+    """TOTP step-up bookkeeping reads the opaque session identifier from the auth cookie."""
+    response = SimpleNamespace(cookies=[SimpleNamespace(key="litestar_auth", value="session-token")])
+    assert (
+        totp_session_handlers_module._extract_login_session_id(response, cookie_name="litestar_auth") == "session-token"
+    )
 
 
 async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_only_hashes(
@@ -473,12 +461,12 @@ async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_o
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert login_resp.status_code == HTTP_CREATED
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
 
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert enable_resp.status_code == HTTP_CREATED
     body = enable_resp.json()
@@ -497,7 +485,7 @@ async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_o
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert confirm_resp.status_code == HTTP_CREATED
     confirm_body = confirm_resp.json()
@@ -532,12 +520,12 @@ async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mo
             json={"identifier": user.username, "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
 
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert user_manager.login_identifier == "username"
@@ -545,34 +533,6 @@ async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mo
     decoded_uri = unquote(enable_resp.json()["uri"])
     assert user.email in decoded_uri
     assert user.username not in decoded_uri
-
-
-async def test_totp_sensitive_routes_reject_api_key_authenticated_callers() -> None:
-    """TOTP enrollment, disable, and recovery-code rotation require a password session."""
-    app, user_db, _strategy, manager = build_app(include_api_keys=True)
-    user = next(iter(user_db.users_by_id.values()))
-    created = await manager.create_api_key(user=user, name="CLI", scopes=["read"])
-    headers = {"Authorization": f"Bearer {created.secret.get_secret_value()}"}
-
-    async with AsyncTestClient(app=app) as client:
-        enable_response = await client.post("/auth/2fa/enable", headers=headers, json={"password": "correct-password"})
-        confirm_response = await client.post(
-            "/auth/2fa/enable/confirm",
-            headers=headers,
-            json={"enrollment_token": "token", "code": "123456"},
-        )
-        regenerate_response = await client.post(
-            "/auth/2fa/recovery-codes/regenerate",
-            headers=headers,
-            json={"current_password": "correct-password"},
-        )
-        disable_response = await client.post("/auth/2fa/disable", headers=headers, json={"code": "123456"})
-
-    assert enable_response.status_code == HTTP_FORBIDDEN
-    assert confirm_response.status_code == HTTP_FORBIDDEN
-    assert regenerate_response.status_code == HTTP_FORBIDDEN
-    assert disable_response.status_code == HTTP_FORBIDDEN
-    assert (enable_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
 
 
 def test_sign_and_decode_enrollment_token_round_trip_plaintext() -> None:
@@ -1189,25 +1149,25 @@ async def test_enable_2fa_step_up_requires_password(async_test_client_factory: A
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
 
         missing_password_resp = await client.post(
             "/auth/2fa/enable",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert missing_password_resp.status_code == HTTP_BAD_REQUEST
 
         wrong_password_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "wrong-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert wrong_password_resp.status_code == HTTP_BAD_REQUEST
 
         ok_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert ok_resp.status_code == HTTP_CREATED
 
@@ -1223,12 +1183,12 @@ async def test_enable_2fa_rejects_reenrollment_when_already_enabled(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert login_resp.status_code == HTTP_CREATED
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
 
     first_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert first_enable_resp.status_code == HTTP_CREATED
     first_body = first_enable_resp.json()
@@ -1236,7 +1196,7 @@ async def test_enable_2fa_rejects_reenrollment_when_already_enabled(
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": first_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert confirm_resp.status_code == HTTP_CREATED
     stored_secret = next(iter(user_db.users_by_id.values())).totp_secret
@@ -1244,7 +1204,7 @@ async def test_enable_2fa_rejects_reenrollment_when_already_enabled(
     second_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert second_enable_resp.status_code == HTTP_BAD_REQUEST
@@ -1266,12 +1226,12 @@ async def test_enable_2fa_checks_step_up_before_already_enabled(async_test_clien
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
 
         first_enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert first_enable_resp.status_code == HTTP_CREATED
         first_body = first_enable_resp.json()
@@ -1279,14 +1239,14 @@ async def test_enable_2fa_checks_step_up_before_already_enabled(async_test_clien
         confirm_resp = await client.post(
             "/auth/2fa/enable/confirm",
             json={"enrollment_token": first_body["enrollment_token"], "code": confirm_code},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert confirm_resp.status_code == HTTP_CREATED
 
         wrong_password_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "wrong-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
         assert wrong_password_resp.status_code == HTTP_BAD_REQUEST
@@ -1308,12 +1268,12 @@ async def test_enable_2fa_rejects_invalid_payload_shape() -> None:
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        access_token = login_resp.json()["access_token"]
+        access_token = login_resp.cookies.get("litestar_auth")
 
         resp = await client.post(
             "/auth/2fa/enable",
             json={"password": 123},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
 
     assert resp.status_code == HTTP_UNPROCESSABLE_ENTITY
@@ -1338,13 +1298,13 @@ async def test_enable_2fa_rejects_malformed_json_body() -> None:
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        access_token = login_resp.json()["access_token"]
+        access_token = login_resp.cookies.get("litestar_auth")
 
         resp = await client.post(
             "/auth/2fa/enable",
             content=b"{",
             headers={
-                "Authorization": f"Bearer {access_token}",
+                "Cookie": f"litestar_auth={access_token}",
                 "Content-Type": "application/json",
             },
         )
@@ -1370,11 +1330,11 @@ async def test_login_with_2fa_enabled_returns_pending_token(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     await _confirm_enrollment(client, token=token, enable_body=enable_body)
@@ -1416,11 +1376,11 @@ async def test_pending_token_binding_rejects_cross_client_verify_with_bad_token_
         json={"identifier": "user@example.com", "password": "correct-password"},
         headers={"User-Agent": "AgentA"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
@@ -1460,11 +1420,11 @@ async def test_pending_token_client_binding_opt_out_omits_claims_warns_and_allow
             json={"identifier": "user@example.com", "password": "correct-password"},
             headers={"User-Agent": "AgentA"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -1499,11 +1459,11 @@ async def test_verify_with_valid_code_issues_full_token(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
@@ -1521,7 +1481,7 @@ async def test_verify_with_valid_code_issues_full_token(
         json={"pending_token": pending_token, "code": valid_code},
     )
     assert verify_resp.status_code == HTTP_CREATED
-    assert "access_token" in verify_resp.json()
+    assert verify_resp.cookies.get("litestar_auth")
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
@@ -1539,11 +1499,11 @@ async def test_verify_with_valid_code_sets_redis_backed_stepup_marker(async_fake
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -1561,7 +1521,8 @@ async def test_verify_with_valid_code_sets_redis_backed_stepup_marker(async_fake
         )
 
     assert verify_resp.status_code == HTTP_CREATED
-    session_id = verify_resp.json()["access_token"]
+    session_id = verify_resp.cookies.get("litestar_auth")
+    assert session_id is not None
     user = next(iter(user_manager.user_db.users_by_id.values()))
     assert await user_manager.has_recent_totp_verification(user, session_id) is True
 
@@ -1589,11 +1550,11 @@ async def test_verify_recovery_code_stepup_marker_respects_downgrade_flag(
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         confirm_resp = await client.post(
@@ -1602,7 +1563,7 @@ async def test_verify_recovery_code_stepup_marker_respects_downgrade_flag(
                 "enrollment_token": enable_body["enrollment_token"],
                 "code": _generate_totp_code(enable_body["secret"], _current_counter()),
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         assert confirm_resp.status_code == HTTP_CREATED
         recovery_code = confirm_resp.json()["recovery_codes"][0]
@@ -1617,7 +1578,9 @@ async def test_verify_recovery_code_stepup_marker_respects_downgrade_flag(
 
     assert verify_resp.status_code == HTTP_CREATED
     user = next(iter(user_manager.user_db.users_by_id.values()))
-    assert await user_manager.has_recent_totp_verification(user, verify_resp.json()["access_token"]) is bool(
+    session_id = verify_resp.cookies.get("litestar_auth")
+    assert session_id is not None
+    assert await user_manager.has_recent_totp_verification(user, session_id) is bool(
         expected_marker,
     )
 
@@ -1633,11 +1596,11 @@ async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_to
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
@@ -1645,7 +1608,7 @@ async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_to
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert confirm_resp.status_code == HTTP_CREATED
     recovery_code = confirm_resp.json()["recovery_codes"][0]
@@ -1659,7 +1622,7 @@ async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_to
         json={"pending_token": pending_resp.json()["pending_token"], "code": recovery_code},
     )
     assert first_verify.status_code == HTTP_CREATED
-    assert "access_token" in first_verify.json()
+    assert first_verify.cookies.get("litestar_auth")
     stored_user = next(iter(user_db.users_by_id.values()))
     assert len(stored_user.recovery_codes or {}) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT - 1
 
@@ -1692,11 +1655,11 @@ async def test_verify_concurrent_recovery_code_consumption_has_exactly_one_winne
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -1704,7 +1667,7 @@ async def test_verify_concurrent_recovery_code_consumption_has_exactly_one_winne
         confirm_resp = await client.post(
             "/auth/2fa/enable/confirm",
             json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         recovery_code = confirm_resp.json()["recovery_codes"][0]
         first_pending_token = (
@@ -1733,25 +1696,25 @@ async def test_disable_accepts_recovery_code_and_clears_totp_state(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     confirm_code = _generate_totp_code(enable_body["secret"], _current_counter())
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     recovery_code = confirm_resp.json()["recovery_codes"][0]
 
     disable_resp = await client.post(
         "/auth/2fa/disable",
         json={"code": recovery_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     login_after_disable_resp = await client.post(
         "/auth/login",
@@ -1763,8 +1726,8 @@ async def test_disable_accepts_recovery_code_and_clears_totp_state(
     assert stored_user.totp_secret is None
     assert stored_user.recovery_codes is None
     assert login_after_disable_resp.status_code == HTTP_CREATED
-    assert "access_token" in login_after_disable_resp.json()
-    assert "pending_token" not in login_after_disable_resp.json()
+    assert login_after_disable_resp.cookies.get("litestar_auth")
+    assert login_after_disable_resp.json() is None
 
 
 async def test_regenerate_recovery_codes_without_password_requirement_returns_new_codes() -> None:
@@ -1776,14 +1739,14 @@ async def test_regenerate_recovery_codes_without_password_requirement_returns_ne
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
-        enable_resp = await client.post("/auth/2fa/enable", headers={"Authorization": f"Bearer {token}"})
+        token = login_resp.cookies.get("litestar_auth")
+        enable_resp = await client.post("/auth/2fa/enable", headers={"Cookie": f"litestar_auth={token}"})
         enable_body = enable_resp.json()
         await _confirm_enrollment(client, token=token, enable_body=enable_body)
 
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
             json={"totp_code": _generate_totp_code(enable_body["secret"], _current_counter())},
         )
 
@@ -1808,18 +1771,18 @@ async def test_regenerate_recovery_codes_returns_new_set_and_old_codes_stop_work
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         confirm_code = _generate_totp_code(enable_body["secret"], _current_counter())
         confirm_resp = await client.post(
             "/auth/2fa/enable/confirm",
             json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         old_recovery_code = confirm_resp.json()["recovery_codes"][0]
 
@@ -1829,7 +1792,7 @@ async def test_regenerate_recovery_codes_returns_new_set_and_old_codes_stop_work
                 "current_password": "correct-password",
                 "totp_code": _generate_totp_code(enable_body["secret"], _current_counter()),
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
         pending_resp = await client.post(
@@ -1862,14 +1825,14 @@ async def test_regenerate_recovery_codes_with_wrong_password_returns_login_failu
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         await _enable_totp_and_get_secret(client)
         before_hashes = dict(next(iter(user_db.users_by_id.values())).recovery_codes or {})
 
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
             json={"current_password": "wrong-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     body = response.json()
@@ -1901,11 +1864,11 @@ async def test_regenerate_recovery_codes_invalid_payload_increments_rate_limit()
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
             json={"current_password": ""},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
@@ -1943,10 +1906,10 @@ async def test_regenerate_recovery_codes_rate_limit_returns_429() -> None:
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert response.status_code == HTTP_TOO_MANY_REQUESTS
@@ -1966,11 +1929,11 @@ async def test_confirm_enable_rejects_expired_enrollment_token(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     expired_token = _sign_enrollment_token(
@@ -1987,7 +1950,7 @@ async def test_confirm_enable_rejects_expired_enrollment_token(
             "enrollment_token": expired_token,
             "code": _generate_totp_code(enable_body["secret"], _current_counter()),
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert confirm_resp.status_code == HTTP_BAD_REQUEST
@@ -2009,11 +1972,11 @@ async def test_confirm_enable_rejects_invalid_jti_enrollment_token(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     invalid_token = jwt.encode(
@@ -2037,7 +2000,7 @@ async def test_confirm_enable_rejects_invalid_jti_enrollment_token(
             "enrollment_token": invalid_token,
             "code": _generate_totp_code(enable_body["secret"], _current_counter()),
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert confirm_resp.status_code == HTTP_BAD_REQUEST
@@ -2330,11 +2293,11 @@ async def test_confirm_enable_rejects_replayed_enrollment_token(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     confirm_code = _generate_totp_code(enable_body["secret"], _current_counter())
@@ -2342,12 +2305,12 @@ async def test_confirm_enable_rejects_replayed_enrollment_token(
     first_confirm = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     second_confirm = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert first_confirm.status_code == HTTP_CREATED
@@ -2370,17 +2333,17 @@ async def test_confirm_enable_rejects_stale_enrollment_token_after_new_enable(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     first_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     first_body = first_enable_resp.json()
     second_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     second_body = second_enable_resp.json()
 
@@ -2390,7 +2353,7 @@ async def test_confirm_enable_rejects_stale_enrollment_token_after_new_enable(
             "enrollment_token": first_body["enrollment_token"],
             "code": _generate_totp_code(first_body["secret"], _current_counter()),
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     latest_confirm = await client.post(
         "/auth/2fa/enable/confirm",
@@ -2398,7 +2361,7 @@ async def test_confirm_enable_rejects_stale_enrollment_token_after_new_enable(
             "enrollment_token": second_body["enrollment_token"],
             "code": _generate_totp_code(second_body["secret"], _current_counter()),
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert stale_confirm.status_code == HTTP_BAD_REQUEST
@@ -2420,18 +2383,18 @@ async def test_confirm_enable_consumes_enrollment_token_on_invalid_code(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
 
     invalid_code_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": "000000"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     replay_resp = await client.post(
         "/auth/2fa/enable/confirm",
@@ -2439,7 +2402,7 @@ async def test_confirm_enable_consumes_enrollment_token_on_invalid_code(
             "enrollment_token": enable_body["enrollment_token"],
             "code": _generate_totp_code(enable_body["secret"], _current_counter()),
         },
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
 
     assert invalid_code_resp.status_code == HTTP_BAD_REQUEST
@@ -2450,7 +2413,7 @@ async def test_confirm_enable_consumes_enrollment_token_on_invalid_code(
     assert user.totp_secret is None
 
 
-async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
+async def test_plugin_mounts_totp_routes_under_custom_auth_path(async_fakeredis: AsyncFakeRedis) -> None:
     """The plugin mounts TOTP routes beneath the configured auth path."""
     password_helper = PasswordHelper()
     user = ExampleUser(
@@ -2461,9 +2424,13 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
     )
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
-        name="memory-bearer",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy()),
+        name="redis-session",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=RedisTokenStrategy[ExampleUser, UUID](
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret="0123456789abcdef" * 4,
+            subject_decoder=UUID,
+        ),
     )
     app = Litestar(
         plugins=[
@@ -2500,12 +2467,12 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         enable_response = await client.post(
             "/api/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_response.status_code == HTTP_CREATED
         enable_body = enable_response.json()
@@ -2515,7 +2482,7 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
         confirm_response = await client.post(
             "/api/auth/2fa/enable/confirm",
             json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert confirm_response.status_code == HTTP_CREATED
 
@@ -2538,7 +2505,7 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
         assert disable_requires_auth_response.status_code == HTTP_UNAUTHORIZED
 
 
-async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
+async def test_plugin_allows_opt_out_of_totp_step_up_enrollment(async_fakeredis: AsyncFakeRedis) -> None:
     """Integrators can explicitly opt out of step-up enrollment (unsafe)."""
     password_helper = PasswordHelper()
     user = ExampleUser(
@@ -2549,9 +2516,13 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
     )
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
-        name="memory-bearer",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy()),
+        name="redis-session",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=RedisTokenStrategy[ExampleUser, UUID](
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret="fedcba9876543210" * 4,
+            subject_decoder=UUID,
+        ),
     )
     app = Litestar(
         plugins=[
@@ -2588,11 +2559,11 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         enable_response = await client.post(
             "/auth/2fa/enable",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_response.status_code == HTTP_CREATED
         assert enable_response.json()["secret"]
@@ -2608,11 +2579,11 @@ async def test_verify_with_wrong_code_returns_400(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     await _confirm_enrollment(client, token=token, enable_body=enable_body)
@@ -2786,11 +2757,11 @@ async def test_verify_rejects_replayed_code_when_store_enabled() -> None:
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        token = login_resp.json()["access_token"]
+        token = login_resp.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -2826,11 +2797,11 @@ async def test_verify_with_invalid_pending_token_returns_400(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     await _confirm_enrollment(client, token=token, enable_body=enable_body)
@@ -2856,11 +2827,11 @@ async def test_disable_2fa_with_valid_code_clears_secret(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
@@ -2877,14 +2848,14 @@ async def test_disable_2fa_with_valid_code_clears_secret(
         "/auth/2fa/verify",
         json={"pending_token": pending_token, "code": valid_code},
     )
-    full_token = verify_resp.json()["access_token"]
+    full_token = verify_resp.cookies.get("litestar_auth")
 
     monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
     disable_code = _generate_totp_code(secret, fixed_counter + 1)
     disable_resp = await client.post(
         "/auth/2fa/disable",
         json={"code": disable_code},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     assert disable_resp.status_code == HTTP_CREATED
 
@@ -2920,12 +2891,12 @@ async def test_disable_then_enable_allows_reenrollment(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert login_resp.status_code == HTTP_CREATED
-    access_token = login_resp.json()["access_token"]
+    access_token = login_resp.cookies.get("litestar_auth")
 
     first_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert first_enable_resp.status_code == HTTP_CREATED
     first_body = first_enable_resp.json()
@@ -2942,13 +2913,13 @@ async def test_disable_then_enable_allows_reenrollment(
         json={"pending_token": pending_token, "code": _generate_totp_code(first_secret, fixed_counter)},
     )
     assert verify_resp.status_code == HTTP_CREATED
-    full_token = verify_resp.json()["access_token"]
+    full_token = verify_resp.cookies.get("litestar_auth")
 
     monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
     disable_resp = await client.post(
         "/auth/2fa/disable",
         json={"code": _generate_totp_code(first_secret, fixed_counter + 1)},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     assert disable_resp.status_code == HTTP_CREATED
     assert next(iter(user_db.users_by_id.values())).totp_secret is None
@@ -2957,7 +2928,7 @@ async def test_disable_then_enable_allows_reenrollment(
     second_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert second_enable_resp.status_code == HTTP_CREATED
     second_body = second_enable_resp.json()
@@ -2978,11 +2949,11 @@ async def test_disable_2fa_with_wrong_code_returns_400(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     await _confirm_enrollment(client, token=token, enable_body=enable_body)
@@ -2997,12 +2968,12 @@ async def test_disable_2fa_with_wrong_code_returns_400(
         "/auth/2fa/verify",
         json={"pending_token": pending_token, "code": valid_code},
     )
-    full_token = verify_resp.json()["access_token"]
+    full_token = verify_resp.cookies.get("litestar_auth")
 
     resp = await client.post(
         "/auth/2fa/disable",
         json={"code": "000000"},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     assert resp.status_code == HTTP_BAD_REQUEST
 
@@ -3017,11 +2988,11 @@ async def test_login_hook_waits_until_totp_verify() -> None:
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        initial_token = initial_login.json()["access_token"]
+        initial_token = initial_login.cookies.get("litestar_auth")
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {initial_token}"},
+            headers={"Cookie": f"litestar_auth={initial_token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -3057,13 +3028,13 @@ async def test_pending_login_does_not_issue_backend_token_before_totp_verify() -
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert initial_login.status_code == HTTP_CREATED
-        initial_token = initial_login.json()["access_token"]
+        initial_token = initial_login.cookies.get("litestar_auth")
         assert strategy.tokens == {initial_token: user.id}
 
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {initial_token}"},
+            headers={"Cookie": f"litestar_auth={initial_token}"},
         )
         enable_body = enable_resp.json()
         secret = enable_body["secret"]
@@ -3089,7 +3060,7 @@ async def test_pending_login_does_not_issue_backend_token_before_totp_verify() -
             json={"pending_token": pending_token, "code": _generate_totp_code(secret, _current_counter())},
         )
         assert valid_verify.status_code == HTTP_CREATED
-        verified_token = valid_verify.json()["access_token"]
+        verified_token = valid_verify.cookies.get("litestar_auth")
         assert strategy.tokens == {initial_token: user.id, verified_token: user.id}
 
 
@@ -3103,7 +3074,7 @@ async def test_login_without_totp_configured_gives_direct_token() -> None:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert resp.status_code == HTTP_CREATED
-        assert "access_token" in resp.json()
+        assert resp.cookies.get("litestar_auth")
 
 
 def _build_totp_verify_rate_limiter() -> tuple[AuthRateLimitConfig, AsyncMock]:
@@ -3157,11 +3128,12 @@ def _mint_pending_token(*, secret: str, payload: dict[str, Any]) -> str:
 async def _confirm_enrollment(
     client: AsyncTestClient[Litestar],
     *,
-    token: str,
+    token: str | None,
     enable_body: dict[str, str],
     counter: int | None = None,
 ) -> None:
     """Complete the two-phase TOTP enrollment by confirming with a valid code."""
+    assert token is not None
     secret = enable_body["secret"]
     confirm_code = _generate_totp_code(
         secret,
@@ -3170,7 +3142,7 @@ async def _confirm_enrollment(
     resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert resp.status_code == HTTP_CREATED
 
@@ -3180,11 +3152,11 @@ async def _enable_totp_and_get_secret(client: AsyncTestClient[Litestar]) -> str:
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
-    token = login_resp.json()["access_token"]
+    token = login_resp.cookies.get("litestar_auth")
     enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
@@ -3192,7 +3164,7 @@ async def _enable_totp_and_get_secret(client: AsyncTestClient[Litestar]) -> str:
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Cookie": f"litestar_auth={token}"},
     )
     assert confirm_resp.status_code == HTTP_CREATED
     return secret
@@ -3403,14 +3375,14 @@ async def test_verify_allows_replayed_pending_token_when_pending_jti_store_is_di
             json={"pending_token": pending_token, "code": valid_code},
         )
         assert first_verify.status_code == HTTP_CREATED
-        assert "access_token" in first_verify.json()
+        assert first_verify.cookies.get("litestar_auth")
 
         second_verify = await client.post(
             "/auth/2fa/verify",
             json={"pending_token": pending_token, "code": valid_code},
         )
         assert second_verify.status_code == HTTP_CREATED
-        assert "access_token" in second_verify.json()
+        assert second_verify.cookies.get("litestar_auth")
 
 
 def test_build_app_rejects_missing_pending_jti_store_outside_testing() -> None:
@@ -3629,12 +3601,12 @@ async def test_enable_invalid_password_does_not_increment_verify_rate_limit() ->
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        access_token = login_resp.json()["access_token"]
+        access_token = login_resp.cookies.get("litestar_auth")
 
         wrong_password_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "wrong-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert wrong_password_resp.status_code == HTTP_BAD_REQUEST
         assert rate_limiter_backend.increment.await_count == 0
@@ -3643,7 +3615,7 @@ async def test_enable_invalid_password_does_not_increment_verify_rate_limit() ->
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_resp.status_code == HTTP_CREATED
         await _confirm_enrollment(client, token=access_token, enable_body=enable_resp.json())
@@ -3693,19 +3665,19 @@ async def test_enable_failures_and_success_use_enable_rate_limit_backend() -> No
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        access_token = login_resp.json()["access_token"]
+        access_token = login_resp.cookies.get("litestar_auth")
 
         wrong_password_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "wrong-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert wrong_password_resp.status_code == HTTP_BAD_REQUEST
 
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_resp.status_code == HTTP_CREATED
 
@@ -3733,12 +3705,12 @@ async def test_confirm_enable_failures_and_success_use_confirm_enable_rate_limit
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_resp.status_code == HTTP_CREATED
-        access_token = login_resp.json()["access_token"]
+        access_token = login_resp.cookies.get("litestar_auth")
 
         enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_resp.status_code == HTTP_CREATED
         enable_body = enable_resp.json()
@@ -3746,14 +3718,14 @@ async def test_confirm_enable_failures_and_success_use_confirm_enable_rate_limit
         wrong_code_resp = await client.post(
             "/auth/2fa/enable/confirm",
             json={"enrollment_token": enable_body["enrollment_token"], "code": "000000"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert wrong_code_resp.status_code == HTTP_BAD_REQUEST
 
         second_enable_resp = await client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert second_enable_resp.status_code == HTTP_CREATED
         second_enable_body = second_enable_resp.json()
@@ -3764,7 +3736,7 @@ async def test_confirm_enable_failures_and_success_use_confirm_enable_rate_limit
                 "enrollment_token": second_enable_body["enrollment_token"],
                 "code": _generate_totp_code(second_enable_body["secret"], fixed_counter),
             },
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert valid_code_resp.status_code == HTTP_CREATED
 
@@ -3797,12 +3769,12 @@ async def test_disable_failures_and_success_use_disable_rate_limit_backend(
             json={"pending_token": pending_token, "code": _generate_totp_code(secret, fixed_counter)},
         )
         assert verify_resp.status_code == HTTP_CREATED
-        access_token = verify_resp.json()["access_token"]
+        access_token = verify_resp.cookies.get("litestar_auth")
 
         wrong_code_resp = await client.post(
             "/auth/2fa/disable",
             json={"code": "000000"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert wrong_code_resp.status_code == HTTP_BAD_REQUEST
 
@@ -3810,7 +3782,7 @@ async def test_disable_failures_and_success_use_disable_rate_limit_backend(
         correct_code_resp = await client.post(
             "/auth/2fa/disable",
             json={"code": _generate_totp_code(secret, fixed_counter + 1)},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert correct_code_resp.status_code == HTTP_CREATED
 

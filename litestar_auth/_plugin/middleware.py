@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 from litestar.config.csrf import CSRFConfig
 
 from litestar_auth._plugin.config import DEFAULT_CSRF_COOKIE_NAME, LitestarAuthConfig
-from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.types import UserProtocol
 
@@ -27,13 +26,6 @@ def get_cookie_transports[UP: UserProtocol[Any], ID](
         for backend in backends
         if isinstance((transport := getattr(backend, "transport", None)), CookieTransport)
     ]
-
-
-def has_api_key_transport[UP: UserProtocol[Any], ID](
-    backends: Sequence[StartupBackendTemplate[UP, ID] | AuthenticationBackend[UP, ID]],
-) -> bool:
-    """Return whether the backend list contains an API-key transport."""
-    return any(isinstance(getattr(backend, "transport", None), ApiKeyTransport) for backend in backends)
 
 
 def build_csrf_config[UP: UserProtocol[Any], ID](

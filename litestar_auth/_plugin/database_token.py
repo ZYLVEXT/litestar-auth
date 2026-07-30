@@ -99,12 +99,12 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
             ),
         )
 
-    async def read_token(
+    async def authenticate_token(
         self,
-        token: str | None,  # ruff: ignore[unused-method-argument]
+        token: str,  # ruff: ignore[unused-method-argument]
         user_manager: UserManagerProtocol[UP, ID],  # ruff: ignore[unused-method-argument]
-    ) -> UP | None:
-        """Reject token reads until a request ``AsyncSession`` is bound.
+    ) -> Never:
+        """Reject typed authentication until a request ``AsyncSession`` is bound.
 
         Returns:
             Never returns; raises the shared startup-only runtime error.
@@ -194,18 +194,18 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     session: AsyncSession | None = None,
     unsafe_testing: bool = False,
 ) -> AuthenticationBackend[UP, ID]:
-    """Build the bearer + database-token backend lazily.
+    """Build the secure-cookie + database-token backend lazily.
 
     Imports the backend, transport, and strategy only when the ``database_token_auth`` path is used so
     importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract
     without hiding first-party references behind string-based module lookups.
 
     Returns:
-        Authentication backend configured for the DB-token bearer path.
+        Authentication backend configured for the DB-token cookie path.
     """
     from litestar_auth.authentication.backend import AuthenticationBackend  # ruff: ignore[import-outside-top-level]
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
-    from litestar_auth.authentication.transport.bearer import BearerTransport  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.transport.cookie import CookieTransport  # ruff: ignore[import-outside-top-level]
 
     strategy: StrategyProto[UP, ID]
     if session is None:
@@ -228,7 +228,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
 
     return AuthenticationBackend[UP, ID](
         name=database_token_auth.backend_name,
-        transport=BearerTransport(),
+        transport=CookieTransport(config=database_token_auth.cookie),
         strategy=strategy,
     )
 
@@ -245,7 +245,7 @@ def build_database_token_backend[UP: UserProtocol[Any], ID](
     seam should patch that helper on this module (not :mod:`litestar_auth._plugin.config`).
 
     Returns:
-        Authentication backend configured for the DB-token bearer path.
+        Authentication backend configured for the DB-token cookie path.
     """
     return _build_database_token_backend(
         database_token_auth,

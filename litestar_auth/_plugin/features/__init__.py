@@ -3,14 +3,7 @@
 from __future__ import annotations
 
 from litestar_auth._plugin.features.registry import (
-    API_KEY_FEATURE,
     DATABASE_TOKEN_FEATURE,
-    DEFAULT_API_KEY_BACKEND_NAME,
-    DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS,
-    DEFAULT_API_KEY_MAX_KEYS_PER_USER,
-    DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES,
-    DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES,
-    DEFAULT_API_KEY_TTL,
     DEFAULT_DATABASE_TOKEN_BACKEND_NAME,
     DEFAULT_DATABASE_TOKEN_BYTES,
     DEFAULT_DATABASE_TOKEN_MAX_AGE,
@@ -21,10 +14,6 @@ from litestar_auth._plugin.features.registry import (
     ORGANIZATION_FEATURE,
     TOTP_FEATURE,
     TOTP_STEPUP_POLICY_ENDPOINTS,
-    ApiKeyConfig,
-    ApiKeyLastUsedWriteStrategy,
-    ApiKeyScopeAuthority,
-    ApiKeyStoreFactory,
     DatabaseTokenAuthConfig,
     FeatureConfigSnapshot,
     FeatureDefaults,
@@ -44,14 +33,7 @@ from litestar_auth._plugin.features.registry import (
 )
 
 __all__ = (
-    "API_KEY_FEATURE",
     "DATABASE_TOKEN_FEATURE",
-    "DEFAULT_API_KEY_BACKEND_NAME",
-    "DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS",
-    "DEFAULT_API_KEY_MAX_KEYS_PER_USER",
-    "DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES",
-    "DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES",
-    "DEFAULT_API_KEY_TTL",
     "DEFAULT_DATABASE_TOKEN_BACKEND_NAME",
     "DEFAULT_DATABASE_TOKEN_BYTES",
     "DEFAULT_DATABASE_TOKEN_MAX_AGE",
@@ -62,10 +44,6 @@ __all__ = (
     "ORGANIZATION_FEATURE",
     "TOTP_FEATURE",
     "TOTP_STEPUP_POLICY_ENDPOINTS",
-    "ApiKeyConfig",
-    "ApiKeyLastUsedWriteStrategy",
-    "ApiKeyScopeAuthority",
-    "ApiKeyStoreFactory",
     "DatabaseTokenAuthConfig",
     "FeatureConfigSnapshot",
     "FeatureDefaults",

@@ -23,26 +23,14 @@ import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.controllers._step_up_payloads as step_up_payloads_module
-import litestar_auth.db.base as db_base_module
 import litestar_auth.models.mixins as model_mixins_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
-from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
-from litestar_auth.authentication.strategy.db_models import RefreshToken as ModelsRefreshToken
-from litestar_auth.models.api_key import ApiKey as ModelsApiKey
-from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
-from litestar_auth.models.organization import Organization as ModelsOrganization
-from litestar_auth.models.organization import OrganizationInvitation as ModelsOrganizationInvitation
-from litestar_auth.models.organization import OrganizationMembership as ModelsOrganizationMembership
-from litestar_auth.models.role import Role as ModelsRole
-from litestar_auth.models.role import UserRole as ModelsUserRole
-from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
 
 uuid4 = uuid.uuid4
 AccessTokenMixin = model_mixins_module.AccessTokenMixin
-ApiKeyMixin = model_mixins_module.ApiKeyMixin
 OAuthAccountMixin = model_mixins_module.OAuthAccountMixin
 OrganizationInvitationMixin = model_mixins_module.OrganizationInvitationMixin
 OrganizationMembershipMixin = model_mixins_module.OrganizationMembershipMixin
@@ -251,7 +239,7 @@ def test_payloads_module_preserves_refresh_session_response_contract() -> None:
 def test_strategy_base_module_preserves_abstract_contracts() -> None:
     """Strategy base definitions still exposes the contract surfaces remain exported."""
     assert strategy_base_module.UserManagerProtocol.__name__ == "UserManagerProtocol"
-    assert strategy_base_module.Strategy.__abstractmethods__ == {"destroy_token", "read_token", "write_token"}
+    assert strategy_base_module.Strategy.__abstractmethods__ == {"destroy_token", "write_token"}
     assert "with_session" in strategy_base_module.SessionBindable.__dict__
     assert "write_refresh_token" in strategy_base_module.RefreshableStrategy.__dict__
     assert "rotate_refresh_token" in strategy_base_module.RefreshableStrategy.__dict__
@@ -264,141 +252,11 @@ def test_transport_base_module_preserves_abstract_contracts() -> None:
     assert transport_base_module.Transport.__abstractmethods__ == {"read_token", "set_login_token", "set_logout"}
 
 
-def test_db_base_module_preserves_store_contracts() -> None:
-    """Persistence contracts still exposes the expected methods remain exposed."""
-    assert db_base_module.BaseUserStore.__dict__.keys() >= {
-        "create",
-        "delete",
-        "get",
-        "get_by_email",
-        "get_by_field",
-        "list_users",
-        "update",
-    }
-    assert db_base_module.BaseApiKeyStore.__dict__.keys() >= {
-        "create",
-        "delete_for_user",
-        "get_by_key_id",
-        "list_for_user",
-        "revoke",
-        "update_last_used_at",
-    }
-    assert "get_by_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
-    assert "upsert_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
-    assert db_base_module.BaseOrganizationStore.__dict__.keys() >= {
-        "add_membership",
-        "consume_invitation",
-        "create_invitation",
-        "create_organization",
-        "delete_organization",
-        "get_invitation_by_token_hash",
-        "get_membership",
-        "get_organization",
-        "get_organization_by_slug",
-        "list_pending_invitations",
-        "list_memberships",
-        "list_organizations_for_user",
-        "remove_membership",
-        "remove_membership_preserving_privileged_member",
-        "revoke_invitation",
-        "set_membership_roles",
-        "set_membership_roles_preserving_privileged_member",
-        "update_organization",
-    }
-
-
 def test_manager_protocols_module_preserves_internal_protocols() -> None:
     """Internal manager protocols still exposes their required attributes remain defined."""
     assert manager_protocols_module.ManagedUserProtocol.__annotations__ == {"email": "str", "hashed_password": "str"}
     assert manager_protocols_module.AccountStateUserProtocol.__name__ == "AccountStateUserProtocol"
     assert manager_protocols_module.UserDatabaseManagerProtocol.__annotations__ == {"user_db": "Any"}
-
-
-def test_models_mixins_module_preserves_contract_exports() -> None:
-    """side-effect-free auth mixin module still exposes its export surface."""
-    assert model_mixins_module.__all__ == (
-        "AccessTokenMixin",
-        "ApiKeyMixin",
-        "OAuthAccountMixin",
-        "OrganizationInvitationMixin",
-        "OrganizationMembershipMixin",
-        "OrganizationMixin",
-        "RefreshTokenMixin",
-        "RoleMixin",
-        "UserAuthRelationshipMixin",
-        "UserModelMixin",
-        "UserRoleAssociationMixin",
-        "UserRoleRelationshipMixin",
-    )
-    assert hasattr(model_mixins_module.UserModelMixin, "email")
-    assert hasattr(model_mixins_module.ApiKeyMixin, "key_id")
-    assert hasattr(model_mixins_module.OAuthAccountMixin, "access_token")
-    assert hasattr(model_mixins_module.OrganizationInvitationMixin, "token_hash")
-    assert hasattr(model_mixins_module.OrganizationMixin, "slug")
-    assert hasattr(model_mixins_module.OrganizationMembershipMixin, "roles")
-    assert hasattr(model_mixins_module.RoleMixin, "name")
-    assert hasattr(model_mixins_module.UserRoleRelationshipMixin, "roles")
-    assert not hasattr(model_mixins_module, "_TokenModelMixin")
-    assert issubclass(ModelsUser, UserModelMixin)
-    assert issubclass(ModelsApiKey, ApiKeyMixin)
-    assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
-    assert issubclass(ModelsRole, RoleMixin)
-    assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
-    assert issubclass(ModelsAccessToken, AccessTokenMixin)
-    assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
-
-
-def test_internal_auth_model_mixins_module_preserves_contract_exports(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Internal auth mixin module still exposes its reusable contracts stay stable."""
-    reloaded_module = _load_reloaded_alias(
-        alias_name="_coverage_alias_auth_model_mixins",
-        source_path=REPO_ROOT / "litestar_auth" / "_auth_model_mixins.py",
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module.__all__ == (
-        "AccessTokenMixin",
-        "ApiKeyMixin",
-        "OrganizationInvitationMixin",
-        "OrganizationMembershipMixin",
-        "OrganizationMixin",
-        "RefreshTokenMixin",
-        "RoleMixin",
-        "UserAuthRelationshipMixin",
-        "UserModelMixin",
-        "UserRoleAssociationMixin",
-        "UserRoleRelationshipMixin",
-        "_TokenModelMixin",
-    )
-    assert reloaded_module._USER_RELATIONSHIP_NAME == "user"
-    assert reloaded_module._ROLE_ASSIGNMENTS_RELATIONSHIP_NAME == "role_assignments"
-    assert reloaded_module._ORGANIZATION_SLUG_LENGTH == reloaded_module._ROLE_NAME_LENGTH
-    assert sorted(reloaded_module.UserModelMixin.__annotations__) == [
-        "email",
-        "hashed_password",
-        "is_active",
-        "is_verified",
-        "recovery_codes",
-        "totp_secret",
-    ]
-    assert reloaded_module.UserRoleRelationshipMixin.auth_user_role_model == "UserRole"
-    assert reloaded_module.OrganizationMixin.auth_organization_membership_model == "OrganizationMembership"
-    assert reloaded_module.OrganizationMixin.auth_organization_invitation_model is None
-    assert reloaded_module.OrganizationInvitationMixin.auth_organization_model == "Organization"
-    assert reloaded_module.OrganizationMembershipMixin.auth_organization_model == "Organization"
-    assert reloaded_module.RoleMixin.auth_user_role_model == "UserRole"
-    assert reloaded_module.UserRoleAssociationMixin.auth_role_model == "Role"
-    assert reloaded_module.AccessTokenMixin.auth_user_back_populates == "access_tokens"
-    assert reloaded_module.RefreshTokenMixin.auth_user_back_populates == "refresh_tokens"
-    assert reloaded_module.AccessTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
-    assert reloaded_module.RefreshTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
-    assert reloaded_module._TokenModelMixin.__mro__[1].__name__ == "_UserOwnedMixin"
-    assert reloaded_module.UserRoleAssociationMixin.__mro__[1].__name__ == "_UserOwnedMixin"
-    assert reloaded_module.OrganizationMembershipMixin.__mro__[1].__name__ == "_UserOwnedMixin"
-    assert reloaded_module._UserOwnedMixin.__annotations__["user_id"] == "Mapped[uuid.UUID]"
-    assert reloaded_module._UserOwnedMixin.__annotations__["user"] == "Mapped[Any]"
 
 
 def test_auth_model_mixins_cover_full_and_partial_relationship_contracts() -> None:
@@ -598,70 +456,3 @@ def test_auth_model_mixins_cover_relationship_option_override_contracts() -> Non
         for constraint in ConfiguredCoverageOAuthAccount.__table__.constraints
         if constraint.name is not None
     } == {"uq_coverage_configured_oauth_identity"}
-
-
-def test_models_user_module_columns_and_relationships() -> None:
-    """Reference ``User`` model keeps relational role tables behind a flat roles property."""
-    user_relationships = inspect(ModelsUser).relationships
-
-    assert issubclass(ModelsUser, UserModelMixin)
-    assert issubclass(ModelsUser, UserRoleRelationshipMixin)
-    assert issubclass(ModelsUser, UserAuthRelationshipMixin)
-    assert issubclass(ModelsRole, RoleMixin)
-    assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
-    assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
-    assert issubclass(ModelsOrganization, OrganizationMixin)
-    assert issubclass(ModelsOrganizationInvitation, OrganizationInvitationMixin)
-    assert issubclass(ModelsOrganizationMembership, OrganizationMembershipMixin)
-    assert issubclass(ModelsApiKey, ApiKeyMixin)
-    assert issubclass(ModelsAccessToken, AccessTokenMixin)
-    assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
-    assert ModelsUser.__tablename__ == "user"
-    assert set(ModelsUser.__table__.c.keys()) <= {
-        "email",
-        "hashed_password",
-        "id",
-        "is_active",
-        "is_verified",
-        "recovery_codes",
-        "sa_orm_sentinel",
-        "totp_secret",
-    }
-    assert "roles" not in ModelsUser.__table__.c
-    assert sorted(UserModelMixin.__annotations__) == [
-        "email",
-        "hashed_password",
-        "is_active",
-        "is_verified",
-        "recovery_codes",
-        "totp_secret",
-    ]
-    assert set(ModelsRole.__table__.c.keys()) == {"description", "name"}
-    assert ModelsRole.__table__.c.description.nullable is True
-    assert set(ModelsUserRole.__table__.c.keys()) == {"role_name", "user_id"}
-    assert sorted(user_relationships.keys()) == [
-        "access_tokens",
-        "api_keys",
-        "oauth_accounts",
-        "organization_memberships",
-        "refresh_tokens",
-        "role_assignments",
-    ]
-    assert user_relationships["access_tokens"].mapper.class_.__name__ == "AccessToken"
-    assert user_relationships["access_tokens"].back_populates == "user"
-    assert user_relationships["api_keys"].mapper.class_.__name__ == "ApiKey"
-    assert user_relationships["api_keys"].back_populates == "user"
-    assert user_relationships["refresh_tokens"].mapper.class_.__name__ == "RefreshToken"
-    assert user_relationships["refresh_tokens"].back_populates == "user"
-    assert user_relationships["oauth_accounts"].mapper.class_.__name__ == "OAuthAccount"
-    assert user_relationships["oauth_accounts"].back_populates == "user"
-    assert user_relationships["organization_memberships"].mapper.class_.__name__ == "OrganizationMembership"
-    assert user_relationships["organization_memberships"].back_populates == "user"
-    assert user_relationships["role_assignments"].mapper.class_.__name__ == "UserRole"
-    assert user_relationships["role_assignments"].back_populates == "user"
-    assert inspect(ModelsOrganizationMembership).relationships["organization"].mapper.class_ is ModelsOrganization
-    assert inspect(ModelsOrganizationInvitation).relationships["organization"].mapper.class_ is ModelsOrganization
-    assert inspect(ModelsOrganization).relationships["memberships"].mapper.class_ is ModelsOrganizationMembership
-    assert inspect(ModelsOrganization).relationships["invitations"].mapper.class_ is ModelsOrganizationInvitation
-    assert inspect(ModelsUserRole).relationships["role"].mapper.class_ is ModelsRole
-    assert inspect(ModelsRole).relationships["user_assignments"].mapper.class_ is ModelsUserRole

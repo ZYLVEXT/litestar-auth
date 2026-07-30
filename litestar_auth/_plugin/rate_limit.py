@@ -63,18 +63,6 @@ class _RateLimitConfigProtocol(Protocol):
     def request_verify_token(self) -> EndpointRateLimit | None:
         """Configured request-verify-token endpoint rate limit."""
 
-    @property
-    def api_key_create(self) -> EndpointRateLimit | None:
-        """Configured API-key create endpoint rate limit."""
-
-    @property
-    def api_key_update(self) -> EndpointRateLimit | None:
-        """Configured API-key update endpoint rate limit."""
-
-    @property
-    def api_key_use(self) -> EndpointRateLimit | None:
-        """Configured API-key use endpoint rate limit."""
-
 
 _RATE_LIMIT_ENDPOINT_SLOT_NAMES = (
     "login",
@@ -90,9 +78,6 @@ _RATE_LIMIT_ENDPOINT_SLOT_NAMES = (
     "totp_regenerate_recovery_codes",
     "verify_token",
     "request_verify_token",
-    "api_key_create",
-    "api_key_update",
-    "api_key_use",
 )
 
 

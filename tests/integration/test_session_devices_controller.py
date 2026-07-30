@@ -21,17 +21,17 @@ from litestar_auth._plugin.controllers import (
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import RefreshSession, Strategy, UserManagerProtocol
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 from litestar_auth.controllers import create_session_devices_controller
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User, import_token_orm_models
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import SessionMaker, assert_structural_session_factory
 from tests.integration.conftest import InMemoryUserDatabase
-from tests.integration.test_orchestrator import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, PluginUserManager
+from tests.integration.test_orchestrator import DummySessionMaker, ExampleUser, PluginUserManager
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -141,21 +141,20 @@ class _UnsafeMetadataSessionManagementStrategy(_SessionManagementStrategy):
 
 
 def test_session_device_routes_require_password_session() -> None:
-    """Delegated API keys cannot inspect or revoke the owner's interactive sessions."""
+    """Non-human principals cannot inspect or revoke interactive sessions."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _SessionManagementStrategy()),
     )
     controller = create_session_devices_controller(backend=backend)
 
     for handler_name in (
         "list_refresh_sessions",
-        "list_refresh_sessions_with_refresh_token",
         "revoke_refresh_session",
         "revoke_other_refresh_sessions",
     ):
-        assert controller.__dict__[handler_name].guards == [is_authenticated, requires_password_session]
+        assert controller.__dict__[handler_name].guards == [is_authenticated, is_human_authenticated]
 
 
 @pytest.fixture
@@ -200,6 +199,7 @@ def _build_database_token_app(session: Session) -> Litestar:
                     database_token_auth=DatabaseTokenAuthConfig(
                         token_hash_secret=_TOKEN_HASH_SECRET,
                         refresh_max_age=timedelta(days=30),
+                        cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
                     ),
                     session_maker=cast(
                         "Any",
@@ -224,10 +224,10 @@ def _build_database_token_app(session: Session) -> Litestar:
 
 
 async def _login(client: AsyncTestClient[Litestar], email: str) -> dict[str, str]:
-    """Authenticate and return the token response payload.
+    """Authenticate and return the session cookies.
 
     Returns:
-        Token response payload.
+        Access and refresh cookie values.
     """
     response = await client.post(
         "/auth/login",
@@ -235,7 +235,11 @@ async def _login(client: AsyncTestClient[Litestar], email: str) -> dict[str, str
         headers={"User-Agent": "LitestarAuth Session Test/1.0"},
     )
     assert response.status_code == HTTP_CREATED
-    return cast("dict[str, str]", response.json())
+    access_token = response.cookies.get("litestar_auth")
+    refresh_token = response.cookies.get("litestar_auth_refresh")
+    assert isinstance(access_token, str)
+    assert isinstance(refresh_token, str)
+    return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 def _refresh_digest(refresh_token: str) -> str:
@@ -243,9 +247,12 @@ def _refresh_digest(refresh_token: str) -> str:
     return hmac.new(_TOKEN_HASH_SECRET.encode(), refresh_token.encode(), hashlib.sha256).hexdigest()
 
 
-def _auth_headers(access_token: str) -> dict[str, str]:
-    """Return bearer auth headers for ``access_token``."""
-    return {"Authorization": f"Bearer {access_token}"}
+def _auth_headers(access_token: str, refresh_token: str | None = None) -> dict[str, str]:
+    """Return auth cookie headers for a session."""
+    cookies = [f"litestar_auth={access_token}"]
+    if refresh_token is not None:
+        cookies.append(f"litestar_auth_refresh={refresh_token}")
+    return {"Cookie": "; ".join(cookies)}
 
 
 async def test_plugin_mounts_session_device_routes_when_feature_flag_is_enabled(session: Session) -> None:
@@ -303,8 +310,8 @@ async def test_session_device_routes_list_and_revoke_only_current_user_sessions(
     assert [session_item["session_id"] for session_item in other_after_revoke.json()["sessions"]] == [other_session_id]
 
 
-async def test_session_device_routes_mark_current_session_from_bearer_refresh_body(session: Session) -> None:
-    """Bearer clients can submit the existing refresh-token body to mark the current session."""
+async def test_session_device_routes_mark_current_session_from_refresh_cookie(session: Session) -> None:
+    """The refresh cookie marks the current session."""
     user = _create_user(session, "user@example.com")
     app = _build_database_token_app(session)
 
@@ -321,10 +328,9 @@ async def test_session_device_routes_mark_current_session_from_bearer_refresh_bo
         assert current_row is not None
         assert other_row is not None
 
-        response = await client.post(
+        response = await client.get(
             "/auth/sessions",
-            headers=_auth_headers(current_tokens["access_token"]),
-            json={"refresh_token": current_tokens["refresh_token"]},
+            headers=_auth_headers(current_tokens["access_token"], current_tokens["refresh_token"]),
         )
 
     assert response.status_code == HTTP_OK
@@ -339,8 +345,8 @@ async def test_session_device_routes_mark_current_session_from_bearer_refresh_bo
     }
 
 
-async def test_session_device_routes_revoke_other_sessions_preserves_bearer_body_session(session: Session) -> None:
-    """Revoke-others preserves the current session when a bearer client supplies its refresh token."""
+async def test_session_device_routes_revoke_other_sessions_preserves_cookie_session(session: Session) -> None:
+    """Revoke-others preserves the session identified by the refresh cookie."""
     user = _create_user(session, "user@example.com")
     app = _build_database_token_app(session)
 
@@ -358,8 +364,7 @@ async def test_session_device_routes_revoke_other_sessions_preserves_bearer_body
 
         response = await client.post(
             "/auth/sessions/revoke-others",
-            headers=_auth_headers(current_tokens["access_token"]),
-            json={"refresh_token": current_tokens["refresh_token"]},
+            headers=_auth_headers(current_tokens["access_token"], current_tokens["refresh_token"]),
         )
         after_revoke = await client.get("/auth/sessions", headers=_auth_headers(current_tokens["access_token"]))
 
@@ -375,8 +380,8 @@ async def test_session_device_routes_revoke_other_sessions_preserves_bearer_body
     ]
 
 
-async def test_session_device_routes_treat_unresolvable_bearer_refresh_body_as_unknown(session: Session) -> None:
-    """Invalid, foreign, or expired refresh-token bodies do not mark a current session."""
+async def test_session_device_routes_treat_unresolvable_refresh_cookie_as_unknown(session: Session) -> None:
+    """Foreign or expired refresh cookies do not mark a current session."""
     user = _create_user(session, "user@example.com")
     _create_user(session, "other@example.com")
     app = _build_database_token_app(session)
@@ -394,15 +399,13 @@ async def test_session_device_routes_treat_unresolvable_bearer_refresh_body_as_u
         expired_row.created_at = datetime.now(tz=UTC) - timedelta(days=31)
         session.commit()
 
-        expired_response = await client.post(
+        expired_response = await client.get(
             "/auth/sessions",
-            headers=_auth_headers(user_tokens["access_token"]),
-            json={"refresh_token": expired_tokens["refresh_token"]},
+            headers=_auth_headers(user_tokens["access_token"], expired_tokens["refresh_token"]),
         )
-        foreign_response = await client.post(
+        foreign_response = await client.get(
             "/auth/sessions",
-            headers=_auth_headers(user_tokens["access_token"]),
-            json={"refresh_token": foreign_tokens["refresh_token"]},
+            headers=_auth_headers(user_tokens["access_token"], foreign_tokens["refresh_token"]),
         )
 
     assert expired_response.status_code == HTTP_OK
@@ -445,57 +448,6 @@ async def test_session_device_routes_reject_unauthenticated_requests(session: Se
     assert response.status_code == HTTP_UNAUTHORIZED
 
 
-async def test_session_device_routes_return_structured_error_for_unsupported_strategy() -> None:
-    """Strategies without the refresh-session management protocol fail explicitly."""
-    password_helper = PasswordHelper()
-    user = ExampleUser(
-        id=UUID("12345678-1234-5678-1234-567812345678"),
-        email="user@example.com",
-        hashed_password=password_helper.hash("correct-password"),
-        is_verified=True,
-    )
-    user_db = InMemoryUserDatabase([user])
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="memory",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="unsupported-session-devices")),
-    )
-    app = Litestar(
-        plugins=[
-            LitestarAuth(
-                LitestarAuthConfig[ExampleUser, UUID](
-                    user_model=ExampleUser,
-                    user_manager_class=PluginUserManager,
-                    backends=[backend],
-                    session_maker=cast("Any", assert_structural_session_factory(DummySessionMaker())),
-                    user_db_factory=lambda _session: user_db,
-                    user_manager_security=UserManagerSecurity[UUID](
-                        verification_token_secret="0123456789abcdef" * 4,
-                        reset_password_token_secret="fedcba9876543210" * 4,
-                        id_parser=UUID,
-                        password_helper=password_helper,
-                    ),
-                    include_register=False,
-                    include_verify=False,
-                    include_reset_password=False,
-                    include_session_devices=True,
-                    requires_verification=False,
-                ),
-            ),
-        ],
-    )
-
-    async with AsyncTestClient(app=app) as client:
-        tokens = await _login(client, "user@example.com")
-        response = await client.get("/auth/sessions", headers=_auth_headers(tokens["access_token"]))
-
-    assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json() == {
-        "detail": "The configured auth strategy does not support refresh-session management.",
-        "code": ErrorCode.SESSION_MANAGEMENT_UNSUPPORTED.value,
-    }
-
-
 def test_session_device_routes_publish_openapi_security_and_error_responses(session: Session) -> None:
     """Generated OpenAPI marks session/device routes protected and documents structured failures."""
     app = _build_database_token_app(session)
@@ -517,7 +469,7 @@ async def test_manual_session_devices_controller_uses_static_backend_context() -
     user = ExampleUser(id=UUID("12345678-1234-5678-1234-567812345678"))
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _SessionManagementStrategy()),
     )
     controller_cls = create_session_devices_controller(backend=backend, path="/auth")
@@ -537,7 +489,7 @@ async def test_manual_session_devices_controller_sanitizes_strategy_client_metad
     user = ExampleUser(id=UUID("12345678-1234-5678-1234-567812345678"))
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _UnsafeMetadataSessionManagementStrategy()),
     )
     controller_cls = create_session_devices_controller(backend=backend, path="/auth")
@@ -559,7 +511,7 @@ def test_manual_session_devices_controller_rejects_mixed_config_and_options() ->
     """The public controller factory rejects ambiguous config construction."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _SessionManagementStrategy()),
     )
 
@@ -578,7 +530,7 @@ async def test_plugin_session_devices_controller_falls_back_to_startup_backend_w
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", _SessionManagementStrategy()),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](

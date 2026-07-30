@@ -7,19 +7,23 @@ from uuid import UUID, uuid4
 
 import msgspec
 import pytest
+from authweave_core import RouteProviderPolicy
 from litestar.middleware import DefineMiddleware
 
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
 from litestar_auth.controllers import create_register_controller, create_users_controller
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserEmailField, UserPasswordField  # ruff: ignore[typing-only-first-party-import]
-from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import (
     DummySessionMaker,
     ExampleUser,
@@ -114,7 +118,7 @@ def build_app() -> tuple[
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     register_controller = create_register_controller(
@@ -130,7 +134,13 @@ def build_app() -> tuple[
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
         superuser_role_name="admin",
     )
     app = litestar_app_with_user_manager(
@@ -242,7 +252,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     assert not created_user.bio
 
     token = await strategy.write_token(created_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
     get_me_response = await test_client.get("/users/me", headers=headers)
     patch_me_response = await test_client.patch(
         "/users/me",
@@ -264,7 +274,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     assert stored_user.roles == []
 
     admin_token = await strategy.write_token(admin_user)
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    admin_headers = {"Cookie": f"litestar_auth={admin_token}"}
     admin_patch_response = await test_client.patch(
         f"/users/{created_user.id}",
         headers=admin_headers,
@@ -304,7 +314,7 @@ async def test_custom_msgspec_schemas_reject_unknown_update_fields(
     created_user = await user_db.get_by_email("strict-update@example.com")
     assert created_user is not None
     token = await strategy.write_token(created_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch(
         "/users/me",
@@ -382,7 +392,7 @@ async def test_custom_update_schema_password_field_is_blocked_for_self_service(
     """Custom self-update schemas still fail closed when they declare a password field."""
     test_client, _, _, strategy, admin_user = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
     minimum_response = await test_client.patch(
         "/users/me",
         headers=headers,

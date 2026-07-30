@@ -8,16 +8,17 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import RouteProviderPolicy
 from cryptography.fernet import Fernet
+from fakeredis import FakeAsyncRedis
 from litestar import Litestar, Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
 from litestar_auth._secrets_at_rest import encode_versioned_fernet_value
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import create_auth_controller
 from litestar_auth.exceptions import ErrorCode
@@ -29,7 +30,11 @@ from litestar_auth.guards import is_active
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import (
     DummySessionMaker,
     ExampleUser,
@@ -183,8 +188,8 @@ def build_app(  # ruff: ignore[too-many-arguments]
     )
     strategy: InMemoryTokenStrategy = InMemoryRefreshTokenStrategy() if enable_refresh else InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
-        name="memory-bearer",
-        transport=BearerTransport(),
+        name="memory-cookie",
+        transport=CookieTransport(cookie_name="auth-cookie", secure=False),
         strategy=cast("Any", strategy),
     )
     controller = create_auth_controller(
@@ -197,11 +202,18 @@ def build_app(  # ruff: ignore[too-many-arguments]
         login_identifier=login_identifier,
         login_minimum_response_seconds=login_minimum_response_seconds,
         totp_pending_secret=totp_pending_secret,
+        csrf_protection_managed_externally=True,
     )
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name="auth-cookie",
+            strategy=strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -260,7 +272,13 @@ def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name="auth-cookie",
+            strategy=strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -332,7 +350,11 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=CookieTransport(cookie_name="auth-cookie", secure=False),
-        strategy=cast("Any", InMemoryTokenStrategy()),
+        strategy=RedisTokenStrategy(
+            redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+            token_hash_secret="controller-auth-session-secret-123456789012345",
+            subject_decoder=UUID,
+        ),
     )
 
     def _build_user_manager(
@@ -377,7 +399,7 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
 async def test_login_returns_token_and_logout_invalidates_it(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """Login issues a bearer token and logout removes it from future requests."""
+    """Login issues a secure-cookie session and logout invalidates it."""
     cred = login_identifier_credential(login_identifier)
     app, strategy, user_manager = build_app(login_identifier=login_identifier)
 
@@ -388,20 +410,21 @@ async def test_login_returns_token_and_logout_invalidates_it(
         )
 
         assert login_response.status_code == HTTP_CREATED
-        assert login_response.json() == {"access_token": "token-1", "token_type": "bearer"}
+        assert login_response.json() is None
+        assert login_response.cookies["auth-cookie"] == "token-1"
         assert list(strategy.tokens) == ["token-1"]
         assert [user.email for user in user_manager.logged_in_users] == [_LOGIN_TEST_EMAIL]
 
-        authorized_response = await client.get("/probe", headers={"Authorization": "Bearer token-1"})
+        authorized_response = await client.get("/probe")
         assert authorized_response.status_code == HTTP_OK
         assert authorized_response.json() == {"email": _LOGIN_TEST_EMAIL}
 
-        logout_response = await client.post("/auth/logout", headers={"Authorization": "Bearer token-1"})
+        logout_response = await client.post("/auth/logout")
         assert logout_response.status_code == HTTP_CREATED
         assert logout_response.json() is None
         assert strategy.tokens == {}
 
-        logged_out_response = await client.get("/probe", headers={"Authorization": "Bearer token-1"})
+        logged_out_response = await client.get("/probe")
         assert logged_out_response.status_code == HTTP_OK
         assert logged_out_response.json() == {"email": None}
 
@@ -434,7 +457,8 @@ async def test_guarded_route_rejects_inactive_user_token() -> None:
     token = await strategy.write_token(user)
 
     async with AsyncTestClient(app=app) as client:
-        response = await client.get("/guarded", headers={"Authorization": f"Bearer {token}"})
+        client.cookies.set("auth-cookie", token)
+        response = await client.get("/guarded")
 
     assert response.status_code in {401, 403}
 
@@ -668,7 +692,8 @@ async def test_login_email_mode_accepts_case_insensitive_identifier() -> None:
         )
 
     assert response.status_code == HTTP_CREATED
-    assert response.json() == {"access_token": "token-1", "token_type": "bearer"}
+    assert response.json() is None
+    assert response.cookies["auth-cookie"] == "token-1"
     assert list(strategy.tokens) == ["token-1"]
 
 
@@ -683,7 +708,8 @@ async def test_login_username_mode_accepts_whitespace_and_case_variations() -> N
         )
 
     assert response.status_code == HTTP_CREATED
-    assert response.json() == {"access_token": "token-1", "token_type": "bearer"}
+    assert response.json() is None
+    assert response.cookies["auth-cookie"] == "token-1"
     assert list(strategy.tokens) == ["token-1"]
 
 
@@ -714,23 +740,20 @@ async def test_login_and_refresh_rotate_refresh_tokens_in_auth_controller() -> N
             "/auth/login",
             json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
         )
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.cookies["auth-cookie_refresh"]
 
-        refresh_response = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
-        replay_response = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        refresh_response = await client.post("/auth/refresh")
+        client.cookies.set("auth-cookie_refresh", refresh_token)
+        replay_response = await client.post("/auth/refresh")
 
     assert login_response.status_code == HTTP_CREATED
-    assert login_response.json() == {
-        "access_token": "token-1",
-        "token_type": "bearer",
-        "refresh_token": "refresh-1",
-    }
+    assert login_response.json() is None
+    assert login_response.cookies["auth-cookie"] == "token-1"
+    assert login_response.cookies["auth-cookie_refresh"] == "refresh-1"
     assert refresh_response.status_code == HTTP_CREATED
-    assert refresh_response.json() == {
-        "access_token": "token-2",
-        "token_type": "bearer",
-        "refresh_token": "refresh-2",
-    }
+    assert refresh_response.json() is None
+    assert refresh_response.cookies["auth-cookie"] == "token-2"
+    assert refresh_response.cookies["auth-cookie_refresh"] == "refresh-2"
     assert replay_response.status_code == HTTP_BAD_REQUEST
     replay_code = replay_response.json().get("code") or (replay_response.json().get("extra") or {}).get("code")
     assert replay_code == ErrorCode.REFRESH_TOKEN_INVALID
@@ -743,17 +766,14 @@ async def test_refresh_rejects_inactive_user_in_auth_controller() -> None:
     refresh_strategy = cast("InMemoryRefreshTokenStrategy", strategy)
 
     async with AsyncTestClient(app=app) as client:
-        login_response = await client.post(
+        await client.post(
             "/auth/login",
             json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
         )
         user = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
         assert user is not None
         user.is_active = False
-        response = await client.post(
-            "/auth/refresh",
-            json={"refresh_token": login_response.json()["refresh_token"]},
-        )
+        response = await client.post("/auth/refresh")
 
     assert response.status_code == HTTP_BAD_REQUEST
     code = response.json().get("code") or (response.json().get("extra") or {}).get("code")
@@ -966,7 +986,8 @@ async def test_requires_verification_true_verified_succeeds(
             json={"identifier": cred, "password": "correct-password"},
         )
     assert response.status_code == HTTP_CREATED
-    assert response.json() == {"access_token": "token-1", "token_type": "bearer"}
+    assert response.json() is None
+    assert response.cookies["auth-cookie"] == "token-1"
     assert list(strategy.tokens) == ["token-1"]
     assert [u.email for u in user_manager.logged_in_users] == [_LOGIN_TEST_EMAIL]
 
@@ -988,7 +1009,8 @@ async def test_requires_verification_false_allows_unverified_login(
             json={"identifier": cred, "password": "correct-password"},
         )
     assert response.status_code == HTTP_CREATED
-    assert response.json() == {"access_token": "token-1", "token_type": "bearer"}
+    assert response.json() is None
+    assert response.cookies["auth-cookie"] == "token-1"
     assert list(strategy.tokens) == ["token-1"]
     assert [u.email for u in user_manager.logged_in_users] == [_LOGIN_TEST_EMAIL]
 
@@ -1029,7 +1051,8 @@ async def test_login_accepts_identifier_field(login_identifier: Literal["email",
             json={"identifier": cred, "password": "correct-password"},
         )
     assert response.status_code == HTTP_CREATED
-    assert response.json() == {"access_token": "token-1", "token_type": "bearer"}
+    assert response.json() is None
+    assert response.cookies["auth-cookie"] == "token-1"
     assert list(strategy.tokens) == ["token-1"]
 
 

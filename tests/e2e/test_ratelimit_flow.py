@@ -18,13 +18,12 @@ from sqlalchemy.pool import StaticPool
 import litestar_auth.totp as _totp_mod
 from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitSlot,
@@ -121,18 +120,6 @@ def _build_app_with_trusted_proxy(
         if shared_builder_recipe
         else InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
     )
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-bearer-secret-1234567890-extra",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     rate_limit_config = (
         AuthRateLimitConfig.from_shared_backend(
             credential_rate_limiter,
@@ -202,7 +189,10 @@ def _build_app_with_trusted_proxy(
         )
     )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="rate-limit-session-hash-secret-1234567890",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=RateLimitUserManager,
@@ -281,7 +271,7 @@ async def test_login_rate_limit_blocks_by_ip_and_resets_after_window(
     )
 
     assert reset_response.status_code == HTTP_CREATED
-    assert isinstance(reset_response.json()["access_token"], str)
+    assert isinstance(reset_response.cookies.get("litestar_auth"), str)
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
@@ -295,22 +285,22 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert login_response.status_code == HTTP_CREATED
-    access_token = login_response.json()["access_token"]
+    access_token = login_response.cookies.get("litestar_auth")
 
     first_enable_failure = await test_client.post(
         "/auth/2fa/enable",
         json={"password": "wrong-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     second_enable_failure = await test_client.post(
         "/auth/2fa/enable",
         json={"password": "wrong-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     third_enable_failure = await test_client.post(
         "/auth/2fa/enable",
         json={"password": "wrong-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert first_enable_failure.status_code == HTTP_BAD_REQUEST
     assert second_enable_failure.status_code == HTTP_BAD_REQUEST
@@ -319,7 +309,7 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
     enable_response = await test_client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert enable_response.status_code == HTTP_CREATED
     enable_body = enable_response.json()
@@ -329,7 +319,7 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
     confirm_response = await test_client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Cookie": f"litestar_auth={access_token}"},
     )
     assert confirm_response.status_code == HTTP_CREATED
 
@@ -346,22 +336,22 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
         },
     )
     assert verify_success.status_code == HTTP_CREATED
-    full_token = verify_success.json()["access_token"]
+    full_token = verify_success.cookies.get("litestar_auth")
 
     first_disable_failure = await test_client.post(
         "/auth/2fa/disable",
         json={"code": "000000"},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     second_disable_failure = await test_client.post(
         "/auth/2fa/disable",
         json={"code": "000000"},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     third_disable_failure = await test_client.post(
         "/auth/2fa/disable",
         json={"code": "000000"},
-        headers={"Authorization": f"Bearer {full_token}"},
+        headers={"Cookie": f"litestar_auth={full_token}"},
     )
     assert first_disable_failure.status_code == HTTP_BAD_REQUEST
     assert second_disable_failure.status_code == HTTP_BAD_REQUEST
@@ -402,12 +392,12 @@ async def test_plugin_shared_builder_migration_recipe_keeps_login_and_totp_verif
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         enable_response = await test_client.post(
             "/auth/2fa/enable",
             json={"password": "correct-password"},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert enable_response.status_code == HTTP_CREATED
         enable_body = enable_response.json()
@@ -418,7 +408,7 @@ async def test_plugin_shared_builder_migration_recipe_keeps_login_and_totp_verif
                 "enrollment_token": enable_body["enrollment_token"],
                 "code": _generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
             },
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert confirm_response.status_code == HTTP_CREATED
 

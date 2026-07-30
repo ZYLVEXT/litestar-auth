@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import inspect
 
-from litestar_auth._plugin.validation import api_key as _api_key_validation
 from litestar_auth._plugin.validation._general import (
-    validate_api_key_config,
     validate_config,
 )
 from litestar_auth._plugin.validation.credentials import (
@@ -51,13 +49,11 @@ from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 __all__ = (
     "ConfigurationError",
     "SecurityWarning",
-    "_api_key_validation",
     "_validate_backend_strategy_security",
     "_validate_totp_encryption_key",
     "_validate_totp_pending_secret_config",
     "inspect",
     "resolve_user_manager_account_state_validator",
-    "validate_api_key_config",
     "validate_backend_security_config",
     "validate_config",
     "validate_cookie_auth_config",

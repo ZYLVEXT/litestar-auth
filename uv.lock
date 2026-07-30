@@ -1,9 +1,16 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12.0, <3.15.0"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version < '3.14'",
+]
+
+[manifest]
+members = [
+    "authweave-core",
+    "authweave-workload",
+    "litestar-auth",
 ]
 
 [[package]]
@@ -108,6 +115,69 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/c6/a759ece8f1829d1f162261226fbfd2c6832b3ff7657384045286d2afa384/argon2_cffi_bindings-25.1.0-cp39-abi3-win_amd64.whl", hash = "sha256:a98cd7d17e9f7ce244c0803cad3c23a7d379c301ba618a5fa76a67d116618b98", size = 31715, upload-time = "2025-07-30T10:01:58.56Z" },
     { url = "https://files.pythonhosted.org/packages/42/b9/f8d6fa329ab25128b7e98fd83a3cb34d9db5b059a9847eddb840a0af45dd/argon2_cffi_bindings-25.1.0-cp39-abi3-win_arm64.whl", hash = "sha256:b0fdbcf513833809c882823f98dc2f931cf659d9a1429616ac3adebb49f5db94", size = 27149, upload-time = "2025-07-30T10:01:59.329Z" },
 ]
+
+[[package]]
+name = "authweave-core"
+version = "7.0.0"
+source = { editable = "packages/authweave-core" }
+dependencies = [
+    { name = "anyio" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "anyio", specifier = ">=4.14.2,<5.0" }]
+
+[[package]]
+name = "authweave-workload"
+version = "7.0.0"
+source = { editable = "packages/authweave-workload" }
+dependencies = [
+    { name = "authweave-core" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "anyio" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "litestar" },
+    { name = "litestar-auth" },
+    { name = "pyjwt" },
+    { name = "sqlalchemy" },
+]
+jwt = [
+    { name = "anyio" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "pyjwt" },
+]
+litestar = [
+    { name = "litestar" },
+    { name = "litestar-auth" },
+    { name = "sqlalchemy" },
+]
+mtls = [
+    { name = "cryptography" },
+]
+sqlalchemy = [
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", marker = "extra == 'jwt'", specifier = ">=4.14.2,<5.0" },
+    { name = "authweave-core", editable = "packages/authweave-core" },
+    { name = "authweave-workload", extras = ["jwt", "litestar"], marker = "extra == 'all'" },
+    { name = "authweave-workload", extras = ["mtls"], marker = "extra == 'jwt'" },
+    { name = "authweave-workload", extras = ["sqlalchemy"], marker = "extra == 'litestar'" },
+    { name = "cryptography", marker = "extra == 'mtls'", specifier = ">=49.0.0" },
+    { name = "httpx", marker = "extra == 'jwt'", specifier = ">=0.28.1,<1.0" },
+    { name = "litestar", marker = "extra == 'litestar'", specifier = ">=2.22.0,<3.0" },
+    { name = "litestar-auth", marker = "extra == 'litestar'", editable = "." },
+    { name = "pyjwt", marker = "extra == 'jwt'", specifier = ">=2.13.0,<3.0" },
+    { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0.48,<3.0" },
+]
+provides-extras = ["sqlalchemy", "mtls", "jwt", "litestar", "all"]
 
 [[package]]
 name = "boolean-py"
@@ -741,11 +811,12 @@ wheels = [
 
 [[package]]
 name = "litestar-auth"
-version = "6.0.0"
+version = "7.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "advanced-alchemy" },
     { name = "anyio" },
+    { name = "authweave-core" },
     { name = "idna" },
     { name = "litestar" },
     { name = "pwdlib", extra = ["argon2"] },
@@ -801,6 +872,7 @@ docs = [
 requires-dist = [
     { name = "advanced-alchemy", specifier = ">=1.11.0,<2.0" },
     { name = "anyio", specifier = ">=4.14.2,<5.0" },
+    { name = "authweave-core", editable = "packages/authweave-core" },
     { name = "cryptography", marker = "extra == 'jwt'", specifier = ">=49.0.0" },
     { name = "cryptography", marker = "extra == 'oauth'", specifier = ">=49.0.0" },
     { name = "cryptography", marker = "extra == 'totp'", specifier = ">=49.0.0" },

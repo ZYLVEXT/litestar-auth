@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from datetime import timedelta
 from typing import Any, ClassVar, cast
 from uuid import UUID
 
@@ -11,19 +10,18 @@ from litestar import Litestar, Request, get
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from litestar_auth import (
-    AuthenticationBackend,
     BaseUserManager,
-    BearerTransport,
+    DatabaseTokenAuthConfig,
     LitestarAuth,
     LitestarAuthConfig,
     UserManagerSecurity,
     is_authenticated,
 )
-from litestar_auth.authentication.strategy import JWTStrategy
 from litestar_auth.models import User
 
 DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
-JWT_SECRET = os.environ["LITESTAR_AUTH_JWT_SECRET"]
+SESSION_HASH_SECRET = os.environ["LITESTAR_AUTH_SESSION_HASH_SECRET"]
+CSRF_SECRET = os.environ["LITESTAR_AUTH_CSRF_SECRET"]
 RESET_PASSWORD_TOKEN_SECRET = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
 VERIFY_TOKEN_SECRET = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
 
@@ -49,19 +47,8 @@ def protected(request: Request[User, Any, Any]) -> dict[str, str]:
     return {"email": user.email}
 
 
-backend = AuthenticationBackend[User, UUID](
-    name="bearer",
-    transport=BearerTransport(),
-    strategy=JWTStrategy[User, UUID](
-        secret=JWT_SECRET,
-        lifetime=timedelta(minutes=15),
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    ),
-)
-
 config = LitestarAuthConfig[User, UUID](
-    backends=(backend,),
+    database_token_auth=DatabaseTokenAuthConfig(token_hash_secret=SESSION_HASH_SECRET),
     session_maker=session_maker,
     user_model=User,
     user_manager_class=UserManager,
@@ -69,6 +56,7 @@ config = LitestarAuthConfig[User, UUID](
         verification_token_secret=VERIFY_TOKEN_SECRET,
         reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,
     ),
+    csrf_secret=CSRF_SECRET,
     include_users=False,
 )
 

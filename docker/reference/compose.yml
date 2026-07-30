@@ -1,0 +1,92 @@
+name: litestar-auth-v7-reference
+
+services:
+  pki:
+    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+    command: ["/bin/sh", "-c", "apk add --no-cache openssl && sh /config/generate-pki.sh"]
+    volumes:
+      - pki-state:/state
+      - pki-public:/public
+      - pki-envoy:/envoy
+      - pki-clients:/clients
+      - .:/config:ro
+
+  postgres:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: auth
+      POSTGRES_PASSWORD: auth
+      POSTGRES_USER: auth
+    ports: ["127.0.0.1:15432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:16379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  upstream:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      pki: {condition: service_completed_successfully}
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - litestar
+      - --extra
+      - mtls
+      - --with
+      - uvicorn
+      - python
+      - /app/upstream.py
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/upstream-venv
+    volumes:
+      - ../..:/workspace:ro
+      - pki-public:/pki:ro
+      - shared:/shared
+      - ./upstream.py:/app/upstream.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /shared/upstream.sock"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+
+  envoy:
+    image: envoyproxy/envoy:v1.35-latest@sha256:a707c3821b4cecb5db43d8e86e983e0f57b81010fefbabc01feeb071fb8cc08e
+    depends_on:
+      pki: {condition: service_completed_successfully}
+      upstream: {condition: service_started}
+    ports: ["127.0.0.1:15443:8443", "127.0.0.1:19901:9901"]
+    volumes:
+      - pki-public:/pki/public:ro
+      - pki-envoy:/pki/envoy:ro
+      - shared:/shared
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+
+  jwks:
+    image: python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
+    command: ["python", "/app/jwks.py"]
+    ports: ["127.0.0.1:18080:8080"]
+    volumes:
+      - ./jwks.py:/app/jwks.py:ro
+
+volumes:
+  pki-state:
+  pki-public:
+  pki-envoy:
+  pki-clients:
+  shared:

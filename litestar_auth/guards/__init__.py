@@ -7,12 +7,12 @@ intended for route ``guards=`` lists and compose with application-specific
 authorization policies.
 """
 
-from litestar_auth.guards._api_key_guards import has_any_scope, has_scope, requires_api_key, requires_password_session
 from litestar_auth.guards._guards import (
     has_all_roles,
     has_any_role,
     is_active,
     is_authenticated,
+    is_human_authenticated,
     is_superuser,
     is_verified,
 )
@@ -28,16 +28,13 @@ __all__ = (
     "has_all_roles",
     "has_any_permission",
     "has_any_role",
-    "has_any_scope",
     "has_organization_permission",
     "has_organization_role",
     "has_permission",
-    "has_scope",
     "is_active",
     "is_authenticated",
+    "is_human_authenticated",
     "is_superuser",
     "is_verified",
-    "requires_api_key",
     "requires_organization_membership",
-    "requires_password_session",
 )

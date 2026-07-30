@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth._roles import normalize_role_name
-from litestar_auth.authentication.strategy.jwt import JWTContext
 from litestar_auth.ratelimit._client_host import _get_header_value, _normalize_host_value, _request_host
 
 if TYPE_CHECKING:
@@ -16,7 +15,6 @@ DEFAULT_ORGANIZATION_HEADER = "X-Organization"
 
 __all__ = (
     "DEFAULT_ORGANIZATION_HEADER",
-    "ClaimTenantResolver",
     "HeaderTenantResolver",
     "SubdomainTenantResolver",
     "TenantResolver",
@@ -50,18 +48,6 @@ class HeaderTenantResolver:
         if raw_slug is None:
             return None
         return _normalize_tenant_slug(raw_slug)
-
-
-@dataclass(frozen=True, slots=True)
-class ClaimTenantResolver:
-    """Resolve a trusted organization slug from verified JWT authentication context."""
-
-    def __call__(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
-        """Return the normalized signed JWT organization claim, or ``None`` when unavailable."""
-        auth_context = connection.scope.get("auth")
-        if not isinstance(auth_context, JWTContext) or auth_context.organization is None:
-            return None
-        return _normalize_tenant_slug(auth_context.organization)
 
 
 @dataclass(frozen=True, slots=True)

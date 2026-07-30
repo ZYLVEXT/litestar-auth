@@ -23,6 +23,7 @@ from litestar.enums import MediaType
 from litestar.exceptions import ClientException
 from litestar.response import Response
 
+from litestar_auth.authentication.middleware import route_provider_policy
 from litestar_auth.authentication.strategy.base import (
     RefreshableStrategy,
     TokenInvalidationCapable,
@@ -37,6 +38,7 @@ from litestar_auth.controllers._auth_helpers import (
     _resolve_access_token_session_id,
     _resolve_cookie_transport,
     _resolve_login_identifier,
+    _resolve_refresh_token_value,
     _validate_manual_cookie_auth_contract,
 )
 from litestar_auth.controllers._error_responses import raise_client_error, raise_login_bad_credentials
@@ -58,7 +60,7 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
-from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # ruff: ignore[typing-only-first-party-import]
+from litestar_auth.payloads import LoginCredentials  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.ratelimit._config import (
     warn_account_lockout_response_floor_too_low,
     warn_missing_public_rate_limits,
@@ -483,7 +485,6 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
     request: Request[Any, Any, Any],
     *,
     ctx: _AuthControllerContext[UP, ID],
-    data: RefreshTokenRequest,
     user_manager: AuthControllerUserManagerProtocol[UP, ID],
 ) -> Response[Any]:
     """Rotate a refresh token and issue a new access token.
@@ -501,7 +502,11 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
         raise ConfigurationError(msg)
 
     _record_refresh_token_request_context(refresh_strategy, request)
-    refreshed = await refresh_strategy.rotate_refresh_token(data.refresh_token, user_manager)
+    cookie_transport = _resolve_cookie_transport(ctx.backend)
+    refresh_token = await _resolve_refresh_token_value(request, cookie_transport=cookie_transport)
+    refreshed = (
+        None if refresh_token is None else await refresh_strategy.rotate_refresh_token(refresh_token, user_manager)
+    )
     if refreshed is None:
         await ctx.refresh_inc(request)
         raise_client_error(
@@ -523,7 +528,6 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
         raise
     session_id = await _resolve_access_token_session_id(ctx.backend, refresh_strategy, user, rotated_refresh_token)
     response = await ctx.backend.login(user, session_id=session_id)
-    cookie_transport = _resolve_cookie_transport(ctx.backend)
     await ctx.refresh_reset(request)
     return _attach_refresh_token(response, rotated_refresh_token, cookie_transport=cookie_transport)
 
@@ -552,6 +556,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             "/login",
             before_request=ctx.login_before,
             exception_handlers=login_exception_handlers,
+            opt=route_provider_policy(),
         )
         async def login(  # ruff: ignore[no-self-use]
             self: Controller,
@@ -600,17 +605,15 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
     class RefreshAuthController(refresh_base):
         """Backend-bound authentication endpoints with refresh-token rotation."""
 
-        @post("/refresh", before_request=ctx.refresh_before)
+        @post("/refresh", before_request=ctx.refresh_before, opt=route_provider_policy())
         async def refresh(  # ruff: ignore[no-self-use]
             self: Controller,
             request: Request[Any, Any, Any],
-            data: RefreshTokenRequest,
             litestar_auth_user_manager: _UserManagerDep,
         ) -> Response[Any]:
             return await _handle_auth_refresh(
                 request,
                 ctx=ctx,
-                data=data,
                 user_manager=litestar_auth_user_manager,
             )
 

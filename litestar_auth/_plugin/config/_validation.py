@@ -40,11 +40,6 @@ def validate_organization_configuration(config: _OrganizationConfigCarrier) -> N
 def _validate_disabled_organization_policy(organization_config: OrganizationConfig) -> None:
     if organization_config.enabled:
         return
-    if organization_config.include_switch_organization:
-        msg = (
-            "organization_config.include_switch_organization cannot be True when organization_config.enabled is False."
-        )
-        raise ConfigurationError(msg)
     if organization_config.include_organization_admin:
         msg = "organization_config.include_organization_admin cannot be True when organization_config.enabled is False."
         raise ConfigurationError(msg)
@@ -78,9 +73,6 @@ def _validate_enabled_organization_tenant_policy(organization_config: Organizati
         raise ConfigurationError(msg)
     if not callable(organization_config.tenant_resolver):
         msg = "organization_config.tenant_resolver must be callable when organization_config.enabled is True."
-        raise ConfigurationError(msg)
-    if not isinstance(organization_config.include_switch_organization, bool):
-        msg = "organization_config.include_switch_organization must be a boolean when organization_config.enabled is True."
         raise ConfigurationError(msg)
     if not isinstance(organization_config.include_organization_admin, bool):
         msg = (

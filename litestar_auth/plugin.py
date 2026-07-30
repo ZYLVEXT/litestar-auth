@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, cast, override
 
+from authweave_core import RouteProviderPolicy
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPlugin
 
@@ -25,7 +26,7 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
 )
 from litestar_auth._plugin.exception_handlers import register_exception_handlers
-from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports, has_api_key_transport
+from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._plugin.session_binding import (
     _AccountStateValidator as PluginAccountStateValidator,
@@ -40,8 +41,16 @@ from litestar_auth._plugin.validation import (
     resolve_user_manager_account_state_validator,
     validate_config,
 )
-from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware, LitestarAuthMiddlewareConfig
+from litestar_auth.authentication import (
+    HumanSessionProvider,
+    LitestarAuthMiddleware,
+    LitestarAuthMiddlewareConfig,
+    LitestarProviderBinding,
+)
+from litestar_auth.authentication.strategy.base import HumanSessionStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import OAuthProviderConfig
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.oauth_encryption import (
     _build_oauth_token_encryption,
     require_oauth_token_encryption,
@@ -72,7 +81,6 @@ if TYPE_CHECKING:
 
 from litestar_auth.manager import FernetKeyringConfig
 
-ApiKeyConfig = _plugin_config.ApiKeyConfig
 AccountLockoutConfig = _plugin_config.AccountLockoutConfig
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 ControllerHook = _plugin_config.ControllerHook
@@ -191,10 +199,57 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
         attach_extension_manager_hook_subscribers(manager, self._manager_hook_subscribers)
 
-    def _build_authenticator(self, session: AsyncSession) -> Authenticator[UP, ID]:
+    def _build_provider_bindings(self, session: AsyncSession) -> tuple[LitestarProviderBinding, ...]:
+        """Build request-scoped typed human providers.
+
+        Returns:
+            Neutral providers bound to their Litestar human-model projection.
+
+        Raises:
+            ConfigurationError: If a configured backend is not a supported cookie session.
+        """
         backends = self._session_bound_backends(session)
         manager = self._build_user_manager(session, backends=backends)
-        return Authenticator(backends, manager)
+        bindings: list[LitestarProviderBinding] = []
+        for backend in backends:
+            if not isinstance(backend.transport, CookieTransport) or not isinstance(
+                backend.strategy,
+                HumanSessionStrategy,
+            ):
+                msg = (
+                    f"Backend {backend.name!r} is not supported by litestar-auth 7 ambient authentication. "
+                    "Configure a DB or Redis server-side strategy with CookieTransport."
+                )
+                raise ConfigurationError(msg)
+            provider = HumanSessionProvider[UP, ID](
+                name=backend.name,
+                cookie_name=backend.transport.cookie_name,
+                issuer=self.config.principal_issuer,
+                strategy=cast("HumanSessionStrategy[UP, ID]", backend.strategy),
+                user_manager=manager,
+            )
+            bindings.append(LitestarProviderBinding(provider=provider, load_principal=provider.load_principal))
+        for contribution in self._extension_contributions().authentication_providers:
+            binding = contribution.factory(session)
+            if not isinstance(binding, LitestarProviderBinding):
+                msg = (
+                    f"Authentication provider factory from extension {contribution.extension_name!r} "
+                    "must return LitestarProviderBinding."
+                )
+                raise ConfigurationError(msg)
+            if binding.provider.name != contribution.name or binding.provider.profile != contribution.profile:
+                msg = (
+                    f"Authentication provider factory from extension {contribution.extension_name!r} "
+                    "returned a binding whose name/profile does not match its descriptor."
+                )
+                raise ConfigurationError(msg)
+            bindings.append(binding)
+        names = [binding.provider.name for binding in bindings]
+        profiles = [binding.provider.profile for binding in bindings]
+        if len(names) != len(set(names)) or len(profiles) != len(set(profiles)):
+            msg = "Authentication provider names and profiles must be unique across core and extensions."
+            raise ConfigurationError(msg)
+        return tuple(bindings)
 
     def _resolve_account_state_validator(self) -> PluginAccountStateValidator[UP]:
         """Return the configured manager-class account-state validator contract."""
@@ -301,15 +356,10 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
         startup_backends = backend_inventory.startup_backends()
         cookie_transports = get_cookie_transports(startup_backends)
-        if cookie_transports:
+        if cookie_transports and self.config.csrf_secret is not None:
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
-        auth_cookie_names = frozenset(
-            {
-                *(transport.cookie_name.encode() for transport in cookie_transports),
-                *(transport.refresh_cookie_name.encode() for transport in cookie_transports),
-            },
-        )
+        tls_evidence = self._extension_contributions().tls_evidence
         middleware = DefineMiddleware(
             LitestarAuthMiddleware[UP, ID],
             config=LitestarAuthMiddlewareConfig[UP, ID](
@@ -318,14 +368,10 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                     session_maker=self._session_maker,
                     session_scope_key=self._session_scope_key,
                 ),
-                authenticator_factory=self._build_authenticator,
-                auth_cookie_names=auth_cookie_names,
-                api_key_use_rate_limit=(
-                    self.config.rate_limit_config.api_key_use if self.config.rate_limit_config is not None else None
-                ),
-                api_key_backend_present=has_api_key_transport(startup_backends),
-                api_key_signed_body_max_bytes=self.config.api_keys.signed_body_max_bytes,
-                api_key_signed_body_max_messages=self.config.api_keys.signed_body_max_messages,
+                provider_bindings_factory=self._build_provider_bindings,
+                default_policy=RouteProviderPolicy(tuple(backend.name for backend in startup_backends)),
+                tls_peer_evidence_factory=None if tls_evidence is None else cast("Any", tls_evidence.factory),
+                correlation_id_factory=cast("Any", self.config.correlation_id_factory),
                 superuser_role_name=self.config.superuser_role_name,
                 permission_resolver=self.config.resolve_permission_resolver(),
                 organization_store_factory=(
@@ -422,7 +468,6 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
 __all__ = (
     "AlchemyAuthSessionBinding",
-    "ApiKeyConfig",
     "DatabaseTokenAuthConfig",
     "FernetKeyringConfig",
     "LitestarAuth",

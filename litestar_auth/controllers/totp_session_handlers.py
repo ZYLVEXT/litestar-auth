@@ -63,13 +63,13 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
 
 
-def _extract_login_session_id(response: object) -> str | None:
-    """Return the issued bearer access token when exposed in the login response body."""
-    content = getattr(response, "content", None)
-    if not isinstance(content, dict):
-        return None
-    token = content.get("access_token")
-    return token if isinstance(token, str) and token else None
+def _extract_login_session_id(response: object, *, cookie_name: str) -> str | None:
+    """Return the opaque session identifier set by the login response."""
+    for cookie in getattr(response, "cookies", ()):
+        if getattr(cookie, "key", None) == cookie_name:
+            value = getattr(cookie, "value", None)
+            return value if isinstance(value, str) and value else None
+    return None
 
 
 async def _totp_fail_invalid_pending(
@@ -198,6 +198,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
 
     verified_user = cast("UP", completed_login.user)
     await totp_rate_limit.on_success("verify", request)
+    cookie_transport = _resolve_cookie_transport(runtime.backend)
     if runtime.refresh_strategy is not None:
         _record_refresh_token_request_context(runtime.refresh_strategy, request)
         refresh_token = await runtime.refresh_strategy.write_refresh_token(verified_user)
@@ -211,12 +212,16 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
         response = _attach_refresh_token(
             response,
             refresh_token,
-            cookie_transport=_resolve_cookie_transport(runtime.backend),
+            cookie_transport=cookie_transport,
         )
     else:
         refresh_session_id = None
         response = await runtime.backend.login(verified_user)
-    session_id = refresh_session_id or _extract_login_session_id(response)
+    session_id = refresh_session_id or (
+        _extract_login_session_id(response, cookie_name=cookie_transport.cookie_name)
+        if cookie_transport is not None
+        else None
+    )
     if session_id is not None and (not completed_login.used_recovery_code or ctx.security.totp_stepup_allow_recovery):
         await user_manager.issue_totp_stepup_verification(
             verified_user,

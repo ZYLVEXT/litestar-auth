@@ -14,7 +14,7 @@ from litestar.testing import AsyncTestClient
 from litestar_auth._plugin import OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth._plugin.config import OAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
@@ -23,10 +23,12 @@ from tests._helpers import ExampleUser
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.conftest import InMemoryUserDatabase
 
-from .test_orchestrator import DummySessionMaker, InMemoryTokenStrategy, PluginUserManager
+from .test_orchestrator import DummySessionMaker, PluginUserManager, build_test_redis_strategy
 
 if TYPE_CHECKING:
     from litestar.routes import HTTPRoute
+
+    from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 
 pytestmark = pytest.mark.integration
 
@@ -81,13 +83,13 @@ def _build_config(  # ruff: ignore[too-many-arguments]
     oauth_token_encryption_key: str | None = None,
     unsafe_testing: bool = False,
     users: list[ExampleUser] | None = None,
-) -> tuple[LitestarAuthConfig[ExampleUser, UUID], InMemoryTokenStrategy]:
+) -> tuple[LitestarAuthConfig[ExampleUser, UUID], RedisTokenStrategy[ExampleUser, UUID]]:
     user_db = InMemoryUserDatabase(users)
-    strategy = InMemoryTokenStrategy(token_prefix="oauth-extension")
+    strategy = build_test_redis_strategy(key_prefix="oauth-extension")
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=strategy,
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -146,7 +148,7 @@ async def test_plugin_owned_oauth_login_and_associate_routes_mount_with_current_
         token = await strategy.write_token(user)
         associate_response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
             follow_redirects=False,
         )
 

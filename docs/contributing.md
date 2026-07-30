@@ -1,55 +1,35 @@
-# Contributing
+# Contributing and verification
 
-## Local checks
-
-From the repository root (see [justfile](https://github.com/ZYLVEXT/litestar-auth/blob/main/justfile)):
-
-| Command | Purpose |
-| ------- | ------- |
-| `just test` | Full pytest suite |
-| `just lint` | Ruff check with safe fixes |
-| `just format` | Ruff format |
-| `just typecheck` | Static types (`ty`) |
-| `just audit` | Dependency audit (`pip-audit`, `deptry`) |
-| `just docs-serve` | Live Zensical preview |
-| `just docs-build` | Static site to `site/` |
-
-For release-quality verification from the repo root (with [`uv`](https://docs.astral.sh/uv/)), use the same mandatory block as [AGENTS.md](https://github.com/ZYLVEXT/litestar-auth/blob/main/AGENTS.md#verification):
+Install the locked development environment, then run:
 
 ```bash
-uv run ruff check --fix .
-uv run ruff format .
-uv run ty check
+just setup
+just check
 uv run deptry .
-uv run pytest --cov --cov-report=term-missing --cov-fail-under=100 -n auto
+just test
+just docs-build
 ```
 
-## Tests
+The neutral packages have independent gates:
 
-Keep the testing docs aligned by audience:
+```bash
+cd packages/authweave-core
+uv run ruff check .
+uv run ty check authweave_core tests
+COVERAGE_PROCESS_START=pyproject.toml uv run pytest \
+  --cov=authweave_core --cov-branch --cov-fail-under=100
 
-- [Testing plugin-backed apps](guides/testing.md) is the app-level guide for explicit `unsafe_testing`, `AsyncTestClient`, request-scoped session sharing, and auth-state isolation boundaries.
-- [tests/README.md](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) is the repo-internal guide for the test pyramid, pytest markers (`unit`, `integration`, `e2e`, `imports`), and targeted local runs.
+cd ../authweave-workload
+uv run --extra all ruff check .
+uv run --extra all ty check authweave_workload tests
+COVERAGE_PROCESS_START=pyproject.toml uv run --extra all pytest \
+  --cov=authweave_workload --cov-branch --cov-fail-under=100
+```
 
-Before claiming completion or opening a PR, run the full verification block above from the repo root. CI enforces high coverage on `litestar_auth/`.
+Run `sh docker/reference/verify.sh` for PostgreSQL concurrency, real Redis refresh replay,
+TLS 1.3 Envoy termination, local CA/CRL, forged-header replacement, and mock JWKS checks.
 
-## Documentation maintenance
-
-When you change HTTP routes, **`ErrorCode`** values, or security-sensitive configuration, update the docs in the **same change** as the code. Use this map to find the right page:
-
-| Topic | Primary docs |
-| ----- | ------------ |
-| Scope / boundaries | [Roadmap](roadmap.md) |
-| Architecture | [Architecture](concepts/architecture.md), [Backends](concepts/backends.md), [Request lifecycle](concepts/request_lifecycle.md) |
-| HTTP routes | [HTTP API](http_api.md) |
-| Flows, errors, operational security | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Errors](errors.md), [Security overview](security.md) |
-| Configuration | [Configuration index](configuration.md) (topic split: [OAuth](configuration/oauth.md), [Security and DI](configuration/security.md), …), [Plugin API](api/plugin.md) |
-| Hooks / extension | [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
-| Production | [Security](security.md), [Deployment](deployment.md) |
-
-Python API reference pages under `docs/api/` should include short introductory prose before the `::: litestar_auth...` mkdocstrings directive—avoid shipping only the bare directive. For examples of well-structured pages, see [package.md](api/package.md), [models.md](api/models.md), and [guards.md](api/guards.md).
-
-## Style
-
-- Python **3.12+**, **no Pydantic** inside the library’s public contracts where msgspec is used.
-- Follow existing patterns; run **`just lint`** and **`just format`** before pushing.
+Changes to authentication behavior require a negative test at the trust boundary. Do not add
+fallbacks, deprecated aliases, generic bearer authentication, user-owned shared secrets,
+proprietary request signing, or private-key ingestion. Publication and production rollout are
+separate operator actions.

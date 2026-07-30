@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast, override
 from uuid import UUID, uuid4
 
-from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
+from authweave_core import FailureCode, Invalid
+
+from litestar_auth.authentication.strategy.base import HumanSessionAuthenticated, Strategy, UserManagerProtocol
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.types import UserProtocol
 from tests._helpers import ExampleUser
@@ -181,23 +183,23 @@ class InMemoryTokenStrategy(Strategy[ExampleUser, UUID]):
         self.tokens: dict[str, UUID] = {}
         self.counter = 0
 
-    @override
-    async def read_token(
+    async def authenticate_token(
         self,
-        token: str | None,
+        token: str,
         user_manager: UserManagerProtocol[ExampleUser, UUID],
-    ) -> ExampleUser | None:
-        """Resolve a user from a token.
+    ) -> HumanSessionAuthenticated[ExampleUser] | Invalid:
+        """Resolve a typed in-memory session attempt.
 
         Returns:
-            The matching user, or ``None`` when the token is unknown.
+            Authenticated test user or a typed invalid decision.
         """
-        if token is None:
-            return None
         user_id = self.tokens.get(token)
         if user_id is None:
-            return None
-        return await user_manager.get(user_id)
+            return Invalid(FailureCode.INVALID)
+        user = await user_manager.get(user_id)
+        if user is None:
+            return Invalid(FailureCode.INVALID)
+        return HumanSessionAuthenticated(user)
 
     @override
     async def write_token(self, user: ExampleUser) -> str:

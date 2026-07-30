@@ -7,7 +7,7 @@ payloads, schemas, ORM models, and optional Redis helpers from their dedicated
 submodules.
 
 Examples:
-    Wire the database-backed bearer preset when building a Litestar application::
+    Wire the database-backed cookie-session preset when building a Litestar application::
 
         import os
         from uuid import UUID
@@ -39,14 +39,8 @@ import logging
 
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
-from litestar_auth._tenant_resolution import (
-    ClaimTenantResolver,
-    HeaderTenantResolver,
-    SubdomainTenantResolver,
-    TenantResolver,
-)
-from litestar_auth.authentication import AuthenticationBackend, Authenticator
-from litestar_auth.authentication.transport import BearerTransport, CookieTransport, CookieTransportConfig
+from litestar_auth._tenant_resolution import HeaderTenantResolver, SubdomainTenantResolver, TenantResolver
+from litestar_auth.authentication.transport import CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
 from litestar_auth.extensions import AuthExtension, AuthExtensionRegistrationContext, AuthExtensionValidationContext
 from litestar_auth.guards import (
@@ -65,7 +59,6 @@ from litestar_auth.guards import (
 )
 from litestar_auth.manager import BaseUserManager, BaseUserManagerConfig, UserManagerSecurity
 from litestar_auth.plugin import (
-    ApiKeyConfig,
     DatabaseTokenAuthConfig,
     FernetKeyringConfig,
     LitestarAuth,
@@ -86,20 +79,15 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # ruff: ignore[non-empty-init-module]
 
-__version__ = "6.0.0"
+__version__ = "7.0.0"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
-    "ApiKeyConfig",
     "AuthExtension",
     "AuthExtensionRegistrationContext",
     "AuthExtensionValidationContext",
-    "AuthenticationBackend",
-    "Authenticator",
     "BaseUserManager",
     "BaseUserManagerConfig",
-    "BearerTransport",
-    "ClaimTenantResolver",
     "CookieTransport",
     "CookieTransportConfig",
     "DatabaseTokenAuthConfig",

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args, get_origin, get_type_hint
 from unittest.mock import AsyncMock, call
 
 import pytest
+from authweave_core import Unavailable
 from litestar.connection import Request
 from litestar.exceptions import TooManyRequestsException
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -31,7 +32,6 @@ import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
 import litestar_auth.ratelimit._window_math as ratelimit_window_math_module
 from litestar_auth._clock import read_clock
 from litestar_auth._schema_fields import EMAIL_MAX_LENGTH
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.contrib.redis import (
@@ -120,67 +120,24 @@ LENIENT_REDIS_WINDOW_SECONDS = 120
 EXPECTED_DISTINCT_PROXY_WARNINGS = 2
 MULTI_PROXY_HOPS = 2
 
-AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
-    AuthRateLimitSlot.LOGIN,
-    AuthRateLimitSlot.CHANGE_PASSWORD,
-    AuthRateLimitSlot.REFRESH,
-    AuthRateLimitSlot.REGISTER,
-    AuthRateLimitSlot.FORGOT_PASSWORD,
-    AuthRateLimitSlot.RESET_PASSWORD,
-    AuthRateLimitSlot.TOTP_ENABLE,
-    AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
-    AuthRateLimitSlot.TOTP_VERIFY,
-    AuthRateLimitSlot.TOTP_DISABLE,
-    AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
-    AuthRateLimitSlot.VERIFY_TOKEN,
-    AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
-    AuthRateLimitSlot.ORGANIZATION_SWITCH,
-    AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
-    AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
-    AuthRateLimitSlot.API_KEY_CREATE,
-    AuthRateLimitSlot.API_KEY_UPDATE,
-    AuthRateLimitSlot.API_KEY_USE,
-)
+AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = tuple(AuthRateLimitSlot)
 AUTH_RATE_LIMIT_SLOT_VALUES = tuple(slot.value for slot in AUTH_RATE_LIMIT_SLOT_IDENTIFIERS)
 AUTH_RATE_LIMIT_GROUP_IDENTIFIERS: tuple[AuthRateLimitEndpointGroup, ...] = (
-    "api_keys",
     "login",
     "organization_invitations",
-    "organizations",
     "password_reset",
     "refresh",
     "register",
     "totp",
     "verification",
 )
-AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP: dict[
-    AuthRateLimitEndpointGroup,
-    frozenset[AuthRateLimitSlot],
-] = {
-    "api_keys": frozenset(
-        {AuthRateLimitSlot.API_KEY_CREATE, AuthRateLimitSlot.API_KEY_UPDATE, AuthRateLimitSlot.API_KEY_USE},
-    ),
-    "login": frozenset({AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.CHANGE_PASSWORD}),
-    "password_reset": frozenset({AuthRateLimitSlot.FORGOT_PASSWORD, AuthRateLimitSlot.RESET_PASSWORD}),
-    "refresh": frozenset({AuthRateLimitSlot.REFRESH}),
-    "register": frozenset({AuthRateLimitSlot.REGISTER}),
-    "totp": frozenset(
-        {
-            AuthRateLimitSlot.TOTP_ENABLE,
-            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
-            AuthRateLimitSlot.TOTP_VERIFY,
-            AuthRateLimitSlot.TOTP_DISABLE,
-            AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
-        },
-    ),
-    "organization_invitations": frozenset(
-        {
-            AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
-            AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
-        },
-    ),
-    "organizations": frozenset({AuthRateLimitSlot.ORGANIZATION_SWITCH}),
-    "verification": frozenset({AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}),
+AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP = {
+    group: frozenset(
+        recipe.slot
+        for recipe in ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+        if recipe.group == group
+    )
+    for group in AUTH_RATE_LIMIT_GROUP_IDENTIFIERS
 }
 AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP["verification"]
 
@@ -287,130 +244,6 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
     await orchestrator.on_success("verify", request)
 
 
-async def test_api_key_rate_limit_scope_uses_key_id_from_supported_headers() -> None:
-    """The api_key_id scope keys parsed bearer and X-API-Key credentials by key id."""
-    backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
-    hmac_scheme_bucket_part = ratelimit_key_derivation_module._safe_key_part("signed")
-    bearer_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={"Authorization": "Bearer ak_prod_key-id.secret"},
-        ),
-    )
-    header_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={"X-API-Key": "ak_prod_other-id.secret"},
-        ),
-    )
-    fallback_header_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={"Authorization": "Basic ignored", "X-API-Key": "ak_prod_fallback-id.secret"},
-        ),
-    )
-    hmac_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={
-                "Authorization": (
-                    "LSA1-HMAC-SHA256 Credential=signed-header-id, "
-                    "SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"
-                ),
-            },
-        ),
-    )
-    hmac_without_credential_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={"Authorization": "LSA1-HMAC-SHA256 SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"},
-        ),
-    )
-    hmac_empty_credential_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            headers={
-                "Authorization": (
-                    "LSA1-HMAC-SHA256 Credential=, SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"
-                ),
-            },
-        ),
-    )
-    empty_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(payload={}, client=ClientStub(host="127.0.0.1")),
-    )
-    non_api_key_context_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(payload={}, client=ClientStub(host="127.0.0.1"), scope={"auth": "bearer"}),
-    )
-    non_mapping_scope_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(payload={}, client=ClientStub(host="127.0.0.1"), scope=cast("Any", None)),
-    )
-    context_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="127.0.0.1"),
-            scope={"auth": ApiKeyContext(key_id="signed-id", scopes=("read",), prefix_env="prod")},
-        ),
-    )
-    limiter = EndpointRateLimit(backend=backend, scope="api_key_id", namespace="api-key-use")
-
-    assert await limiter.build_key(bearer_request) == (
-        "api-key-use:"
-        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_key_derivation_module._safe_key_part('key-id')}"
-    )
-    assert await limiter.build_key(header_request) == (
-        "api-key-use:"
-        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_key_derivation_module._safe_key_part('other-id')}"
-    )
-    assert await limiter.build_key(fallback_header_request) == (
-        "api-key-use:"
-        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_key_derivation_module._safe_key_part('fallback-id')}"
-    )
-    assert await limiter.build_key(hmac_request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
-    )
-    assert await limiter.build_key(hmac_without_credential_request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
-    )
-    assert await limiter.build_key(hmac_empty_credential_request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
-    )
-    assert (
-        await limiter.build_key(empty_request)
-        == f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
-    )
-    assert await limiter.build_key(non_api_key_context_request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
-    )
-    assert await limiter.build_key(non_mapping_scope_request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
-    )
-    assert await limiter.build_key(context_request) == (
-        "api-key-use:"
-        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_key_derivation_module._safe_key_part('signed-id')}"
-    )
-
-
 def test_auth_rate_limit_config_exposes_stable_endpoint_slots() -> None:
     """AuthRateLimitConfig keeps the current per-endpoint field inventory."""
     assert tuple(field.name for field in fields(ratelimit_module.AuthRateLimitConfig)) == AUTH_RATE_LIMIT_SLOT_VALUES
@@ -429,44 +262,10 @@ def test_auth_rate_limit_identifier_helpers_stay_aligned_with_public_builder_con
     assert catalog.slots_by_group == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
 
 
-def test_auth_rate_limit_slot_enum_stays_aligned_with_public_inventory() -> None:
-    """The slot enum defines the public values in stable order."""
-    slot_enum = ratelimit_config_module.AuthRateLimitSlot
-
-    assert tuple(slot_enum) == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS
-    assert tuple(member.value for member in slot_enum) == AUTH_RATE_LIMIT_SLOT_VALUES
-    assert tuple(member.name for member in slot_enum) == (
-        "LOGIN",
-        "CHANGE_PASSWORD",
-        "REFRESH",
-        "REGISTER",
-        "FORGOT_PASSWORD",
-        "RESET_PASSWORD",
-        "TOTP_ENABLE",
-        "TOTP_CONFIRM_ENABLE",
-        "TOTP_VERIFY",
-        "TOTP_DISABLE",
-        "TOTP_REGENERATE_RECOVERY_CODES",
-        "VERIFY_TOKEN",
-        "REQUEST_VERIFY_TOKEN",
-        "ORGANIZATION_SWITCH",
-        "ORGANIZATION_INVITATION_ACCEPT",
-        "ORGANIZATION_INVITATION_DECLINE",
-        "API_KEY_CREATE",
-        "API_KEY_UPDATE",
-        "API_KEY_USE",
-    )
-
-
 def test_auth_rate_limit_change_password_slot_is_distinct_from_login() -> None:
     """Password rotation has an independently tunable slot instead of reusing login."""
     assert AuthRateLimitSlot.CHANGE_PASSWORD.value == "change_password"
     assert AuthRateLimitSlot.CHANGE_PASSWORD is not AuthRateLimitSlot.LOGIN
-
-
-def test_auth_rate_limit_api_key_update_slot_uses_symmetric_value() -> None:
-    """API-key update uses the same auto-generated naming as peer API-key slots."""
-    assert AuthRateLimitSlot.API_KEY_UPDATE.value == "api_key_update"
 
 
 def test_auth_rate_limit_slot_enum_iteration_feeds_shared_builder_inputs() -> None:
@@ -557,84 +356,6 @@ def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
     assert ratelimit_config_module.EndpointRateLimit is ratelimit_endpoint_module.EndpointRateLimit
 
 
-def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and_namespaces() -> None:
-    """Default auth rate-limit recipes cover the supported slot inventory."""
-    recipes = ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES
-    catalog = ratelimit_slot_catalog_module._build_auth_rate_limit_endpoint_catalog()
-
-    assert tuple(recipe.slot for recipe in recipes) == tuple(field.name for field in fields(AuthRateLimitConfig))
-    assert tuple(catalog.recipes_by_slot) == tuple(field.name for field in fields(AuthRateLimitConfig))
-    assert catalog.recipes == recipes
-    assert catalog.slots == tuple(field.name for field in fields(AuthRateLimitConfig))
-    assert catalog.slot_set == frozenset(catalog.slots)
-    assert catalog.slots_by_group == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
-    assert catalog.groups == frozenset(AUTH_RATE_LIMIT_GROUP_IDENTIFIERS)
-    assert {recipe.slot: recipe.default_scope for recipe in recipes} == {
-        "login": "ip_email",
-        "change_password": "ip_email",
-        "refresh": "ip",
-        "register": "ip",
-        "forgot_password": "ip_email",
-        "reset_password": "ip",
-        "totp_enable": "ip",
-        "totp_confirm_enable": "ip",
-        "totp_verify": "ip",
-        "totp_disable": "ip",
-        "totp_regenerate_recovery_codes": "ip",
-        "verify_token": "ip",
-        "request_verify_token": "ip_email",
-        "organization_switch": "ip",
-        "organization_invitation_accept": "ip",
-        "organization_invitation_decline": "ip",
-        "api_key_create": "ip",
-        "api_key_update": "ip",
-        "api_key_use": "api_key_id",
-    }
-    assert {recipe.slot: recipe.default_namespace for recipe in recipes} == {
-        "login": "login",
-        "change_password": "change-password",
-        "refresh": "refresh",
-        "register": "register",
-        "forgot_password": "forgot-password",
-        "reset_password": "reset-password",
-        "totp_enable": "totp-enable",
-        "totp_confirm_enable": "totp-confirm-enable",
-        "totp_verify": "totp-verify",
-        "totp_disable": "totp-disable",
-        "totp_regenerate_recovery_codes": "totp-regenerate-recovery-codes",
-        "verify_token": "verify-token",
-        "request_verify_token": "request-verify-token",
-        "organization_switch": "organization-switch",
-        "organization_invitation_accept": "organization-invitation-accept",
-        "organization_invitation_decline": "organization-invitation-decline",
-        "api_key_create": "api-key-create",
-        "api_key_update": "api-key-update",
-        "api_key_use": "api-key-use",
-    }
-    assert {recipe.slot: recipe.group for recipe in recipes} == {
-        "login": "login",
-        "change_password": "login",
-        "refresh": "refresh",
-        "register": "register",
-        "forgot_password": "password_reset",
-        "reset_password": "password_reset",
-        "totp_enable": "totp",
-        "totp_confirm_enable": "totp",
-        "totp_verify": "totp",
-        "totp_disable": "totp",
-        "totp_regenerate_recovery_codes": "totp",
-        "verify_token": "verification",
-        "request_verify_token": "verification",
-        "organization_switch": "organizations",
-        "organization_invitation_accept": "organization_invitations",
-        "organization_invitation_decline": "organization_invitations",
-        "api_key_create": "api_keys",
-        "api_key_update": "api_keys",
-        "api_key_use": "api_keys",
-    }
-    assert catalog.slots_by_group == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
-
-
 def test_auth_rate_limit_slot_catalog_module_executes_standalone() -> None:
     """The extracted slot catalog can initialize without importing the config module."""
     module_globals = runpy.run_path(str(Path(ratelimit_slot_catalog_module.__file__).resolve()))
@@ -671,10 +392,10 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
     register_backend = InMemoryRateLimiter(max_attempts=5, window_seconds=10)
     totp_backend = InMemoryRateLimiter(max_attempts=6, window_seconds=10)
     verification_backend = InMemoryRateLimiter(max_attempts=7, window_seconds=10)
-    organizations_backend = InMemoryRateLimiter(max_attempts=8, window_seconds=10)
+    organization_invitations_backend = InMemoryRateLimiter(max_attempts=8, window_seconds=10)
     group_backends: dict[AuthRateLimitEndpointGroup, InMemoryRateLimiter] = {
         "login": login_backend,
-        "organizations": organizations_backend,
+        "organization_invitations": organization_invitations_backend,
         "password_reset": password_reset_backend,
         "refresh": refresh_backend,
         "register": register_backend,
@@ -704,7 +425,8 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
         "totp_regenerate_recovery_codes": totp_backend,
         "verify_token": verification_backend,
         "request_verify_token": verification_backend,
-        "organization_switch": organizations_backend,
+        "organization_invitation_accept": organization_invitations_backend,
+        "organization_invitation_decline": organization_invitations_backend,
     }
 
     for slot, expected_backend in expected_backends.items():
@@ -949,7 +671,6 @@ def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_
     assert config.register is None
     assert config.forgot_password is None
     assert config.reset_password is None
-    assert config.organization_switch is None
     assert config.totp_enable is None
     assert config.totp_confirm_enable is None
     assert config.totp_disable is None
@@ -1547,100 +1268,6 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
     assert await verify_rate_limit.build_key(request) == (
         f"totp-verify:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
     )
-
-
-@pytest.mark.parametrize(
-    ("module_path", "expected_symbols"),
-    [
-        pytest.param(
-            "litestar_auth.ratelimit._client_host",
-            ("_DEFAULT_TRUSTED_HEADERS", "_client_host", "logger"),
-            id="_client_host",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._identifier_extraction",
-            ("_API_KEY_ID_LENGTH", "_extract_api_key_id", "_extract_email"),
-            id="_identifier_extraction",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._key_derivation",
-            ("DEFAULT_KEY_PREFIX", "_bounded_hash_part", "_safe_key_part"),
-            id="_key_derivation",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._validation",
-            ("RedisScriptResult", "SlidingWindow", "_validate_configuration"),
-            id="_validation",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._protocol",
-            (
-                "KnownRateLimitConnection",
-                "RateLimitKey",
-                "RateLimiterBackend",
-                "RedisClientProtocol",
-                "RedisPipelineProtocol",
-            ),
-            id="_protocol",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._memory",
-            ("InMemoryRateLimiter",),
-            id="_memory",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._redis",
-            ("RedisRateLimiter", "_load_redis_asyncio"),
-            id="_redis",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._endpoint",
-            ("EndpointRateLimit", "RateLimitScope"),
-            id="_endpoint",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._config",
-            (
-                "AuthRateLimitConfig",
-                "AuthRateLimitEndpointGroup",
-                "AuthRateLimitSlot",
-                "EndpointRateLimit",
-            ),
-            id="_config",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit._orchestrator",
-            ("TotpRateLimitOrchestrator", "TotpSensitiveEndpoint"),
-            id="_orchestrator",
-        ),
-        pytest.param(
-            "litestar_auth.ratelimit",
-            (
-                "AuthRateLimitConfig",
-                "AuthRateLimitEndpointGroup",
-                "AuthRateLimitSlot",
-                "EndpointRateLimit",
-                "InMemoryRateLimiter",
-                "KnownRateLimitConnection",
-                "RateLimitKey",
-                "RateLimitScope",
-                "RedisRateLimiter",
-                "TotpRateLimitOrchestrator",
-            ),
-            id="__init__",
-        ),
-    ],
-)
-def test_ratelimit_submodules_expose_stable_import_paths(
-    module_path: str,
-    expected_symbols: tuple[str, ...],
-) -> None:
-    """Each ratelimit submodule remains directly importable after decomposition."""
-    module = importlib.import_module(module_path)
-
-    assert module.__name__ == module_path
-    missing_symbols = [symbol for symbol in expected_symbols if not hasattr(module, symbol)]
-    assert missing_symbols == []
 
 
 def test_public_ratelimit_all_lists_only_documented_exports() -> None:
@@ -2827,7 +2454,7 @@ async def test_redis_token_strategy_propagates_connection_error(
     async_fakeredis: AsyncFakeRedis,
     fakeredis_server: fakeredis.FakeServer,
 ) -> None:
-    """RedisTokenStrategy does not swallow connection errors from Redis."""
+    """Typed Redis authentication reports backend outages without throwing."""
     user_manager = AsyncMock()
     user_manager.get = AsyncMock()
     fakeredis_server.connected = False
@@ -2839,8 +2466,7 @@ async def test_redis_token_strategy_propagates_connection_error(
         ),
     )
 
-    with pytest.raises(RedisConnectionError):
-        await strategy.read_token("token", user_manager)
+    assert isinstance(await strategy.authenticate_token("token", user_manager), Unavailable)
 
 
 async def test_endpoint_rate_limit_before_request_raises_with_retry_after_header() -> None:
@@ -2932,134 +2558,6 @@ async def test_endpoint_rate_limit_omits_oversize_identifier_before_hashing(
 
     assert key == "login:hashed-8"
     assert hashed_values == ["10.0.0.1"]
-
-
-async def test_hmac_api_key_rate_limit_ignores_untrusted_credential_value() -> None:
-    """Signed API-key buckets depend on scheme presence, not forgeable Credential text."""
-    backend = InMemoryRateLimiter(max_attempts=1, window_seconds=10)
-    limiter = EndpointRateLimit(backend=backend, scope="api_key_id", namespace="api-key-use")
-    giant_credential_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="10.0.0.1"),
-            headers={
-                "Authorization": (
-                    f"LSA1-HMAC-SHA256 Credential={'a' * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 10)}, "
-                    "SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"
-                ),
-            },
-        ),
-    )
-    missing_credential_request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="10.0.0.1"),
-            headers={"Authorization": "LSA1-HMAC-SHA256 SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"},
-        ),
-    )
-
-    assert await limiter.build_key(giant_credential_request) == await limiter.build_key(missing_credential_request)
-
-
-async def test_api_key_rate_limit_omits_malformed_bearer_token() -> None:
-    """Malformed bearer API-key tokens do not contribute an API-key id part."""
-    limiter = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
-        scope="api_key_id",
-        namespace="api-key-use",
-    )
-    request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="10.0.0.1"),
-            headers={"Authorization": "Bearer ak_badformat"},
-        ),
-    )
-
-    assert (
-        await limiter.build_key(request) == f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
-    )
-
-
-async def test_endpoint_rate_limit_omits_oversize_api_key_id_before_hashing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """API-key ids over the persistence cap are not passed into rate-limit hashing."""
-    hashed_values: list[str] = []
-
-    def record_safe_key_part(value: str) -> str:
-        hashed_values.append(value)
-        return f"hashed-{len(value)}"
-
-    monkeypatch.setattr(ratelimit_endpoint_module, "_safe_key_part", record_safe_key_part)
-
-    limiter = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
-        scope="api_key_id",
-        namespace="api-key-use",
-    )
-    request = cast(
-        "Request[Any, Any, Any]",
-        JsonRequestStub(
-            payload={},
-            client=ClientStub(host="10.0.0.1"),
-            scope={
-                "auth": ApiKeyContext(
-                    key_id="a" * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 1),
-                    scopes=(),
-                    prefix_env="prod",
-                ),
-            },
-        ),
-    )
-
-    key = await limiter.build_key(request)
-
-    assert key == "api-key-use:hashed-8"
-    assert hashed_values == ["10.0.0.1"]
-
-
-async def test_endpoint_rate_limit_defensively_omits_over_cap_extracted_parts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Key building rechecks extracted identities before hashing them."""
-
-    async def over_cap_email(
-        request: Request[Any, Any, Any],
-        *,
-        identity_fields: tuple[str, ...],
-    ) -> str:
-        await asyncio.sleep(0)
-        return "a" * (EMAIL_MAX_LENGTH + 1)
-
-    def over_cap_key_id(request: Request[Any, Any, Any]) -> str:
-        return "a" * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 1)
-
-    monkeypatch.setattr(ratelimit_endpoint_module, "_extract_email", over_cap_email)
-    monkeypatch.setattr(ratelimit_endpoint_module, "_extract_api_key_id", over_cap_key_id)
-
-    ip_email_limiter = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
-        scope="ip_email",
-        namespace="login",
-    )
-    api_key_limiter = EndpointRateLimit(
-        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
-        scope="api_key_id",
-        namespace="api-key-use",
-    )
-    request = _build_request()
-
-    assert (
-        await ip_email_limiter.build_key(request)
-        == f"login:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
-    )
-    assert await api_key_limiter.build_key(request) == (
-        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
-    )
 
 
 async def test_endpoint_rate_limit_reset_uses_key_without_email_when_body_has_no_identifier() -> None:

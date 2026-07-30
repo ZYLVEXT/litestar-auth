@@ -6,14 +6,11 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
-from cryptography.fernet import Fernet
 from litestar.config.app import AppConfig
 from litestar.openapi.config import OpenAPIConfig
 from litestar.openapi.spec import Components, SecurityScheme
 
-from litestar_auth._plugin.api_key import build_api_key_backend_template
 from litestar_auth._plugin.config import StartupBackendTemplate
-from litestar_auth._plugin.features import ApiKeyConfig
 from litestar_auth._plugin.openapi import (
     build_openapi_security_schemes,
     build_security_requirement,
@@ -21,19 +18,9 @@ from litestar_auth._plugin.openapi import (
     security_scheme_for_transport,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.manager import FernetKeyringConfig
 
 _EXPECTED_PAIR = 2
-
-
-def _bearer_backend(name: str = "jwt") -> StartupBackendTemplate[Any, Any]:
-    strategy = JWTStrategy(secret="0123456789abcdef" * 4, algorithm="HS256", allow_inmemory_denylist=True)
-    backend = AuthenticationBackend(name=name, transport=BearerTransport(), strategy=strategy)  # ty:ignore[invalid-argument-type]
-    return StartupBackendTemplate.from_runtime_backend(backend)
 
 
 def _cookie_backend(name: str = "cookie", cookie_name: str = "auth_token") -> StartupBackendTemplate[Any, Any]:
@@ -46,58 +33,8 @@ def _cookie_backend(name: str = "cookie", cookie_name: str = "auth_token") -> St
     return StartupBackendTemplate.from_runtime_backend(backend)
 
 
-def _bearer_non_jwt_backend(name: str = "token") -> StartupBackendTemplate[Any, Any]:
-    strategy = MagicMock()
-    backend = AuthenticationBackend(name=name, transport=BearerTransport(), strategy=strategy)
-    return StartupBackendTemplate.from_runtime_backend(backend)
-
-
-def _api_key_backend(name: str = "api_key") -> StartupBackendTemplate[Any, Any]:
-    strategy = MagicMock()
-    strategy.api_key_config = None
-    strategy.secret_encryption_keyring = None
-    backend = AuthenticationBackend(name=name, transport=ApiKeyTransport(), strategy=strategy)
-    return StartupBackendTemplate.from_runtime_backend(backend)
-
-
-def _api_key_signing_backend(name: str = "api_key") -> StartupBackendTemplate[Any, Any]:
-    strategy = MagicMock()
-    strategy.api_key_config.signing_enabled = True
-    strategy.secret_encryption_keyring = None
-    backend = AuthenticationBackend(name=name, transport=ApiKeyTransport(), strategy=strategy)
-    return StartupBackendTemplate.from_runtime_backend(backend)
-
-
 class TestSecuritySchemeForTransport:
     """Test deriving SecurityScheme from transport types."""
-
-    def test_bearer_transport_with_jwt_strategy(self) -> None:
-        """Bearer transport with JWT strategy sets bearer_format to JWT."""
-        transport = BearerTransport()
-        strategy = JWTStrategy(secret="0123456789abcdef" * 4, algorithm="HS256", allow_inmemory_denylist=True)
-        scheme = security_scheme_for_transport(transport, strategy=strategy)  # ty:ignore[invalid-argument-type]
-
-        assert scheme.type == "http"
-        assert scheme.scheme == "Bearer"
-        assert scheme.bearer_format == "JWT"
-
-    def test_bearer_transport_without_jwt_strategy(self) -> None:
-        """Bearer transport with non-JWT strategy omits bearer_format."""
-        transport = BearerTransport()
-        scheme = security_scheme_for_transport(transport, strategy=MagicMock())
-
-        assert scheme.type == "http"
-        assert scheme.scheme == "Bearer"
-        assert scheme.bearer_format is None
-
-    def test_bearer_transport_without_strategy(self) -> None:
-        """Bearer transport without strategy omits bearer_format."""
-        transport = BearerTransport()
-        scheme = security_scheme_for_transport(transport)
-
-        assert scheme.type == "http"
-        assert scheme.scheme == "Bearer"
-        assert scheme.bearer_format is None
 
     def test_cookie_transport(self) -> None:
         """Cookie transport produces apiKey scheme in cookie."""
@@ -107,15 +44,6 @@ class TestSecuritySchemeForTransport:
         assert scheme.type == "apiKey"
         assert scheme.name == "my_auth"
         assert scheme.security_scheme_in == "cookie"
-
-    def test_api_key_transport(self) -> None:
-        """API-key transport produces a bearer-style HTTP scheme."""
-        scheme = security_scheme_for_transport(ApiKeyTransport())
-
-        assert scheme.type == "http"
-        assert scheme.scheme == "Bearer"
-        assert scheme.bearer_format == "API key"
-        assert API_KEY_HEADER_NAME in cast("str", scheme.description)
 
     def test_unsupported_transport_raises(self) -> None:
         """Unknown transport type raises TypeError."""
@@ -129,16 +57,6 @@ class TestSecuritySchemeForTransport:
 class TestBuildOpenApiSecuritySchemes:
     """Test building scheme dicts from backend inventories."""
 
-    def test_single_bearer_backend(self) -> None:
-        """Single bearer backend produces one http/Bearer scheme."""
-        backends = (_bearer_backend("jwt"),)
-        schemes = build_openapi_security_schemes(backends)
-
-        assert "jwt" in schemes
-        assert schemes["jwt"].type == "http"
-        assert schemes["jwt"].scheme == "Bearer"
-        assert schemes["jwt"].bearer_format == "JWT"
-
     def test_single_cookie_backend(self) -> None:
         """Single cookie backend produces one apiKey scheme."""
         backends = (_cookie_backend("session", "sess_token"),)
@@ -150,48 +68,12 @@ class TestBuildOpenApiSecuritySchemes:
 
     def test_multiple_backends(self) -> None:
         """Multiple backends produce one scheme per backend."""
-        backends = (_bearer_backend("jwt"), _cookie_backend("cookie"))
+        backends = (_cookie_backend("primary"), _cookie_backend("secondary", "other_auth"))
         schemes = build_openapi_security_schemes(backends)
 
         assert len(schemes) == _EXPECTED_PAIR
-        assert "jwt" in schemes
-        assert "cookie" in schemes
-
-    def test_api_key_backend_uses_stable_scheme_name(self) -> None:
-        """API-key backend OpenAPI registration uses the documented apiKeyAuth scheme name."""
-        schemes = build_openapi_security_schemes((_api_key_backend(),))
-
-        assert set(schemes) == {"apiKeyAuth"}
-        assert schemes["apiKeyAuth"].type == "http"
-        assert schemes["apiKeyAuth"].scheme == "Bearer"
-
-    def test_api_key_signing_backend_adds_hmac_scheme(self) -> None:
-        """Configured signing mode exposes the HMAC OpenAPI scheme."""
-        schemes = build_openapi_security_schemes((_api_key_signing_backend(),))
-
-        assert set(schemes) == {"apiKeyAuth", "apiKeyHmacAuth"}
-        assert schemes["apiKeyHmacAuth"].type == "http"
-        assert schemes["apiKeyHmacAuth"].scheme == "LSA1-HMAC-SHA256"
-
-    def test_api_key_backend_template_mounts_signing_keyring(self) -> None:
-        """API-key backend templates carry signing keyring metadata into OpenAPI detection."""
-        backend = build_api_key_backend_template(
-            ApiKeyConfig(
-                enabled=True,
-                allowed_scopes=("read",),
-                signing_enabled=True,
-                secret_encryption_keyring=FernetKeyringConfig(
-                    active_key_id="current",
-                    keys={"current": Fernet.generate_key().decode()},
-                ),
-            ),
-            api_key_hash_secret="api-key-hash-secret-0123456789abcdef",
-            unsafe_testing=True,
-        )
-        schemes = build_openapi_security_schemes((backend,))
-
-        assert cast("Any", backend.strategy).secret_encryption_keyring is not None
-        assert "apiKeyHmacAuth" in schemes
+        assert "primary" in schemes
+        assert "secondary" in schemes
 
     def test_empty_backends(self) -> None:
         """Empty backends produce an empty dict."""
@@ -204,20 +86,20 @@ class TestBuildSecurityRequirement:
 
     def test_single_scheme(self) -> None:
         """Single scheme produces one requirement entry."""
-        schemes = {"jwt": SecurityScheme(type="http", scheme="Bearer")}
+        schemes = {"session": SecurityScheme(type="http", scheme="session")}
         requirement = build_security_requirement(schemes)
 
-        assert requirement == [{"jwt": []}]
+        assert requirement == [{"session": []}]
 
     def test_multiple_schemes_or_semantics(self) -> None:
         """Multiple schemes are emitted as alternative requirement entries."""
         schemes = {
-            "jwt": SecurityScheme(type="http", scheme="Bearer"),
+            "session": SecurityScheme(type="http", scheme="session"),
             "cookie": SecurityScheme(type="apiKey", name="auth", security_scheme_in="cookie"),
         }
         requirement = build_security_requirement(schemes)
 
-        assert requirement == [{"jwt": []}, {"cookie": []}]
+        assert requirement == [{"session": []}, {"cookie": []}]
 
     def test_empty_schemes(self) -> None:
         """Empty schemes produce an empty list."""
@@ -231,26 +113,27 @@ class TestRegisterOpenApiSecurity:
         """Schemes are registered as Components in the openapi config."""
         app_config = AppConfig()
         app_config.openapi_config = OpenAPIConfig(title="Test", version="1.0.0")
-        backends = (_bearer_backend("jwt"),)
+        backends = (_cookie_backend("session"),)
 
         schemes = register_openapi_security(app_config, backends)
 
-        assert "jwt" in schemes
+        assert "session" in schemes
         components_list = app_config.openapi_config.components
         assert isinstance(components_list, list)
         assert any(
-            isinstance(c, Components) and c.security_schemes and "jwt" in c.security_schemes for c in components_list
+            isinstance(c, Components) and c.security_schemes and "session" in c.security_schemes
+            for c in components_list
         )
 
     def test_no_openapi_config_is_noop(self) -> None:
         """When openapi_config is None, schemes are returned but config is untouched."""
         app_config = AppConfig()
         app_config.openapi_config = None
-        backends = (_bearer_backend("jwt"),)
+        backends = (_cookie_backend("session"),)
 
         schemes = register_openapi_security(app_config, backends)
 
-        assert "jwt" in schemes
+        assert "session" in schemes
         assert app_config.openapi_config is None
 
     def test_no_backends_returns_empty(self) -> None:
@@ -266,7 +149,7 @@ class TestRegisterOpenApiSecurity:
         """Registration does not add a global security requirement."""
         app_config = AppConfig()
         app_config.openapi_config = OpenAPIConfig(title="Test", version="1.0.0")
-        backends = (_bearer_backend("jwt"),)
+        backends = (_cookie_backend("session"),)
 
         register_openapi_security(app_config, backends)
 
@@ -277,7 +160,7 @@ class TestRegisterOpenApiSecurity:
         existing = Components(schemas={"User": cast("Any", {"type": "object"})})
         app_config = AppConfig()
         app_config.openapi_config = OpenAPIConfig(title="Test", version="1.0.0", components=existing)
-        backends = (_bearer_backend("jwt"),)
+        backends = (_cookie_backend("session"),)
 
         register_openapi_security(app_config, backends)
 
@@ -290,7 +173,7 @@ class TestRegisterOpenApiSecurity:
         existing = [Components(schemas={"User": cast("Any", {"type": "object"})})]
         app_config = AppConfig()
         app_config.openapi_config = OpenAPIConfig(title="Test", version="1.0.0", components=existing)
-        backends = (_bearer_backend("jwt"),)
+        backends = (_cookie_backend("session"),)
 
         register_openapi_security(app_config, backends)
 
@@ -298,5 +181,6 @@ class TestRegisterOpenApiSecurity:
         assert isinstance(components_list, list)
         assert len(components_list) == _EXPECTED_PAIR
         assert any(
-            isinstance(c, Components) and c.security_schemes and "jwt" in c.security_schemes for c in components_list
+            isinstance(c, Components) and c.security_schemes and "session" in c.security_schemes
+            for c in components_list
         )

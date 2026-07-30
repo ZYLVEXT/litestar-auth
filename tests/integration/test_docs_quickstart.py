@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from litestar_auth.totp import SecurityWarning
 from tests._helpers import FakeAioSQLiteConnection, build_fake_aiosqlite_module, open_fake_aiosqlite_connection
 
 if TYPE_CHECKING:
@@ -41,14 +40,14 @@ async def quickstart_module(
         The imported quickstart module and a Litestar app rebound to the isolated test database.
     """
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LITESTAR_AUTH_JWT_SECRET", "test-jwt-secret-1234567890-1234567890")
+    monkeypatch.setenv("LITESTAR_AUTH_SESSION_HASH_SECRET", "test-session-secret-1234567890-1234567890")
+    monkeypatch.setenv("LITESTAR_AUTH_CSRF_SECRET", "test_CSRF-9fG2!xQ7#nM4$vB8@kL6%pR3&wT5")
     monkeypatch.setenv("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET", "fedcba9876543210" * 4)
     monkeypatch.setenv("LITESTAR_AUTH_VERIFY_TOKEN_SECRET", "0123456789abcdef" * 4)
     sys.modules.pop(MODULE_NAME, None)
     monkeypatch.setitem(sys.modules, "aiosqlite", build_fake_aiosqlite_module())
 
-    with pytest.warns(SecurityWarning, match="process-local in-memory denylist"):
-        module = importlib.import_module(MODULE_NAME)
+    module = importlib.import_module(MODULE_NAME)
 
     database_path = tmp_path / "quickstart.db"
 
@@ -61,8 +60,7 @@ async def quickstart_module(
     )
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     config = replace(module.config, session_maker=session_maker)
-    with pytest.warns(SecurityWarning, match="process-local in-memory denylist"):
-        app = module.Litestar(route_handlers=[module.protected], plugins=[module.LitestarAuth(config)])
+    app = module.Litestar(route_handlers=[module.protected], plugins=[module.LitestarAuth(config)])
 
     module.UserManager.verification_tokens.clear()
     async with engine.begin() as connection:
@@ -87,10 +85,15 @@ async def test_quickstart_example_register_verify_login_and_hits_protected_route
         test_client = client
         email = "quickstart@example.com"
         password = "correct horse battery staple"
+        csrf_response = await test_client.get("/protected")
+        csrf_token = csrf_response.cookies.get("litestar_auth_csrf")
+        assert csrf_token is not None
+        csrf_headers = {"X-CSRF-Token": csrf_token}
 
         register_response = await test_client.post(
             "/auth/register",
             json={"email": email, "password": password},
+            headers=csrf_headers,
         )
         assert register_response.status_code == HTTP_CREATED
         assert register_response.json()["email"] == email
@@ -99,6 +102,7 @@ async def test_quickstart_example_register_verify_login_and_hits_protected_route
         verify_response = await test_client.post(
             "/auth/verify",
             json={"token": module.UserManager.verification_tokens[email]},
+            headers=csrf_headers,
         )
         assert verify_response.status_code == HTTP_OK
         assert verify_response.json()["is_verified"] is True
@@ -106,83 +110,24 @@ async def test_quickstart_example_register_verify_login_and_hits_protected_route
         login_response = await test_client.post(
             "/auth/login",
             json={"identifier": email, "password": password},
+            headers=csrf_headers,
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         protected_response = await test_client.get(
             "/protected",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert protected_response.status_code == HTTP_OK
         assert protected_response.json() == {"email": email}
 
 
-def test_api_key_error_codes_are_documented() -> None:
-    """Every API-key error code is present in the public error-code reference."""
-    errors_doc = (REPO_ROOT / "docs/errors.md").read_text(encoding="utf-8")
+@pytest.fixture
+def test_client_base_url() -> str:
+    """Use HTTPS so the documented secure session cookie is exercised.
 
-    for code in (
-        "API_KEY_INVALID",
-        "API_KEY_REVOKED",
-        "API_KEY_EXPIRED",
-        "API_KEY_SCOPE_DENIED",
-        "API_KEY_LIMIT_REACHED",
-        "API_KEY_SIGNATURE_INVALID",
-        "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
-        "API_KEY_SIGNATURE_NONCE_REPLAY",
-    ):
-        assert f"`{code}`" in errors_doc
-
-
-def test_api_key_public_symbols_are_documented() -> None:
-    """The public API-key surface is discoverable from guide or API docs."""
-    docs_text = "\n".join(
-        (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-        for relative_path in (
-            "docs/configuration/api_keys.md",
-            "docs/guides/api_keys.md",
-            "docs/cookbook/api_keys.md",
-            "docs/api/authentication.md",
-            "docs/api/transports.md",
-            "docs/api/strategies.md",
-            "docs/api/guards.md",
-            "docs/api/schemas.md",
-            "docs/api/plugin.md",
-            "docs/api/models.md",
-            "docs/api/db.md",
-            "docs/api/controllers.md",
-            "docs/api/contrib_redis.md",
-        )
-    )
-
-    for symbol in (
-        "ApiKeyConfig",
-        "ApiKeyTransport",
-        "ApiKeyStrategy",
-        "ApiKeyStrategyConfig",
-        "ApiKeyContext",
-        "ApiKeyAuthenticationResult",
-        "ApiKeyCreateRequest",
-        "ApiKeyCreateResponse",
-        "ApiKeyUpdateRequest",
-        "ApiKeyRead",
-        "ApiKeyListResponse",
-        "ApiKeysControllerConfig",
-        "create_api_keys_controllers",
-        "requires_api_key",
-        "has_scope",
-        "has_any_scope",
-        "requires_password_session",
-        "ApiKey",
-        "ApiKeyMixin",
-        "ApiKeyData",
-        "BaseApiKeyStore",
-        "SQLAlchemyApiKeyStore",
-        "InMemoryApiKeyNonceStore",
-        "RedisApiKeyNonceStore",
-        "apiKeyAuth",
-        "apiKeyHmacAuth",
-        "LSA1-HMAC-SHA256",
-    ):
-        assert symbol in docs_text
+    Returns:
+        HTTPS test origin.
+    """
+    return "https://testserver.local"

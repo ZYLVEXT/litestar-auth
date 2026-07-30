@@ -15,7 +15,7 @@ from sqlalchemy import select
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import create_auth_controller
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -157,6 +157,11 @@ def _token_digest(token: str) -> str:
     return hmac.new(_TOKEN_HASH_SECRET.encode(), token.encode(), hashlib.sha256).hexdigest()
 
 
+def _refresh_headers(token: str) -> dict[str, str]:
+    """Return the dedicated refresh-cookie header."""
+    return {"Cookie": f"litestar_auth_refresh={token}"}
+
+
 def build_app(
     session: Session,
     *,
@@ -178,7 +183,7 @@ def build_app(
     )
     backend = AuthenticationBackend[User, UUID](
         name="db-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     user_manager = BaseUserManager[User, UUID](
@@ -221,14 +226,13 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     )
 
     assert login_response.status_code == HTTP_CREATED
-    login_payload = login_response.json()
-    assert login_payload["token_type"] == "bearer"
-    assert isinstance(login_payload["access_token"], str)
-    assert isinstance(login_payload["refresh_token"], str)
-
-    first_refresh_token = login_payload["refresh_token"]
+    assert login_response.json() is None
+    access_token = login_response.cookies.get("litestar_auth")
+    first_refresh_token = login_response.cookies.get("litestar_auth_refresh")
+    assert isinstance(access_token, str)
+    assert isinstance(first_refresh_token, str)
     first_refresh_digest = _token_digest(first_refresh_token)
-    access_digest = _token_digest(login_payload["access_token"])
+    access_digest = _token_digest(access_token)
     persisted_login_refresh_token = session.scalar(
         select(RefreshToken).where(RefreshToken.token == first_refresh_digest),
     )
@@ -248,21 +252,23 @@ async def test_login_and_refresh_rotate_refresh_tokens(
 
     refresh_response = await test_client.post(
         "/auth/refresh",
-        json={"refresh_token": first_refresh_token},
-        headers={"User-Agent": "LitestarAuth Refresh Test/2.0"},
+        headers={
+            **_refresh_headers(first_refresh_token),
+            "User-Agent": "LitestarAuth Refresh Test/2.0",
+        },
     )
 
     assert refresh_response.status_code == HTTP_CREATED
-    refresh_payload = refresh_response.json()
-    assert refresh_payload["token_type"] == "bearer"
-    assert isinstance(refresh_payload["access_token"], str)
-    assert isinstance(refresh_payload["refresh_token"], str)
-    assert refresh_payload["refresh_token"] != first_refresh_token
+    assert refresh_response.json() is None
+    rotated_refresh_token = refresh_response.cookies.get("litestar_auth_refresh")
+    assert isinstance(refresh_response.cookies.get("litestar_auth"), str)
+    assert isinstance(rotated_refresh_token, str)
+    assert rotated_refresh_token != first_refresh_token
 
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == first_refresh_digest)) is None
     rotated_persisted_refresh_token = session.scalar(
         select(RefreshToken).where(
-            RefreshToken.token == _token_digest(refresh_payload["refresh_token"]),
+            RefreshToken.token == _token_digest(rotated_refresh_token),
         ),
     )
     assert rotated_persisted_refresh_token is not None
@@ -278,7 +284,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert consumed_digest is not None
     assert consumed_digest.session_id == login_session_id
 
-    replay_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
+    replay_response = await test_client.post("/auth/refresh", headers=_refresh_headers(first_refresh_token))
 
     assert replay_response.status_code == HTTP_BAD_REQUEST
     replay_payload = replay_response.json()
@@ -297,7 +303,8 @@ async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
 
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.cookies.get("litestar_auth_refresh")
+        assert isinstance(refresh_token, str)
         persisted_refresh_token = session.scalar(
             select(RefreshToken).where(
                 RefreshToken.token == _token_digest(refresh_token),
@@ -307,7 +314,7 @@ async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
         persisted_refresh_token.created_at = datetime.now(tz=UTC) - timedelta(seconds=5)
         session.commit()
 
-        refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        refresh_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
 
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     payload = refresh_response.json()
@@ -325,14 +332,15 @@ async def test_refresh_enforces_inactive_user_policy(client: tuple[AsyncTestClie
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     assert login_response.status_code == HTTP_CREATED
-    refresh_token = login_response.json()["refresh_token"]
+    refresh_token = login_response.cookies.get("litestar_auth_refresh")
+    assert isinstance(refresh_token, str)
 
     user = session.scalar(select(User).where(User.email == "user@example.com"))
     assert user is not None
     user.is_active = False
     session.commit()
 
-    refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    refresh_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
 
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     payload = refresh_response.json()
@@ -349,14 +357,15 @@ async def test_refresh_enforces_verified_user_policy(session: Session) -> None:
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.cookies.get("litestar_auth_refresh")
+        assert isinstance(refresh_token, str)
 
         user = session.scalar(select(User).where(User.email == "user@example.com"))
         assert user is not None
         user.is_verified = False
         session.commit()
 
-        refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        refresh_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
 
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     payload = refresh_response.json()
@@ -373,15 +382,15 @@ async def test_refresh_rate_limit_is_optional_and_valid_requests_still_succeed(s
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.cookies.get("litestar_auth_refresh")
+        assert isinstance(refresh_token, str)
 
-        refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        refresh_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
 
     assert refresh_response.status_code == HTTP_CREATED
-    refresh_payload = refresh_response.json()
-    assert refresh_payload["token_type"] == "bearer"
-    assert isinstance(refresh_payload["access_token"], str)
-    assert isinstance(refresh_payload["refresh_token"], str)
+    assert refresh_response.json() is None
+    assert isinstance(refresh_response.cookies.get("litestar_auth"), str)
+    assert isinstance(refresh_response.cookies.get("litestar_auth_refresh"), str)
 
 
 async def test_refresh_rate_limit_returns_429_after_repeated_invalid_attempts(session: Session) -> None:
@@ -396,9 +405,9 @@ async def test_refresh_rate_limit_returns_429_after_repeated_invalid_attempts(se
     app = build_app(session, rate_limit_config=rate_limit_config)
 
     async with AsyncTestClient(app=app) as test_client:
-        first_response = await test_client.post("/auth/refresh", json={"refresh_token": "not-a-valid-token"})
-        second_response = await test_client.post("/auth/refresh", json={"refresh_token": "still-not-valid"})
-        blocked_response = await test_client.post("/auth/refresh", json={"refresh_token": "another-invalid-token"})
+        first_response = await test_client.post("/auth/refresh", headers=_refresh_headers("not-a-valid-token"))
+        second_response = await test_client.post("/auth/refresh", headers=_refresh_headers("still-not-valid"))
+        blocked_response = await test_client.post("/auth/refresh", headers=_refresh_headers("another-invalid-token"))
 
     assert first_response.status_code == HTTP_BAD_REQUEST
     assert second_response.status_code == HTTP_BAD_REQUEST
@@ -423,16 +432,18 @@ async def test_refresh_rate_limit_resets_after_success(session: Session) -> None
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.cookies.get("litestar_auth_refresh")
+        assert isinstance(refresh_token, str)
 
-        invalid_response = await test_client.post("/auth/refresh", json={"refresh_token": "not-a-valid-token"})
-        success_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        invalid_response = await test_client.post("/auth/refresh", headers=_refresh_headers("not-a-valid-token"))
+        success_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
         second_login_response = await test_client.post(
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        second_refresh_token = second_login_response.json()["refresh_token"]
-        post_reset_response = await test_client.post("/auth/refresh", json={"refresh_token": second_refresh_token})
+        second_refresh_token = second_login_response.cookies.get("litestar_auth_refresh")
+        assert isinstance(second_refresh_token, str)
+        post_reset_response = await test_client.post("/auth/refresh", headers=_refresh_headers(second_refresh_token))
 
     assert invalid_response.status_code == HTTP_BAD_REQUEST
     assert success_response.status_code == HTTP_CREATED

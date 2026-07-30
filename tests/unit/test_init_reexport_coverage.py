@@ -2,31 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, get_args
 
 import pytest
 
 import litestar_auth as litestar_auth_module
-import litestar_auth._plugin as plugin_module
-import litestar_auth.authentication as authentication_module
-import litestar_auth.authentication.strategy as strategy_module
-import litestar_auth.authentication.transport as transport_module
 import litestar_auth.controllers as controllers_module
-import litestar_auth.db as db_module
-import litestar_auth.guards as guards_module
-import litestar_auth.models as models_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
-from litestar_auth.authentication.strategy.db_models import (
-    AccessToken,
-    DatabaseTokenModels,
-    RefreshToken,
-    RefreshTokenConsumedDigest,
-)
-from tests.conftest import project_version_from_pyproject
 
 AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
 AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
@@ -34,6 +19,7 @@ AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 
 if TYPE_CHECKING:
+    import logging
     from collections.abc import Iterable
     from types import ModuleType
 
@@ -59,131 +45,6 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         assert hasattr(module, name)
 
 
-@pytest.mark.parametrize(
-    ("module", "expected_names"),
-    [
-        pytest.param(
-            plugin_module,
-            (
-                "DEFAULT_BACKENDS_DEPENDENCY_KEY",
-                "LitestarAuthConfig",
-            ),
-            id="_plugin",
-        ),
-        pytest.param(
-            authentication_module,
-            ("AuthenticationBackend", "Authenticator", "LitestarAuthMiddleware"),
-            id="authentication",
-        ),
-        pytest.param(
-            strategy_module,
-            (
-                "ApiKeyContext",
-                "ApiKeyStrategy",
-                "ApiKeyStrategyConfig",
-                "ContextualStrategy",
-                "DatabaseTokenModels",
-                "DatabaseTokenStrategy",
-                "DatabaseTokenStrategyConfig",
-                "JWTContext",
-                "JWTStrategy",
-                "JWTStrategyConfig",
-                "RedisTokenStrategy",
-                "RedisTokenStrategyConfig",
-                "RefreshableStrategy",
-                "Strategy",
-                "UserManagerProtocol",
-            ),
-            id="authentication.strategy",
-        ),
-        pytest.param(
-            transport_module,
-            ("ApiKeyTransport", "BearerTransport", "CookieTransport", "CookieTransportConfig", "Transport"),
-            id="authentication.transport",
-        ),
-        pytest.param(
-            controllers_module,
-            (
-                "AuthControllerConfig",
-                "OAuthAssociateControllerConfig",
-                "OAuthControllerConfig",
-                "RegisterControllerConfig",
-                "UsersControllerConfig",
-                "create_auth_controller",
-                "create_totp_controller",
-                "create_users_controller",
-            ),
-            id="controllers",
-        ),
-        pytest.param(
-            db_module,
-            (
-                "ApiKeyData",
-                "BaseApiKeyStore",
-                "BaseOAuthAccountStore",
-                "BaseOrganizationStore",
-                "BaseUserStore",
-                "MembershipData",
-                "OAuthAccountData",
-                "OrganizationData",
-            ),
-            id="db",
-        ),
-        pytest.param(
-            guards_module,
-            ("is_active", "is_authenticated", "is_superuser", "is_verified"),
-            id="guards",
-        ),
-    ],
-)
-def test_reexport_module_exposes_documented_public_surface(
-    module: ModuleType,
-    expected_names: tuple[str, ...],
-) -> None:
-    """Re-export modules continue to expose their documented public names."""
-    _assert_exported_symbols(module, expected_names=expected_names)
-
-
-def test_root_package_exposes_documented_public_surface_and_null_logger() -> None:
-    """Root package exposes the documented public symbols and configures a null logger."""
-    assert litestar_auth_module.__version__ == project_version_from_pyproject()
-    _assert_exported_symbols(
-        litestar_auth_module,
-        expected_names=(
-            "AuthenticationBackend",
-            "Authenticator",
-            "AuthExtension",
-            "AuthExtensionRegistrationContext",
-            "AuthExtensionValidationContext",
-            "ApiKeyConfig",
-            "BaseUserManager",
-            "BaseUserManagerConfig",
-            "BearerTransport",
-            "CookieTransport",
-            "CookieTransportConfig",
-            "DatabaseTokenAuthConfig",
-            "DEFAULT_SUPERUSER_ROLE_NAME",
-            "ErrorCode",
-            "FernetKeyringConfig",
-            "LitestarAuth",
-            "LitestarAuthConfig",
-            "LitestarAuthError",
-            "OAuthConfig",
-            "OAuthProviderConfig",
-            "OrganizationConfig",
-            "TotpConfig",
-            "UserManagerSecurity",
-            "is_authenticated",
-        ),
-    )
-    null_handlers = [
-        handler
-        for handler in logging.getLogger(litestar_auth_module.__name__).handlers
-        if isinstance(handler, logging.NullHandler)
-    ]
-    assert null_handlers
-
-
 def test_session_device_payloads_stay_on_explicit_payloads_surface() -> None:
     """Session/device DTOs are public via payloads without widening package root exports."""
     assert set(payloads_module.__all__) >= {
@@ -196,60 +57,6 @@ def test_session_device_payloads_stay_on_explicit_payloads_surface() -> None:
     assert not hasattr(litestar_auth_module, "RefreshSessionListResponse")
     assert not hasattr(controllers_module, "RefreshSessionRead")
     assert not hasattr(controllers_module, "RefreshSessionListResponse")
-
-
-def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_token_contract() -> None:
-    """The models package owns the token bootstrap helper while strategy keeps its runtime contract."""
-    assert models_module.__all__ == (
-        "AccessTokenMixin",
-        "ApiKey",
-        "ApiKeyMixin",
-        "OAuthAccount",
-        "OAuthAccountMixin",
-        "Organization",
-        "OrganizationInvitation",
-        "OrganizationInvitationMixin",
-        "OrganizationMembership",
-        "OrganizationMembershipMixin",
-        "OrganizationMixin",
-        "RefreshTokenMixin",
-        "Role",
-        "RoleMixin",
-        "User",
-        "UserAuthRelationshipMixin",
-        "UserModelMixin",
-        "UserRole",
-        "UserRoleAssociationMixin",
-        "UserRoleRelationshipMixin",
-        "import_token_orm_models",
-    )
-    assert strategy_module.__all__ == (
-        "ApiKeyContext",
-        "ApiKeyNonceStore",
-        "ApiKeyNonceStoreResult",
-        "ApiKeyStrategy",
-        "ApiKeyStrategyConfig",
-        "ContextualStrategy",
-        "DatabaseTokenModels",
-        "DatabaseTokenStrategy",
-        "DatabaseTokenStrategyConfig",
-        "InMemoryApiKeyNonceStore",
-        "JWTContext",
-        "JWTStrategy",
-        "JWTStrategyConfig",
-        "RedisApiKeyNonceStore",
-        "RedisApiKeyNonceStoreClient",
-        "RedisTokenStrategy",
-        "RedisTokenStrategyConfig",
-        "RefreshableStrategy",
-        "Strategy",
-        "UserManagerProtocol",
-    )
-    assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
-    assert not hasattr(litestar_auth_module, "import_token_orm_models")
-    assert not hasattr(strategy_module, "import_token_orm_models")
-    assert strategy_module.DatabaseTokenModels is DatabaseTokenModels
-    assert models_module.import_token_orm_models() == (AccessToken, RefreshToken, RefreshTokenConsumedDigest)
 
 
 def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, patch
@@ -18,15 +17,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
-from litestar_auth.db import ApiKeyData, BaseApiKeyStore, BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
+from litestar_auth.authentication.strategy.db_models import AccessToken
+from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.db._repositories import _build_oauth_repository, _build_user_load, _build_user_repository
-from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore, SQLAlchemyUserDatabase
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError, UserAlreadyExistsError
 from litestar_auth.models import (
     AccessTokenMixin,
-    ApiKey,
-    ApiKeyMixin,
     OAuthAccount,
     OAuthAccountMixin,
     RefreshTokenMixin,
@@ -111,7 +108,6 @@ class ConfiguredUser(UserModelMixin, UserAuthRelationshipMixin, CustomUUIDBase):
     __tablename__ = "configured_user"
 
     auth_access_token_model = "ConfiguredAccessToken"
-    auth_api_key_model = "ConfiguredApiKey"
     auth_refresh_token_model = "ConfiguredRefreshToken"
     auth_oauth_account_model = "ConfiguredOAuthAccount"
     auth_token_relationship_lazy = "noload"
@@ -123,15 +119,6 @@ class ConfiguredAccessToken(AccessTokenMixin, CustomAuthBase):
     """Access-token model bound to the configured relationship-override user."""
 
     __tablename__ = "configured_access_token"
-
-    auth_user_model = "ConfiguredUser"
-    auth_user_table = "configured_user"
-
-
-class ConfiguredApiKey(ApiKeyMixin, CustomUUIDBase):
-    """API-key model bound to the configured relationship-override user."""
-
-    __tablename__ = "configured_api_key"
 
     auth_user_model = "ConfiguredUser"
     auth_user_table = "configured_user"
@@ -349,31 +336,6 @@ def test_build_user_load_returns_empty_tuple_for_non_inspectable_models() -> Non
     assert _build_user_load(cast("Any", PlainUser)) == ()
 
 
-def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable() -> None:
-    """Custom relationship overrides keep inverse mapper wiring intact while exposing explicit relationship options."""
-    configured_relationships = inspect(ConfiguredUser).relationships
-
-    assert sorted(configured_relationships.keys()) == ["access_tokens", "api_keys", "oauth_accounts", "refresh_tokens"]
-    assert configured_relationships["access_tokens"].mapper.class_ is ConfiguredAccessToken
-    assert configured_relationships["access_tokens"].lazy == "noload"
-    assert configured_relationships["access_tokens"]._user_defined_foreign_keys == set()
-    assert configured_relationships["api_keys"].mapper.class_ is ConfiguredApiKey
-    assert configured_relationships["api_keys"].lazy == "noload"
-    assert configured_relationships["api_keys"]._user_defined_foreign_keys == set()
-    assert configured_relationships["refresh_tokens"].mapper.class_ is ConfiguredRefreshToken
-    assert configured_relationships["refresh_tokens"].lazy == "noload"
-    assert configured_relationships["refresh_tokens"]._user_defined_foreign_keys == set()
-    assert configured_relationships["oauth_accounts"].mapper.class_ is ConfiguredOAuthAccount
-    assert configured_relationships["oauth_accounts"].lazy == "selectin"
-    assert configured_relationships["oauth_accounts"]._user_defined_foreign_keys == {
-        ConfiguredOAuthAccount.__table__.c.user_id,
-    }
-    assert inspect(ConfiguredAccessToken).relationships["user"].mapper.class_ is ConfiguredUser
-    assert inspect(ConfiguredApiKey).relationships["user"].mapper.class_ is ConfiguredUser
-    assert inspect(ConfiguredRefreshToken).relationships["user"].mapper.class_ is ConfiguredUser
-    assert inspect(ConfiguredOAuthAccount).relationships["user"].mapper.class_ is ConfiguredUser
-
-
 def test_repositories_factory_caches_per_user_model() -> None:
     """The dynamic repository factory returns the same repository class for a given user model."""
     from litestar_auth.db import _repositories  # ruff: ignore[import-outside-top-level]
@@ -485,169 +447,6 @@ async def test_sqlalchemy_user_database_rolls_back_failed_update(session: SASess
         await database.update(user, {"hashed_password": "new-hash"})
 
     rollback.assert_awaited_once()
-
-
-async def test_sqlalchemy_api_key_store_round_trips_bundled_api_key_model(session: SASession) -> None:
-    """The SQLAlchemy API-key store round-trips a bundled API-key row."""
-    user_database = create_database(session)
-    user = await user_database.create(
-        {
-            "email": "api-key-integration@example.com",
-            "hashed_password": "hashed-password",
-        },
-    )
-    store = SQLAlchemyApiKeyStore(session=cast("AsyncSession", AsyncSessionAdapter(session)), api_key_model=ApiKey)
-    expires_at = datetime.now(tz=UTC) + timedelta(days=1)
-
-    created_api_key = await store.create(
-        ApiKeyData(
-            key_id="akid_integration",
-            user_id=user.id,
-            hashed_secret=b"integration-secret-digest",
-            encrypted_secret=None,
-            name="Integration",
-            scopes=["read"],
-            prefix_env="prod",
-            signing_required=False,
-            expires_at=expires_at,
-            created_via="integration-test",
-            client_metadata={"user_agent": "Integration Test/1.0"},
-        ),
-    )
-
-    assert isinstance(store, BaseApiKeyStore)
-    resolved = await store.get_by_key_id("akid_integration")
-    assert resolved is not None
-    assert resolved.id == created_api_key.id
-    assert resolved.user_id == user.id
-    assert resolved.hashed_secret == b"integration-secret-digest"
-    assert resolved.encrypted_secret is None
-    assert resolved.expires_at == expires_at.replace(tzinfo=None)
-    assert resolved.client_metadata == {"user_agent": "Integration Test/1.0"}
-    assert await store.list_for_user(user.id) == [resolved]
-
-
-def test_bundled_user_owned_foreign_keys_declare_ondelete_cascade() -> None:
-    """Bundled per-user dependent tables cascade when a user row is hard-deleted."""
-    for model in (AccessToken, RefreshToken, ApiKey, OAuthAccount, UserRole):
-        user_id_column = inspect(model).columns["user_id"]
-        foreign_key = next(iter(user_id_column.foreign_keys))
-        assert foreign_key.ondelete == "CASCADE"
-
-
-async def test_sqlalchemy_api_key_store_replaces_encrypted_secret_without_metadata_drift(
-    session: SASession,
-) -> None:
-    """API-key signing-secret rotation changes only the targeted encrypted secret."""
-    user_database = create_database(session)
-    owner = await user_database.create(
-        {
-            "email": "api-key-rotation-owner@example.com",
-            "hashed_password": "hashed-password",
-        },
-    )
-    other_owner = await user_database.create(
-        {
-            "email": "api-key-rotation-other@example.com",
-            "hashed_password": "hashed-password",
-        },
-    )
-    store = SQLAlchemyApiKeyStore(session=cast("AsyncSession", AsyncSessionAdapter(session)), api_key_model=ApiKey)
-    expires_at = datetime.now(tz=UTC) + timedelta(days=30)
-    last_used_at = datetime.now(tz=UTC) - timedelta(minutes=5)
-    revoked_at = datetime.now(tz=UTC) - timedelta(minutes=1)
-
-    target = await store.create(
-        ApiKeyData(
-            key_id="akid_rotation_target",
-            user_id=owner.id,
-            hashed_secret=b"target-digest",
-            encrypted_secret=b"fernet:v1:old:target-ciphertext",
-            name="Target signing key",
-            scopes=["read", "write"],
-            prefix_env="prod",
-            signing_required=True,
-            expires_at=expires_at,
-            created_via="integration-test",
-            client_metadata={"user_agent": "Rotation Test/1.0"},
-        ),
-    )
-    target.last_used_at = last_used_at
-    target.revoked_at = revoked_at
-    bearer = await store.create(
-        ApiKeyData(
-            key_id="akid_rotation_bearer",
-            user_id=owner.id,
-            hashed_secret=b"bearer-digest",
-            encrypted_secret=None,
-            name="Bearer key",
-            scopes=["read"],
-            prefix_env="prod",
-            signing_required=False,
-            expires_at=None,
-            created_via="integration-test",
-            client_metadata=None,
-        ),
-    )
-    other_signing = await store.create(
-        ApiKeyData(
-            key_id="akid_rotation_other",
-            user_id=other_owner.id,
-            hashed_secret=b"other-digest",
-            encrypted_secret=b"fernet:v1:old:other-ciphertext",
-            name="Other signing key",
-            scopes=["read"],
-            prefix_env="prod",
-            signing_required=True,
-            expires_at=None,
-            created_via="integration-test",
-            client_metadata=None,
-        ),
-    )
-    session.commit()
-    before = {
-        "user_id": target.user_id,
-        "hashed_secret": target.hashed_secret,
-        "name": target.name,
-        "scopes": list(target.scopes),
-        "prefix_env": target.prefix_env,
-        "signing_required": target.signing_required,
-        "expires_at": target.expires_at,
-        "last_used_at": target.last_used_at,
-        "created_at": target.created_at,
-        "revoked_at": target.revoked_at,
-        "created_via": target.created_via,
-        "client_metadata": dict(target.client_metadata or {}),
-    }
-
-    replaced = await store.replace_signing_key_encrypted_secret(
-        target.key_id,
-        encrypted_secret=b"fernet:v1:current:target-ciphertext",
-    )
-
-    assert replaced is not None
-    assert replaced.id == target.id
-    assert replaced.encrypted_secret == b"fernet:v1:current:target-ciphertext"
-    assert {
-        "user_id": replaced.user_id,
-        "hashed_secret": replaced.hashed_secret,
-        "name": replaced.name,
-        "scopes": list(replaced.scopes),
-        "prefix_env": replaced.prefix_env,
-        "signing_required": replaced.signing_required,
-        "expires_at": replaced.expires_at,
-        "last_used_at": replaced.last_used_at,
-        "created_at": replaced.created_at,
-        "revoked_at": replaced.revoked_at,
-        "created_via": replaced.created_via,
-        "client_metadata": dict(replaced.client_metadata or {}),
-    } == before
-    assert bearer.encrypted_secret is None
-    assert other_signing.encrypted_secret == b"fernet:v1:old:other-ciphertext"
-    assert (
-        await store.replace_signing_key_encrypted_secret(bearer.key_id, encrypted_secret=b"fernet:v1:current:bearer")
-        is None
-    )
 
 
 async def test_sqlalchemy_user_database_round_trips_recovery_code_hashes(session: SASession) -> None:

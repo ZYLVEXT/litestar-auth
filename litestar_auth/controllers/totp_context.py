@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 
     from litestar_auth._secrets_at_rest import FernetKeyring
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
     from litestar_auth.authentication.strategy.base import RefreshableStrategy
-    from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
 

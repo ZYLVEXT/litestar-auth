@@ -1,187 +1,82 @@
-# litestar-auth
+# litestar-auth 7
 
-`litestar-auth` is a production-focused authentication and authorization library for
-[Litestar](https://litestar.dev/). It gives Litestar apps a native plugin for
-registration, login, email verification, password reset, route guards, and optional
-OAuth, Redis-backed features, and TOTP without forcing you to rebuild security-critical
-flows from scratch.
+Version 7 is a coordinated authentication stack for Python 3.12–3.14:
 
-[![Tests](https://github.com/ZYLVEXT/litestar-auth/actions/workflows/1_test.yml/badge.svg?branch=main)](https://github.com/ZYLVEXT/litestar-auth/actions/workflows/1_test.yml)
-[![Coverage](https://codecov.io/gh/ZYLVEXT/litestar-auth/branch/main/graph/badge.svg)](https://codecov.io/gh/ZYLVEXT/litestar-auth)
-[![Downloads](https://static.pepy.tech/personalized-badge/litestar-auth?period=month&units=international_system&left_color=grey&right_color=green&left_text=downloads/month)](https://www.pepy.tech/projects/litestar-auth)
-[![PyPI](https://img.shields.io/pypi/v/litestar-auth.svg?label=PyPI)](https://pypi.org/project/litestar-auth)
-[![Python versions](https://img.shields.io/pypi/pyversions/litestar-auth.svg)](https://pypi.org/project/litestar-auth)
-[![License](https://img.shields.io/github/license/ZYLVEXT/litestar-auth.svg)](https://github.com/ZYLVEXT/litestar-auth/blob/main/LICENSE)
-[![Docs](https://img.shields.io/badge/docs-online-green.svg)](https://zylvext.github.io/litestar-auth/)
+- `authweave-core`: dependency-light principal, evidence, decision, routing, and coordinator contracts.
+- `litestar-auth`: modern human authentication for Litestar through one typed, cookie-based
+  server-side session pipeline.
+- `authweave-workload`: framework-neutral X.509 workload lifecycle, direct mTLS, and external
+  certificate-bound JWT resource-server profiles.
 
-Documentation: <https://zylvext.github.io/litestar-auth/>
+The human product supports registration, verification, password reset, login/logout, rotating
+database or Redis sessions, CSRF-safe cookies, TOTP, OAuth Authorization Code + PKCE, roles,
+permissions, organizations, and session/device management. Version 7 deliberately has no bearer
+login profile, user-owned shared-secret credentials, proprietary request signing, deprecated
+aliases, or compatibility execution paths.
 
-## Quick peek
-
-This is the same `app.py` used in the
-[Quickstart](https://zylvext.github.io/litestar-auth/quickstart/). The quickstart page adds
-the SQLite table bootstrap and the register/verify/login request flow. To run this exact
-SQLite demo locally, install `aiosqlite` alongside `litestar-auth`.
+## Minimal human configuration
 
 ```python
-"""Minimal Litestar auth quickstart app mirrored in docs/quickstart.md."""
-
-from __future__ import annotations
-
-import os
-from datetime import timedelta
-from typing import Any
 from uuid import UUID
 
-from litestar import Litestar, Request, get
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from litestar import Litestar
+from litestar_auth import AuthenticationBackend, LitestarAuth, LitestarAuthConfig
+from litestar_auth.authentication.strategy import RedisTokenStrategy
+from litestar_auth.authentication.transport import CookieTransport
 
-from litestar_auth import (
-    AuthenticationBackend,
-    BaseUserManager,
-    BearerTransport,
-    LitestarAuth,
-    LitestarAuthConfig,
-    UserManagerSecurity,
-    is_authenticated,
-)
-from litestar_auth.authentication.strategy import JWTStrategy
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
-from litestar_auth.models import User
-
-DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
-JWT_SECRET = os.environ["LITESTAR_AUTH_JWT_SECRET"]
-RESET_PASSWORD_TOKEN_SECRET = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
-VERIFY_TOKEN_SECRET = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
-
-engine = create_async_engine(DATABASE_URL, echo=False)
-session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-
-class UserManager(BaseUserManager[User, UUID]):
-    """Print verification tokens so the quickstart can finish without email infrastructure."""
-
-    verification_tokens: dict[str, str] = {}
-
-    async def on_after_register(self, user: User, token: str) -> None:
-        self.verification_tokens[user.email] = token
-        print(f"verification token for {user.email}: {token}")  # noqa: T201
-
-
-@get("/protected", guards=[is_authenticated])
-async def protected(request: Request[User, Any, Any]) -> dict[str, str]:
-    user = request.user
-    assert user is not None
-    return {"email": user.email}
-
-
-backend = AuthenticationBackend[User, UUID](
-    name="bearer",
-    transport=BearerTransport(),
-    strategy=JWTStrategy[User, UUID](
-        secret=JWT_SECRET,
-        lifetime=timedelta(minutes=15),
+backend = AuthenticationBackend(
+    name="human-session",
+    transport=CookieTransport(),
+    strategy=RedisTokenStrategy(
+        redis=redis_client,
+        token_hash_secret=session_digest_secret,
         subject_decoder=UUID,
-        allow_inmemory_denylist=True,
     ),
 )
 
-config = LitestarAuthConfig[User, UUID](
-    backends=(backend,),
-    session_maker=session_maker,
-    user_model=User,
-    user_manager_class=UserManager,
-    user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
-    user_manager_security=UserManagerSecurity(
-        verification_token_secret=VERIFY_TOKEN_SECRET,
-        reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,
-    ),
-    include_users=False,
+app = Litestar(
+    plugins=[
+        LitestarAuth(
+            LitestarAuthConfig(
+                backends=(backend,),
+                session_maker=session_maker,
+                user_model=User,
+                user_manager_class=UserManager,
+                user_db_factory=user_db_factory,
+                user_manager_security=user_manager_security,
+            ),
+        ),
+    ],
 )
-
-app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])
 ```
 
-## Features
+Database sessions use `DatabaseTokenStrategy` instead. Both implementations issue opaque access
+and refresh tokens, rotate refresh tokens, revoke replayed chains, and expose safe session metadata.
 
-- Litestar-native plugin setup through `LitestarAuthConfig(...)` and `LitestarAuth(config)`.
-- Registration, login, email verification, password reset, and protected-route guards out of the box.
-- Transport + strategy auth backends, including Bearer or Cookie transports and JWT, database, or Redis token strategies.
-- Opt-in DB-backed session/device routes for listing active refresh sessions and revoking one session
-  or all other sessions without exposing raw tokens or token digests.
-- `BaseUserManager` hooks for integrating email delivery, background jobs, and app-specific lifecycle logic.
-- Bundled SQLAlchemy user model plus `SQLAlchemyUserDatabase` for the default persistence path.
-- Normalized flat-role contract for responses and guards, with a matching `litestar roles` CLI for operator workflows.
-- Optional Redis denylist, rate limiting, OAuth login/account linking, and built-in TOTP support.
-- Typed public APIs and docs aimed at application developers rather than framework internals.
+## Workload authentication
 
-## Install
+Install only the extras used by the application:
 
 ```bash
-uv add litestar-auth
-# or
-pip install litestar-auth
+uv add 'authweave-workload[mtls,jwt,sqlalchemy]'
+# add [litestar] only for the optional Litestar Extension SDK v2 integration
 ```
 
-For the SQLite quick peek and quickstart example, also add `aiosqlite`:
+`WorkloadLifecycleService` creates and disables service applications and principals, registers
+validator-produced opaque public certificate metadata, performs overlapping rotation, and revokes
+credentials. Every mutation requires attributed, correlated same-transaction event recording.
+Private keys are rejected at the package boundary and are never stored. `DirectMTLSProvider` consumes trusted
+TLS peer evidence; `MTLSBoundJWTProvider` accepts only a configured modern asymmetric JWT profile
+whose RFC 8705 thumbprint matches that same peer certificate.
+
+See [the migration guide](docs/migration.md), [security posture](docs/security.md),
+[architecture](docs/architecture.md), and the
+[Docker reference stack](docker/reference/compose.yml). Run the complete reference verification
+with:
 
 ```bash
-uv add litestar-auth aiosqlite
+sh docker/reference/verify.sh
 ```
 
-Install extras only when you need those features:
-
-- `litestar-auth[redis]` for Redis-backed token storage, JWT denylist support, and auth rate limiting.
-- `litestar-auth[oauth]` for OAuth flows via `httpx-oauth` and encrypted provider tokens.
-- `litestar-auth[totp]` for built-in TOTP helpers.
-- `litestar-auth[jwt]` for asymmetric RS*/ES* JWT algorithms (`cryptography`).
-- `litestar-auth[all]` for `redis`, `oauth`, `totp`, and `jwt` together.
-
-## Requirements
-
-- Python 3.12+
-- [Litestar](https://litestar.dev/) ≥ 2.22
-- [Advanced Alchemy](https://docs.advanced-alchemy.dev/) ≥ 1.10
-
-See the [Migration Guide](https://zylvext.github.io/litestar-auth/migration/) for Litestar 2.22 route-parameter conventions and Advanced Alchemy 1.10 repository API changes.
-
-Password hashing defaults are now Argon2-only. Unsupported stored password hashes fail closed
-under the library default, so rotate or reset those credentials before upgrading; see the
-[Migration Guide](https://zylvext.github.io/litestar-auth/migration/).
-
-## Runnable examples
-
-This repository ships small Litestar apps under [`examples/`](examples/__init__.py) (not published on PyPI).
-Each package documents its own environment variables; local demos typically set `..._INSECURE=1` as noted there.
-
-Install an ASGI server (for example `uvicorn`), then pick a scenario from the table in [`examples/__init__.py`](examples/__init__.py).
-
-Bearer JWT + TOTP sketch (`demo_totp`):
-
-```bash
-export LITESTAR_AUTH_DEMO_TOTP_INSECURE=1
-uv run uvicorn examples.demo_totp.app:app --host 127.0.0.1 --port 8000
-# curl http://127.0.0.1:8000/health
-# curl -sS -X POST http://127.0.0.1:8000/auth/register \
-#   -H 'Content-Type: application/json' \
-#   -d '{"email":"you@example.com","password":"choose-a-strong-password"}'
-```
-
-Cookie + CSRF flows (`demo_cookie_jwt`, `demo_cookie_jwt_totp`) need a client that keeps cookies and sends `X-CSRF-Token` on unsafe methods after loading `/health`.
-
-## Read more
-
-- [Quickstart](https://zylvext.github.io/litestar-auth/quickstart/): bootstrap SQLite, run the app, and walk through register/verify/login.
-- [Installation](https://zylvext.github.io/litestar-auth/install/): requirements, extras, and typical deployment stacks.
-- [Configuration](https://zylvext.github.io/litestar-auth/configuration/): user model, manager, backends, Redis, OAuth, TOTP, and security knobs.
-- [HTTP API](https://zylvext.github.io/litestar-auth/http_api/): generated routes, including the opt-in DB refresh-session/device management surface.
-- [Security](https://zylvext.github.io/litestar-auth/security/): secure defaults, migration-only flags, and production hardening notes.
-- [Deployment security checklist](https://zylvext.github.io/litestar-auth/deployment/#deployment-security-contract): reverse-proxy trust, cookie transport, and secrets-at-rest preconditions.
-- [Role management CLI](https://zylvext.github.io/litestar-auth/guides/roles_cli/): operator commands for bundled relational roles.
-- [Testing plugin-backed apps](https://zylvext.github.io/litestar-auth/guides/testing/): AsyncTestClient patterns and repo-aligned test advice.
-- [Python API overview](https://zylvext.github.io/litestar-auth/api/package/): stable imports and where advanced submodules live.
-
-## Repository
-
-Contributor setup, verification commands, and docs tooling live in
-[Contributing](https://zylvext.github.io/litestar-auth/contributing/).
+This repository does not implement an OAuth Authorization Server, generic IAM, business
+authorization, DPoP, SPIFFE, opaque-token introspection, or production rollout.

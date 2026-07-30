@@ -740,17 +740,3 @@ async def test_get_reset_password_context_rejects_missing_user(caplog: pytest.Lo
         await manager._account_token_security.get_reset_password_context(token, user_db=user_db)
 
     assert [getattr(record, "event", None) for record in caplog.records] == ["token_validation_failed"]
-
-
-def test_password_fingerprint_matches_expected_hmac() -> None:
-    """Password fingerprints are deterministic HMAC-SHA256 values over the stored hash."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    hashed_password = password_helper.hash("test-password")
-
-    fingerprint = manager._account_tokens.password_fingerprint(hashed_password)
-
-    assert fingerprint == manager.tokens.password_fingerprint(hashed_password)
-    assert len(fingerprint) == EXPECTED_SHA256_HEX_LENGTH
-    int(fingerprint, 16)

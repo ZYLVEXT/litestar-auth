@@ -8,15 +8,12 @@ import warnings
 
 import pytest
 
-import litestar_auth._secret_roles as secret_roles_module
-import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
 import litestar_auth.config as config_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.manager as manager_module
 import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth.exceptions import ConfigurationError
 
-JWT_ACCESS_TOKEN_AUDIENCE = config_module.JWT_ACCESS_TOKEN_AUDIENCE
 MINIMUM_SECRET_ENTROPY_BITS = config_module.MINIMUM_SECRET_ENTROPY_BITS
 MINIMUM_SECRET_LENGTH = config_module.MINIMUM_SECRET_LENGTH
 _MAX_SEQUENTIAL_PAIR_FRACTION = config_module._MAX_SEQUENTIAL_PAIR_FRACTION
@@ -45,37 +42,8 @@ def test_config_defines_canonical_token_audiences() -> None:
     assert VERIFY_TOKEN_AUDIENCE == "litestar-auth:verify"
     assert RESET_PASSWORD_TOKEN_AUDIENCE == "litestar-auth:reset-password"
     assert ORGANIZATION_INVITATION_TOKEN_AUDIENCE == "litestar-auth:organization-invitation"
-    assert JWT_ACCESS_TOKEN_AUDIENCE == "litestar-auth:access"
     assert TOTP_PENDING_AUDIENCE == "litestar-auth:2fa-pending"
     assert TOTP_ENROLL_AUDIENCE == "litestar-auth:2fa-enroll"
-
-
-def test_config_reexports_secret_role_catalog_helpers() -> None:
-    """Secret-role helpers remain available through the historical config module path."""
-    role_values = config_module.SecretRoleValues(
-        verification_token_secret="verify",
-        reset_password_token_secret="reset",
-        login_identifier_telemetry_secret="telemetry",
-        totp_secret_key="totp-key",
-        totp_pending_secret="totp-pending",
-        api_key_hash_secret="api-key-hash",
-        oauth_flow_cookie_secret="oauth-flow",
-    )
-
-    assert config_module.SecretRoleValues is secret_roles_module.SecretRoleValues
-    assert config_module.validate_secret_roles_are_distinct is secret_roles_module.validate_secret_roles_are_distinct
-    assert [role.setting_name for role, _secret in role_values.as_role_pairs()] == [
-        "verification_token_secret",
-        "reset_password_token_secret",
-        "organization_invitation_token_secret",
-        "login_identifier_telemetry_secret",
-        "totp_secret_key",
-        "totp_pending_secret",
-        "totp_recovery_code_lookup_secret",
-        "oauth_flow_cookie_secret",
-        "api_key_hash_secret",
-        "api_key_secret_encryption_keyring",
-    ]
 
 
 @pytest.mark.parametrize(
@@ -93,12 +61,6 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
             "ORGANIZATION_INVITATION_TOKEN_AUDIENCE",
             ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
             id="manager-organization-invitation",
-        ),
-        pytest.param(
-            jwt_strategy_module,
-            "JWT_ACCESS_TOKEN_AUDIENCE",
-            JWT_ACCESS_TOKEN_AUDIENCE,
-            id="jwt-access",
         ),
         pytest.param(totp_flow_module, "TOTP_PENDING_AUDIENCE", TOTP_PENDING_AUDIENCE, id="totp-pending"),
         pytest.param(

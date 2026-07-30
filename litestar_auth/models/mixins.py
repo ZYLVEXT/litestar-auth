@@ -9,7 +9,6 @@ from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from litestar_auth._auth_model_mixins import (
     AccessTokenMixin,
-    ApiKeyMixin,
     OrganizationInvitationMixin,
     OrganizationMembershipMixin,
     OrganizationMixin,
@@ -26,7 +25,6 @@ from litestar_auth.oauth_encryption import register_oauth_model_encryption_event
 
 __all__ = (
     "AccessTokenMixin",
-    "ApiKeyMixin",
     "OAuthAccountMixin",
     "OrganizationInvitationMixin",
     "OrganizationMembershipMixin",

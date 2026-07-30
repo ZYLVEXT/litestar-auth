@@ -23,9 +23,7 @@ import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._plugin.extensions._discovery as extension_discovery_module
 import litestar_auth._plugin.extensions._registry as extension_registry_module
 import litestar_auth._plugin.totp_controller as totp_controller_package
-import litestar_auth.controllers.api_keys as api_keys_controllers_module
 import litestar_auth.extensions as public_extensions
-from litestar_auth._plugin.api_key_controller._extension import _ApiKeyExtension
 from litestar_auth._plugin.extensions import (
     EXTENSION_API_VERSION,
     EXTENSION_ENTRY_POINT_GROUP,
@@ -44,16 +42,14 @@ from litestar_auth._plugin.extensions import (
     validate_extensions,
 )
 from litestar_auth._plugin.features import (
-    ApiKeyConfig,
     OAuthConfig,
     OrganizationConfig,
     TotpConfig,
-    TotpStepUpPolicyMode,
 )
 from litestar_auth._plugin.organization_cli import _OrganizationCliExtension
 from litestar_auth._plugin.totp_controller._extension import _TotpExtension
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.contrib.organization_admin import (
     OrganizationAdminControllerConfig,
@@ -64,22 +60,17 @@ from litestar_auth.contrib.organization_admin import (
 )
 from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
 from litestar_auth.controllers import (
-    ApiKeysControllerConfig,
     AuthControllerConfig,
     OAuthAssociateControllerConfig,
     OAuthControllerConfig,
-    OrganizationControllerConfig,
     RegisterControllerConfig,
     SessionDevicesControllerConfig,
     TotpControllerOptions,
     TotpUserManagerProtocol,
     UsersControllerConfig,
-    backend_supports_organization_tokens,
-    create_api_keys_controllers,
     create_auth_controller,
     create_oauth_associate_controller,
     create_oauth_controller,
-    create_organization_controller,
     create_register_controller,
     create_reset_password_controller,
     create_session_devices_controller,
@@ -98,9 +89,9 @@ from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 from tests.support.extensions import EventSubscriberProbeExtension
 
@@ -114,7 +105,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 PUBLIC_EXTENSION_EXPORTS = (
     "EXTENSION_API_VERSION",
     "EXTENSION_ENTRY_POINT_GROUP",
-    "ApiKeysControllerConfig",
     "AuthBackendsDependency",
     "AuthCliExtension",
     "AuthControllerConfig",
@@ -122,12 +112,15 @@ PUBLIC_EXTENSION_EXPORTS = (
     "AuthExtension",
     "AuthExtensionRegistrationContext",
     "AuthExtensionValidationContext",
+    "AuthenticationContextDependency",
+    "CurrentPrincipalDependency",
+    "ExtensionAuthenticationProviderContribution",
     "ExtensionManagerHookEvent",
     "ExtensionManagerHookSubscriber",
+    "ExtensionTLSEvidenceContribution",
     "OAuthAssociateControllerConfig",
     "OAuthControllerConfig",
     "OrganizationAdminControllerConfig",
-    "OrganizationControllerConfig",
     "OrganizationInvitationControllerConfig",
     "OrganizationStoreDependency",
     "ProviderOAuthControllerConfig",
@@ -139,13 +132,10 @@ PUBLIC_EXTENSION_EXPORTS = (
     "TotpUserManagerProtocol",
     "UserManagerDependency",
     "UsersControllerConfig",
-    "backend_supports_organization_tokens",
-    "create_api_keys_controllers",
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_controller",
     "create_organization_admin_controller",
-    "create_organization_controller",
     "create_organization_invitation_controller",
     "create_provider_oauth_controller",
     "create_register_controller",
@@ -339,11 +329,10 @@ def _raise_factory_error() -> object:
     raise ValueError
 
 
-def _minimal_config(  # ruff: ignore[too-many-arguments] - tests use a compact config factory with feature toggles.
+def _minimal_config(
     *,
     extensions: tuple[AuthExtension, ...] = (),
     auto_discover_extensions: bool = False,
-    api_keys: ApiKeyConfig | None = None,
     organization_config: OrganizationConfig | None = None,
     totp_config: TotpConfig | None = None,
     unsafe_testing: bool = False,
@@ -351,8 +340,8 @@ def _minimal_config(  # ruff: ignore[too-many-arguments] - tests use a compact c
     user_db = InMemoryUserDatabase([])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-extension")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-extension"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -364,11 +353,9 @@ def _minimal_config(  # ruff: ignore[too-many-arguments] - tests use a compact c
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
             organization_invitation_token_secret=ORGANIZATION_INVITATION_SECRET,
-            api_key_hash_secret="1234567890abcdef" * 4,
         ),
         extensions=extensions,
         auto_discover_extensions=auto_discover_extensions,
-        api_keys=ApiKeyConfig() if api_keys is None else api_keys,
         organization_config=OrganizationConfig() if organization_config is None else organization_config,
         totp_config=totp_config,
         unsafe_testing=unsafe_testing,
@@ -391,12 +378,10 @@ def test_auth_extension_contract_is_importable_from_public_surfaces() -> None:
 def test_auth_extension_public_facade_lazily_resolves_documented_helpers() -> None:
     """Extension authors can import stable controller helpers from the public facade."""
     expected_public_helpers = {
-        "ApiKeysControllerConfig": ApiKeysControllerConfig,
         "AuthControllerConfig": AuthControllerConfig,
         "OAuthAssociateControllerConfig": OAuthAssociateControllerConfig,
         "OAuthControllerConfig": OAuthControllerConfig,
         "OrganizationAdminControllerConfig": OrganizationAdminControllerConfig,
-        "OrganizationControllerConfig": OrganizationControllerConfig,
         "OrganizationInvitationControllerConfig": OrganizationInvitationControllerConfig,
         "ProviderOAuthControllerConfig": ProviderOAuthControllerConfig,
         "RegisterControllerConfig": RegisterControllerConfig,
@@ -405,13 +390,10 @@ def test_auth_extension_public_facade_lazily_resolves_documented_helpers() -> No
         "TotpControllerOptions": TotpControllerOptions,
         "TotpUserManagerProtocol": TotpUserManagerProtocol,
         "UsersControllerConfig": UsersControllerConfig,
-        "backend_supports_organization_tokens": backend_supports_organization_tokens,
-        "create_api_keys_controllers": create_api_keys_controllers,
         "create_auth_controller": create_auth_controller,
         "create_oauth_associate_controller": create_oauth_associate_controller,
         "create_oauth_controller": create_oauth_controller,
         "create_organization_admin_controller": create_organization_admin_controller,
-        "create_organization_controller": create_organization_controller,
         "create_organization_invitation_controller": create_organization_invitation_controller,
         "create_provider_oauth_controller": create_provider_oauth_controller,
         "create_register_controller": create_register_controller,
@@ -441,7 +423,7 @@ def test_auth_extension_protocol_exposes_expected_shape() -> None:
     assert name_property.fget is not None
     assert name_property.fget.__annotations__["return"] == "str"
     assert not hasattr(AuthExtension, "enabled")
-    assert EXTENSION_API_VERSION == (1, 0)
+    assert EXTENSION_API_VERSION == (2, 0)
 
     validate_signature = inspect.signature(AuthExtension.validate)
     register_signature = inspect.signature(AuthExtension.register)
@@ -512,7 +494,7 @@ def test_validate_extensions_rejects_incompatible_api_before_app_wiring() -> Non
     app_config = AppConfig(openapi_config=OpenAPIConfig(title="Extension", version="1.0.0"))
     plugin = LitestarAuth(config)
 
-    with pytest.raises(ConfigurationError, match=r"requires extension API 2\.0, but litestar-auth provides 1\.0"):
+    with pytest.raises(ConfigurationError, match=r"requires extension API 3\.0, but litestar-auth provides 2\.0"):
         plugin.on_app_init(app_config)
 
     assert extension.validated is False
@@ -545,7 +527,7 @@ def test_resolve_version_gated_extensions_rejects_incompatible_api_with_existing
     extension = VersionedContributingExtension((EXTENSION_API_VERSION[0] + 1, 0))
     config = _minimal_config(extensions=(extension,))
 
-    with pytest.raises(ConfigurationError, match=r"requires extension API 2\.0, but litestar-auth provides 1\.0"):
+    with pytest.raises(ConfigurationError, match=r"requires extension API 3\.0, but litestar-auth provides 2\.0"):
         extension_registry_module.resolve_version_gated_extensions(config)
 
     assert extension.validated is False
@@ -627,15 +609,14 @@ def test_auto_discover_extensions_appends_entry_points_in_deterministic_order(
     config = _minimal_config(
         extensions=(explicit,),
         auto_discover_extensions=True,
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
     )
 
     extensions = config.resolve_extensions()
 
     assert calls == 1
     assert config.resolve_extensions() is extensions
-    assert tuple(extension.name for extension in extensions) == ("explicit", "api_keys", "alpha", "zeta")
-    assert extensions[2:] == (alpha, zeta)
+    assert tuple(extension.name for extension in extensions) == ("explicit", "alpha", "zeta")
+    assert extensions[1:] == (alpha, zeta)
     assert [record.getMessage() for record in caplog.records if record.name == extension_discovery_module.__name__] == [
         f"Loaded auth extension entry point {EXTENSION_ENTRY_POINT_GROUP}:alpha=example:alpha.",
         f"Loaded auth extension entry point {EXTENSION_ENTRY_POINT_GROUP}:zeta=example:zeta.",
@@ -706,7 +687,7 @@ def test_discovered_incompatible_extension_fails_through_version_gate(
     monkeypatch.setattr(extension_discovery_module.metadata, "entry_points", entry_points)
     config = _minimal_config(auto_discover_extensions=True)
 
-    with pytest.raises(ConfigurationError, match=r"requires extension API 2\.0, but litestar-auth provides 1\.0"):
+    with pytest.raises(ConfigurationError, match=r"requires extension API 3\.0, but litestar-auth provides 2\.0"):
         validate_extensions(config)
 
     assert extension.validated is False
@@ -769,7 +750,7 @@ def test_discovered_malformed_entry_points_fail_closed(
 
 @pytest.mark.parametrize(
     "case_name",
-    ["none", "user", "oauth", "totp", "api_keys", "organization_admin", "disabled"],
+    ["none", "user", "oauth", "totp", "organization_admin", "disabled"],
 )
 def test_resolve_extensions_memoizes_enabled_extension_tuple(case_name: str) -> None:
     """Extension resolution returns the same enabled tuple after first computation."""
@@ -792,9 +773,6 @@ def test_resolve_extensions_memoizes_enabled_extension_tuple(case_name: str) -> 
         case "totp":
             config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4))
             expected_names = ("totp",)
-        case "api_keys":
-            config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
-            expected_names = ("api_keys",)
         case "organization_admin":
             config = _minimal_config(
                 organization_config=OrganizationConfig(
@@ -902,7 +880,6 @@ def test_extension_public_facade_import_does_not_load_heavy_runtime_modules() ->
         "    'litestar_auth.db.sqlalchemy',\n"
         "    'litestar_auth.contrib.role_admin._controller',\n"
         "    'litestar_auth.contrib.organization_admin._controller',\n"
-        "    'litestar_auth.controllers.api_keys',\n"
         "    'litestar_auth.controllers.oauth',\n"
         "    'litestar_auth.controllers.totp',\n"
         "    'litestar_auth.oauth.router',\n"
@@ -959,9 +936,10 @@ def test_external_style_extension_uses_public_facade_without_private_plugin_impo
         "finally:\n"
         "    builtins.__import__ = real_import\n"
         "from litestar.config.app import AppConfig\n"
+        "from fakeredis.aioredis import FakeRedis\n"
         "from litestar_auth.authentication.backend import AuthenticationBackend\n"
-        "from litestar_auth.authentication.strategy.base import Strategy\n"
-        "from litestar_auth.authentication.transport.bearer import BearerTransport\n"
+        "from litestar_auth.authentication.strategy.redis import RedisTokenStrategy\n"
+        "from litestar_auth.authentication.transport.cookie import CookieTransport\n"
         "from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig\n"
         "class UserModel:\n"
         "    email = 'user@example.com'\n"
@@ -969,20 +947,16 @@ def test_external_style_extension_uses_public_facade_without_private_plugin_impo
         "class DummySessionMaker:\n"
         "    def __call__(self) -> object:\n"
         "        return object()\n"
-        "class StaticStrategy(Strategy[UserModel, int]):\n"
-        "    async def read_token(self, token: str | None, user_manager: object) -> UserModel | None:\n"
-        "        return None\n"
-        "    async def write_token(self, user: UserModel) -> str:\n"
-        "        return 'token'\n"
-        "    async def destroy_token(self, token: str, user: UserModel) -> None:\n"
-        "        return None\n"
         "def user_manager_factory(**kwargs: object) -> object:\n"
         "    return object()\n"
         "extension = sample_namespace['extension']\n"
         "backend = AuthenticationBackend(\n"
         "    name='primary',\n"
-        "    transport=BearerTransport(),\n"
-        "    strategy=StaticStrategy(),\n"
+        "    transport=CookieTransport(allow_insecure_cookie_auth=True),\n"
+        "    strategy=RedisTokenStrategy(\n"
+        "        redis=cast(Any, FakeRedis(decode_responses=True)),\n"
+        "        token_hash_secret='external-extension-session-7fA9!qR4#kM2',\n"
+        "    ),\n"
         ")\n"
         "config = LitestarAuthConfig(\n"
         "    backends=[backend],\n"
@@ -1049,6 +1023,7 @@ def test_extension_validation_context_exposes_optional_dependency_helpers(
 
     monkeypatch.setattr(optional_deps_module.importlib, "import_module", import_module)
     context = build_extension_validation_context(_minimal_config())
+    imported.clear()
 
     assert context.require_redis_asyncio(feature_name="extension redis") is sentinel
     assert context.require_cryptography_fernet(install_hint="install cryptography") is sentinel
@@ -1097,22 +1072,11 @@ def test_totp_config_is_normalized_to_internal_extension() -> None:
     assert tuple(extension.name for extension in extensions) == ("totp",)
 
 
-def test_api_key_config_is_normalized_to_internal_extension() -> None:
-    """Enabled API-key management contributes the internal API-key extension."""
-    config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
-
-    extensions = config.resolve_extensions()
-
-    assert config.extensions == ()
-    assert tuple(extension.name for extension in extensions) == ("api_keys",)
-
-
 def test_config_internal_extensions_resolve_in_existing_descriptor_order() -> None:
     """All config-derived internal extensions retain their established order and constructor state."""
     explicit = NamedExtension("explicit")
     config = _minimal_config(
         extensions=(explicit,),
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
         organization_config=OrganizationConfig(
             enabled=True,
             store_factory=cast("Any", lambda _session: object()),
@@ -1135,15 +1099,13 @@ def test_config_internal_extensions_resolve_in_existing_descriptor_order() -> No
         "explicit",
         "oauth",
         "totp",
-        "api_keys",
         "organization_cli",
         "organization_admin",
     )
     assert isinstance(extensions[1], _OAuthExtension)
     assert isinstance(extensions[2], _TotpExtension)
-    assert isinstance(extensions[3], _ApiKeyExtension)
-    assert isinstance(extensions[4], _OrganizationCliExtension)
-    organization_admin = extensions[5]
+    assert isinstance(extensions[3], _OrganizationCliExtension)
+    organization_admin = extensions[4]
     assert isinstance(organization_admin, OrganizationAdminExtension)
     assert organization_admin.include_invitations is True
     assert organization_admin._include_admin_controller is True
@@ -1185,49 +1147,6 @@ def test_organization_flags_resolve_internal_extension_constructor_params(
     assert organization_admin._include_admin_controller is admin_enabled
     assert organization_admin._mark_auth_owned is False
     assert organization_admin._use_plugin_openapi_security is True
-
-
-def test_api_key_config_rejects_explicit_duplicate_extension_name() -> None:
-    """The internal API-key extension reserves the stable api_keys extension name."""
-    config = _minimal_config(
-        extensions=(NamedExtension("api_keys"),),
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
-    )
-
-    with pytest.raises(ValueError, match="Duplicate auth extension names are not allowed: api_keys"):
-        build_extension_validation_context(config)
-
-
-def test_api_key_extension_register_contributes_auth_owned_controllers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The internal API-key extension mounts factory-marked management controllers with plugin options."""
-    config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",), signing_enabled=True))
-    config.users_path = "/members"
-    config.totp_stepup_policy = {"api_keys.create": cast("TotpStepUpPolicyMode", "always")}
-    context = build_extension_registration_context(app_config=AppConfig(), config=config)
-    self_controller = context.mark_auth_route_handler(RouteHandlerSentinel())
-    admin_controller = context.mark_auth_route_handler(RouteHandlerSentinel())
-    captured: dict[str, object] = {}
-
-    def _create_api_keys_controllers(**kwargs: object) -> list[object]:
-        captured.update(kwargs)
-        return [self_controller, admin_controller]
-
-    monkeypatch.setattr(api_keys_controllers_module, "create_api_keys_controllers", _create_api_keys_controllers)
-
-    _ApiKeyExtension().register(context)
-
-    assert context.contributions.controllers == [self_controller, admin_controller]
-    assert context.is_auth_route_handler(self_controller) is True
-    assert context.is_auth_route_handler(admin_controller) is True
-    assert captured == {
-        "id_parser": config.id_parser,
-        "rate_limit_config": config.rate_limit_config,
-        "security": context.security_requirements,
-        "users_path": "/members",
-        "require_step_up_on_create": True,
-        "signing_enabled": True,
-        "totp_stepup_policy": {"api_keys.create": "always"},
-    }
 
 
 def test_totp_config_rejects_explicit_duplicate_extension_name() -> None:
@@ -1538,7 +1457,7 @@ def test_plugin_skips_incompatible_event_subscriber_extensions() -> None:
     config = _minimal_config(extensions=(cast("AuthExtension", extension),))
     plugin = LitestarAuth(config)
 
-    with pytest.raises(ConfigurationError, match=r"requires extension API 2\.0, but litestar-auth provides 1\.0"):
+    with pytest.raises(ConfigurationError, match=r"requires extension API 3\.0, but litestar-auth provides 2\.0"):
         plugin.on_app_init(AppConfig())
 
     assert events == []
@@ -1553,8 +1472,8 @@ def _config_with_event_subscriber(
     user_db = InMemoryUserDatabase(list(users))
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-extension")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-extension-events"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -1566,7 +1485,6 @@ def _config_with_event_subscriber(
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
             organization_invitation_token_secret=ORGANIZATION_INVITATION_SECRET,
-            api_key_hash_secret="1234567890abcdef" * 4,
             id_parser=UUID,
         ),
         extensions=cast("Any", (EventSubscriberProbeExtension(events),)),
@@ -1631,8 +1549,8 @@ async def test_plugin_event_subscriber_receives_redacted_update_payloads() -> No
             "/auth/login",
             json={"identifier": "admin@example.com", "password": "admin-password"},
         )
-        access_token = cast("str", login_response.json()["access_token"])
-        headers = {"Authorization": f"Bearer {access_token}"}
+        access_token = cast("str", login_response.cookies.get("litestar_auth"))
+        headers = {"Cookie": f"litestar_auth={access_token}"}
         password_update_response = await client.patch(
             f"/users/{target_user.id}",
             headers=headers,

@@ -15,9 +15,6 @@ import litestar_auth._schema_fields as schema_fields
 
 type SessionClientMetadataKey = schema_fields.SessionClientMetadataKey
 type SessionClientMetadataValue = schema_fields.SessionClientMetadataValue
-type ApiKeyNameField = schema_fields.ApiKeyNameField
-type ApiKeyScopeField = schema_fields.ApiKeyScopeField
-type ApiKeyIdField = schema_fields.ApiKeyIdField
 
 
 class LoginCredentials(msgspec.Struct, forbid_unknown_fields=True):
@@ -25,18 +22,6 @@ class LoginCredentials(msgspec.Struct, forbid_unknown_fields=True):
 
     identifier: schema_fields.LoginIdentifierField
     password: schema_fields.PasswordField
-
-
-class RefreshTokenRequest(msgspec.Struct, forbid_unknown_fields=True):
-    """Refresh payload accepted by the auth controller."""
-
-    refresh_token: schema_fields.RefreshTokenField
-
-
-class SwitchOrganizationRequest(msgspec.Struct, forbid_unknown_fields=True):
-    """Payload used to activate an organization for a new access token."""
-
-    organization_slug: schema_fields.OrganizationSlugField
 
 
 class RefreshSessionRead(msgspec.Struct):
@@ -59,62 +44,6 @@ class RefreshSessionListResponse(msgspec.Struct):
     """Response returned when listing active refresh sessions for a user."""
 
     sessions: list[RefreshSessionRead]
-
-
-class ApiKeyRead(msgspec.Struct):
-    """Safe API-key metadata returned by API-key management endpoints."""
-
-    key_id: ApiKeyIdField
-    name: str
-    scopes: list[str]
-    prefix_env: str
-    created_at: datetime | None = None
-    expires_at: datetime | None = None
-    last_used_at: datetime | None = None
-    revoked_at: datetime | None = None
-
-
-class ApiKeyListResponse(msgspec.Struct):
-    """Response returned when listing API keys."""
-
-    api_keys: list[ApiKeyRead]
-
-
-class ApiKeyCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
-    """Payload used to create a user-owned API key."""
-
-    name: ApiKeyNameField
-    current_password: schema_fields.PasswordField | None = None
-    totp_code: schema_fields.TotpCodeField | None = None
-    scopes: list[ApiKeyScopeField] = []
-    expires_at: datetime | None = None
-    signing_required: bool = False
-
-
-class ApiKeyAdminCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
-    """Payload used by superusers to create an API key for a path-selected user."""
-
-    name: ApiKeyNameField
-    totp_code: schema_fields.TotpCodeField | None = None
-    scopes: list[ApiKeyScopeField] = []
-    expires_at: datetime | None = None
-    signing_required: bool = False
-
-
-class ApiKeyCreateResponse(msgspec.Struct):
-    """Creation response containing the one-time raw API key."""
-
-    api_key: str
-    key: ApiKeyRead
-
-
-class ApiKeyUpdateRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
-    """Payload used to update mutable API-key metadata."""
-
-    current_password: schema_fields.PasswordField | None = None
-    totp_code: schema_fields.TotpCodeField | None = None
-    name: ApiKeyNameField | None = None
-    scopes: list[ApiKeyScopeField] | None = None
 
 
 class ForgotPassword(msgspec.Struct, forbid_unknown_fields=True):
@@ -219,25 +148,14 @@ class TotpDisableRequest(msgspec.Struct, forbid_unknown_fields=True):
 
 
 __all__ = (
-    "ApiKeyAdminCreateRequest",
-    "ApiKeyCreateRequest",
-    "ApiKeyCreateResponse",
-    "ApiKeyIdField",
-    "ApiKeyListResponse",
-    "ApiKeyNameField",
-    "ApiKeyRead",
-    "ApiKeyScopeField",
-    "ApiKeyUpdateRequest",
     "ForgotPassword",
     "LoginCredentials",
     "RefreshSessionListResponse",
     "RefreshSessionRead",
-    "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
     "SessionClientMetadataKey",
     "SessionClientMetadataValue",
-    "SwitchOrganizationRequest",
     "TotpConfirmEnableRequest",
     "TotpConfirmEnableResponse",
     "TotpDisableRequest",

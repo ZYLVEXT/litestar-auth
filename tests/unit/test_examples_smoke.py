@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 import warnings
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 import pytest
 from litestar import Litestar
@@ -15,46 +15,11 @@ from examples._demo_secrets import resolve_demo_secrets
 if TYPE_CHECKING:
     from pathlib import Path
 
-_PARAMS: Final[tuple[tuple[str, dict[str, str], str], ...]] = (
-    (
-        "examples.demo_jwt_api_keys.app",
-        {"LITESTAR_AUTH_DEMO_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_DATABASE_URL",
-    ),
+_PARAMS = (
     (
         "examples.demo_db_token_refresh.app",
         {"LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE": "1"},
         "LITESTAR_AUTH_DEMO_DB_TOKEN_DATABASE_URL",
-    ),
-    (
-        "examples.demo_cookie_jwt.app",
-        {"LITESTAR_AUTH_DEMO_COOKIE_JWT_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_COOKIE_JWT_DATABASE_URL",
-    ),
-    (
-        "examples.demo_api_keys_role_scopes.app",
-        {"LITESTAR_AUTH_DEMO_ROLE_SCOPES_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_ROLE_SCOPES_DATABASE_URL",
-    ),
-    (
-        "examples.demo_totp.app",
-        {"LITESTAR_AUTH_DEMO_TOTP_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_TOTP_DATABASE_URL",
-    ),
-    (
-        "examples.demo_jwt_api_keys_totp.app",
-        {"LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_DATABASE_URL",
-    ),
-    (
-        "examples.demo_cookie_jwt_totp.app",
-        {"LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_DATABASE_URL",
-    ),
-    (
-        "examples.demo_external_extension.app",
-        {"LITESTAR_AUTH_DEMO_EXTERNAL_EXTENSION_INSECURE": "1"},
-        "LITESTAR_AUTH_DEMO_EXTERNAL_EXTENSION_DATABASE_URL",
     ),
 )
 

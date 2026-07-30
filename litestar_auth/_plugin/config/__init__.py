@@ -11,19 +11,7 @@ from litestar_auth._plugin.config._core import (
     _VALID_LOGIN_IDENTIFIERS as _VALID_LOGIN_IDENTIFIERS,
 )
 from litestar_auth._plugin.config._core import (
-    DEFAULT_API_KEY_BACKEND_NAME as DEFAULT_API_KEY_BACKEND_NAME,
-)
-from litestar_auth._plugin.config._core import (
-    DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS as DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS,
-)
-from litestar_auth._plugin.config._core import (
-    DEFAULT_API_KEY_MAX_KEYS_PER_USER as DEFAULT_API_KEY_MAX_KEYS_PER_USER,
-)
-from litestar_auth._plugin.config._core import (
-    DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES as DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES,
-)
-from litestar_auth._plugin.config._core import (
-    DEFAULT_API_KEY_TTL as DEFAULT_API_KEY_TTL,
+    DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY as DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config._core import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY as DEFAULT_BACKENDS_DEPENDENCY_KEY,
@@ -36,6 +24,9 @@ from litestar_auth._plugin.config._core import (
 )
 from litestar_auth._plugin.config._core import (
     DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY as DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+)
+from litestar_auth._plugin.config._core import (
+    DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY as DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config._core import (
     DEFAULT_DATABASE_TOKEN_BACKEND_NAME as DEFAULT_DATABASE_TOKEN_BACKEND_NAME,
@@ -84,9 +75,6 @@ from litestar_auth._plugin.config._core import (
 )
 from litestar_auth._plugin.config._core import (
     AccountLockoutConfig as AccountLockoutConfig,
-)
-from litestar_auth._plugin.config._core import (
-    ApiKeyConfig as ApiKeyConfig,
 )
 from litestar_auth._plugin.config._core import (
     ConfigurationError as ConfigurationError,

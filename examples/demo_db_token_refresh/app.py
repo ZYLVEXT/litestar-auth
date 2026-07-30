@@ -1,6 +1,6 @@
-"""Demonstration app: opaque database access tokens with refresh (bearer preset).
+"""Demonstration app: opaque database cookie sessions with refresh.
 
-Uses :class:`~litestar_auth.DatabaseTokenAuthConfig` so the plugin builds the bearer +
+Uses :class:`~litestar_auth.DatabaseTokenAuthConfig` so the plugin builds the cookie +
 :class:`~litestar_auth.authentication.strategy.db.DatabaseTokenStrategy` backend. Tokens are rows in
 the bundled ``access_token`` / ``refresh_token`` tables (see :func:`~litestar_auth.models.import_token_orm_models`).
 
@@ -8,14 +8,15 @@ Environment:
 
 - ``LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE=1`` — fixed dev-only secrets (**never** in production).
 - ``LITESTAR_AUTH_DB_TOKEN_HASH_SECRET`` — HMAC material for opaque token digests (required when not insecure).
+- ``LITESTAR_AUTH_CSRF_SECRET`` — CSRF signing secret (required when not insecure).
 - ``LITESTAR_AUTH_VERIFY_TOKEN_SECRET`` / ``LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET`` — account tokens.
 - ``LITESTAR_AUTH_DEMO_DB_TOKEN_DATABASE_URL`` — optional SQLite URL (default ``./demo_db_token.db``).
 
 Flow:
 
-1. ``POST /auth/register`` then ``POST /auth/login`` — response includes ``access_token`` and ``refresh_token``.
-2. ``GET /demo/db-token-profile`` with ``Authorization: Bearer <access_token>``.
-3. When the access token expires, ``POST /auth/refresh`` with JSON ``{"refresh_token": "..."}``.
+1. ``POST /auth/register`` then ``POST /auth/login`` — the response sets HttpOnly session cookies.
+2. ``GET /demo/db-token-profile`` with the issued access cookie.
+3. When the access token expires, ``POST /auth/refresh`` with the dedicated refresh cookie and CSRF header.
 
 Unlike JWT examples, revocation and rotation are backed by your database; configure retention and
 indexes for production workloads.
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
 
 _DB_TOKEN_INSECURE = (
     "database-token-secret-12345678901234567890-LITESTAR_AUTH_DEMO_DB",
+    "demo-CSRF-secret-7fA9!qR4#kM2$vB8&wT5",
     "d8f7f8e6d8c94f8c9e8d7c6b5a493827-LITESTAR_AUTH_DEMO_VERIFY",
     "e9f8a7b6c5d4e3f2019384758695abcd-LITESTAR_AUTH_DEMO_RESET",
 )
@@ -69,13 +71,14 @@ class DemoUserManager(BaseUserManager[User, UUID]):
     """Thin concrete manager for the bundled ``User`` model."""
 
 
-def _demo_secrets() -> tuple[str, str, str]:
-    """Return (db_token_hash, verify, reset) secrets."""
+def _demo_secrets() -> tuple[str, str, str, str]:
+    """Return database-token, CSRF, verify, and reset secrets."""
     return resolve_demo_secrets(
         insecure_flag="LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE",
         insecure_defaults=_DB_TOKEN_INSECURE,
         secret_names=(
             "LITESTAR_AUTH_DB_TOKEN_HASH_SECRET",
+            "LITESTAR_AUTH_CSRF_SECRET",
             "LITESTAR_AUTH_VERIFY_TOKEN_SECRET",
             "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET",
         ),
@@ -96,12 +99,14 @@ def _demo_runtime() -> _DemoRuntime:
 def _build_litestar_auth_config(
     *,
     hash_secret: str,
+    csrf_secret: str,
     verify_secret: str,
     reset_secret: str,
     runtime: _DemoRuntime,
 ) -> LitestarAuthConfig[User, UUID]:
     return LitestarAuthConfig[User, UUID](
         database_token_auth=DatabaseTokenAuthConfig(token_hash_secret=hash_secret),
+        csrf_secret=csrf_secret,
         session_maker=runtime.session_maker,
         user_model=User,
         user_manager_class=DemoUserManager,
@@ -149,10 +154,11 @@ def create_app() -> Litestar:
         ASGI app with DB-token preset and refresh routes enabled.
     """
     import_token_orm_models()
-    hash_s, verify_s, reset_s = _demo_secrets()
+    hash_s, csrf_s, verify_s, reset_s = _demo_secrets()
     runtime = _demo_runtime()
     config = _build_litestar_auth_config(
         hash_secret=hash_s,
+        csrf_secret=csrf_s,
         verify_secret=verify_s,
         reset_secret=reset_s,
         runtime=runtime,

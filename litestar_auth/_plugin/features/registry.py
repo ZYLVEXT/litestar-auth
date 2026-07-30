@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.features._backends import StartupBackendInventory, StartupBackendTemplate
 from litestar_auth._plugin.features._config import (
-    ApiKeyConfig,
-    ApiKeyScopeAuthority,
-    ApiKeyStoreFactory,
     DatabaseTokenAuthConfig,
     OAuthConfig,
     OrganizationConfig,
@@ -17,14 +14,7 @@ from litestar_auth._plugin.features._config import (
     TotpConfig,
 )
 from litestar_auth._plugin.features._defaults import (
-    API_KEY_FEATURE,
     DATABASE_TOKEN_FEATURE,
-    DEFAULT_API_KEY_BACKEND_NAME,
-    DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS,
-    DEFAULT_API_KEY_MAX_KEYS_PER_USER,
-    DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES,
-    DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES,
-    DEFAULT_API_KEY_TTL,
     DEFAULT_DATABASE_TOKEN_BACKEND_NAME,
     DEFAULT_DATABASE_TOKEN_BYTES,
     DEFAULT_DATABASE_TOKEN_MAX_AGE,
@@ -35,8 +25,6 @@ from litestar_auth._plugin.features._defaults import (
     ORGANIZATION_FEATURE,
     TOTP_FEATURE,
     TOTP_STEPUP_POLICY_ENDPOINTS,
-    ApiKeyDefaults,
-    ApiKeyLastUsedWriteStrategy,
     DatabaseTokenDefaults,
     FeatureDefaults,
     FeatureKey,
@@ -48,14 +36,13 @@ from litestar_auth._plugin.features._defaults import (
 )
 from litestar_auth._plugin.features._snapshot import (
     FeatureConfigSnapshot,
-    ResolvedApiKeyDefaults,
     ResolvedDatabaseTokenDefaults,
     ResolvedFeatureDefaults,
     ResolvedOAuthDefaults,
     ResolvedOrganizationDefaults,
     ResolvedTotpDefaults,
 )
-from litestar_auth.config import UNSET, UnsetType
+from litestar_auth.config import UNSET
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -65,14 +52,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.backend import AuthenticationBackend
 
 __all__ = (
-    "API_KEY_FEATURE",
     "DATABASE_TOKEN_FEATURE",
-    "DEFAULT_API_KEY_BACKEND_NAME",
-    "DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS",
-    "DEFAULT_API_KEY_MAX_KEYS_PER_USER",
-    "DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES",
-    "DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES",
-    "DEFAULT_API_KEY_TTL",
     "DEFAULT_DATABASE_TOKEN_BACKEND_NAME",
     "DEFAULT_DATABASE_TOKEN_BYTES",
     "DEFAULT_DATABASE_TOKEN_MAX_AGE",
@@ -83,11 +63,6 @@ __all__ = (
     "ORGANIZATION_FEATURE",
     "TOTP_FEATURE",
     "TOTP_STEPUP_POLICY_ENDPOINTS",
-    "ApiKeyConfig",
-    "ApiKeyDefaults",
-    "ApiKeyLastUsedWriteStrategy",
-    "ApiKeyScopeAuthority",
-    "ApiKeyStoreFactory",
     "DatabaseTokenAuthConfig",
     "DatabaseTokenDefaults",
     "FeatureConfigSnapshot",
@@ -100,7 +75,6 @@ __all__ = (
     "OrganizationDefaults",
     "OrganizationRolePrecedence",
     "OrganizationStoreFactory",
-    "ResolvedApiKeyDefaults",
     "ResolvedDatabaseTokenDefaults",
     "ResolvedFeatureDefaults",
     "ResolvedOAuthDefaults",
@@ -133,7 +107,6 @@ class FeatureRegistry[UP: UserProtocol[Any], ID]:
         """Return the captured config object for ``feature``."""
         return {
             DATABASE_TOKEN_FEATURE: self.config_snapshot.database_token_auth,
-            API_KEY_FEATURE: self.config_snapshot.api_keys,
             TOTP_FEATURE: self.config_snapshot.totp_config,
             OAUTH_FEATURE: self.config_snapshot.oauth_config,
             ORGANIZATION_FEATURE: self.config_snapshot.organization_config,
@@ -167,11 +140,6 @@ def resolve_feature_registry[UP: UserProtocol[Any], ID](
     if defaults.database_token.config is not None:
         enabled_features.add(DATABASE_TOKEN_FEATURE)
         backend_by_feature[DATABASE_TOKEN_FEATURE] = (0, startup_backends[0])
-    if defaults.api_key.enabled:
-        enabled_features.add(API_KEY_FEATURE)
-        api_key_backend = _find_backend_by_name(startup_backends, defaults.api_key.backend_name)
-        if api_key_backend is not None:
-            backend_by_feature[API_KEY_FEATURE] = api_key_backend
     if defaults.totp.config is not None:
         enabled_features.add(TOTP_FEATURE)
     if defaults.oauth.config is not None:
@@ -201,7 +169,6 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
         Resolved feature defaults for startup wiring.
     """
     database_token_config = config.database_token_auth
-    api_key_config = config.api_keys
     totp_config = config.totp_config
     totp_backend_name = None if totp_config is None else getattr(totp_config, "totp_backend_name", None)
     oauth_config = config.oauth_config
@@ -209,7 +176,6 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
     return ResolvedFeatureDefaults(
         config_snapshot=FeatureConfigSnapshot(
             database_token_auth=database_token_config,
-            api_keys=api_key_config,
             totp_config=totp_config,
             oauth_config=oauth_config,
             organization_config=organization_config,
@@ -217,12 +183,6 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
         database_token=ResolvedDatabaseTokenDefaults(
             config=database_token_config,
             backend_name=UNSET if database_token_config is None else database_token_config.backend_name,
-        ),
-        api_key=ResolvedApiKeyDefaults(
-            config=api_key_config,
-            enabled=api_key_config.enabled,
-            backend_name=api_key_config.backend_name,
-            hash_secret=_resolve_api_key_hash_secret(config),
         ),
         totp=ResolvedTotpDefaults(
             config=totp_config,
@@ -255,36 +215,4 @@ def _build_startup_backend_templates[UP: UserProtocol[Any], ID](
     else:
         startup_backends = tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in config.backends)
 
-    if defaults.api_key.enabled:
-        from litestar_auth._plugin.api_key import (  # ruff: ignore[import-outside-top-level]
-            build_api_key_backend_template,
-        )
-
-        if not isinstance(defaults.api_key.hash_secret, UnsetType):
-            startup_backends = (
-                *startup_backends,
-                build_api_key_backend_template(
-                    defaults.api_key.config,
-                    api_key_hash_secret=defaults.api_key.hash_secret,
-                    unsafe_testing=config.unsafe_testing,
-                ),
-            )
     return startup_backends
-
-
-def _resolve_api_key_hash_secret[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> str | UnsetType:
-    if config.user_manager_security is None or config.user_manager_security.api_key_hash_secret is None:
-        return UNSET
-    return config.user_manager_security.api_key_hash_secret
-
-
-def _find_backend_by_name[UP: UserProtocol[Any], ID](
-    startup_backends: tuple[StartupBackendTemplate[UP, ID], ...],
-    backend_name: str,
-) -> tuple[int, StartupBackendTemplate[UP, ID]] | None:
-    for index, backend in enumerate(startup_backends):
-        if backend.name == backend_name:
-            return index, backend
-    return None

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID, uuid4
 
 import pytest
+from fakeredis import FakeAsyncRedis
 from litestar import Controller, Litestar, Request, get
 from litestar.config.app import AppConfig
 from litestar.datastructures.state import State
@@ -39,7 +40,8 @@ from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig, Organi
 from litestar_auth._plugin.extensions import ExtensionDependencyContribution
 from litestar_auth._plugin.scoped_session import SESSION_SCOPE_KEY, SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InsufficientRolesError
 from litestar_auth.guards import has_permission
@@ -356,7 +358,7 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
                 strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-dependencies")),
             ),
         ],
@@ -429,7 +431,7 @@ def _anonymous_permissions_probe(litestar_auth_permissions: _ResolvedPermissions
     return {"permissions": sorted(litestar_auth_permissions)}
 
 
-def _permissions_app() -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser]:
+def _permissions_app() -> tuple[Litestar, RedisTokenStrategy[ExampleUser, UUID], ExampleUser]:
     """Build a plugin app with role-permission DI enabled.
 
     Returns:
@@ -444,12 +446,16 @@ def _permissions_app() -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser]:
         roles=["editor"],
     )
     user_db = InMemoryUserDatabase([user])
-    strategy = InMemoryTokenStrategy(token_prefix="permissions")
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+        token_hash_secret="permissions-session-hash-secret-123456789012",
+        subject_decoder=UUID,
+    )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
                 strategy=cast("Any", strategy),
             ),
         ],
@@ -521,7 +527,13 @@ def _anonymous_current_organization_probe(
 def _current_organization_app(
     *,
     membership: ExampleOrganizationMembership | None,
-) -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser, ExampleOrganization, RecordingOrganizationStore]:
+) -> tuple[
+    Litestar,
+    RedisTokenStrategy[ExampleUser, UUID],
+    ExampleUser,
+    ExampleOrganization,
+    RecordingOrganizationStore,
+]:
     """Build a plugin app with current-organization DI enabled.
 
     Returns:
@@ -538,7 +550,11 @@ def _current_organization_app(
     organization = ExampleOrganization(id=uuid4(), slug="acme")
     store = RecordingOrganizationStore(organization=organization, membership=membership)
     user_db = InMemoryUserDatabase([user])
-    strategy = InMemoryTokenStrategy(token_prefix="current-organization")
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+        token_hash_secret="organization-session-hash-secret-12345678901",
+        subject_decoder=UUID,
+    )
 
     def resolve_tenant(connection: object) -> str:
         """Return the tenant slug for dependency integration requests."""
@@ -548,7 +564,7 @@ def _current_organization_app(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
                 strategy=cast("Any", strategy),
             ),
         ],
@@ -1212,7 +1228,7 @@ async def test_resolved_permissions_dependency_injects_authenticated_effective_p
     token = await strategy.write_token(user)
 
     async with AsyncTestClient(app=app) as client:
-        response = await client.get("/permissions", headers={"Authorization": f"Bearer {token}"})
+        response = await client.get("/permissions", headers={"Cookie": f"litestar_auth={token}"})
 
     assert response.status_code == HTTP_OK
     assert response.json() == {"permissions": ["posts:read", "posts:write"]}
@@ -1243,7 +1259,7 @@ async def test_current_organization_dependency_injects_verified_member_context()
     token = await strategy.write_token(user)
 
     async with AsyncTestClient(app=app) as client:
-        response = await client.get("/current-organization", headers={"Authorization": f"Bearer {token}"})
+        response = await client.get("/current-organization", headers={"Cookie": f"litestar_auth={token}"})
 
     assert response.status_code == HTTP_OK
     assert response.json() == {
@@ -1265,7 +1281,7 @@ async def test_current_organization_dependency_returns_none_for_authenticated_no
     token = await strategy.write_token(user)
 
     async with AsyncTestClient(app=app) as client:
-        response = await client.get("/current-organization", headers={"Authorization": f"Bearer {token}"})
+        response = await client.get("/current-organization", headers={"Cookie": f"litestar_auth={token}"})
 
     assert response.status_code == HTTP_OK
     assert response.json() == {"context": None, "same_as_scope": True}

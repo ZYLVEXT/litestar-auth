@@ -16,7 +16,7 @@ from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.plugin import LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
@@ -100,7 +100,7 @@ async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
     user = cast("Any", object())
 
     with pytest.raises(RuntimeError, match=_REQUEST_BACKEND_GUIDANCE):
-        await strategy.read_token("t", user_manager)
+        await strategy.authenticate_token("t", user_manager)
     with pytest.raises(RuntimeError, match=_REQUEST_BACKEND_GUIDANCE):
         await strategy.write_token(user)
     with pytest.raises(RuntimeError, match=_REQUEST_BACKEND_GUIDANCE):
@@ -141,7 +141,7 @@ def test_lazy_introspection_helpers() -> None:
 
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     assert database_token_module._backend_uses_bundled_database_token_models(backend) is True

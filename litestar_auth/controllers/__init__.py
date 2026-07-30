@@ -11,18 +11,12 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from litestar_auth.controllers.api_keys import ApiKeysControllerConfig, create_api_keys_controllers
     from litestar_auth.controllers.auth import AuthControllerConfig, create_auth_controller
     from litestar_auth.controllers.oauth import (
         OAuthAssociateControllerConfig,
         OAuthControllerConfig,
         create_oauth_associate_controller,
         create_oauth_controller,
-    )
-    from litestar_auth.controllers.organization import (
-        OrganizationControllerConfig,
-        backend_supports_organization_tokens,
-        create_organization_controller,
     )
     from litestar_auth.controllers.register import RegisterControllerConfig, create_register_controller
     from litestar_auth.controllers.reset import create_reset_password_controller
@@ -35,22 +29,17 @@ if TYPE_CHECKING:
     from litestar_auth.controllers.verify import create_verify_controller
 
 __all__ = (
-    "ApiKeysControllerConfig",
     "AuthControllerConfig",
     "OAuthAssociateControllerConfig",
     "OAuthControllerConfig",
-    "OrganizationControllerConfig",
     "RegisterControllerConfig",
     "SessionDevicesControllerConfig",
     "TotpControllerOptions",
     "TotpUserManagerProtocol",
     "UsersControllerConfig",
-    "backend_supports_organization_tokens",
-    "create_api_keys_controllers",
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_controller",
-    "create_organization_controller",
     "create_register_controller",
     "create_reset_password_controller",
     "create_session_devices_controller",
@@ -60,22 +49,17 @@ __all__ = (
 )
 
 _EXPORT_MODULES = {
-    "ApiKeysControllerConfig": "litestar_auth.controllers.api_keys",
     "AuthControllerConfig": "litestar_auth.controllers.auth",
     "OAuthAssociateControllerConfig": "litestar_auth.controllers.oauth",
     "OAuthControllerConfig": "litestar_auth.controllers.oauth",
-    "OrganizationControllerConfig": "litestar_auth.controllers.organization",
     "RegisterControllerConfig": "litestar_auth.controllers.register",
     "SessionDevicesControllerConfig": "litestar_auth.controllers.session_devices",
     "TotpControllerOptions": "litestar_auth.controllers.totp",
     "TotpUserManagerProtocol": "litestar_auth.controllers.totp",
     "UsersControllerConfig": "litestar_auth.controllers.users",
-    "backend_supports_organization_tokens": "litestar_auth.controllers.organization",
-    "create_api_keys_controllers": "litestar_auth.controllers.api_keys",
     "create_auth_controller": "litestar_auth.controllers.auth",
     "create_oauth_associate_controller": "litestar_auth.controllers.oauth",
     "create_oauth_controller": "litestar_auth.controllers.oauth",
-    "create_organization_controller": "litestar_auth.controllers.organization",
     "create_register_controller": "litestar_auth.controllers.register",
     "create_reset_password_controller": "litestar_auth.controllers.reset",
     "create_session_devices_controller": "litestar_auth.controllers.session_devices",

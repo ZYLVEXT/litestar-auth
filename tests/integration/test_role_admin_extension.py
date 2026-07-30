@@ -12,15 +12,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.contrib.role_admin import RoleAdminExtension
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from tests.integration.test_contrib_role_admin import RoleAdminTestUserManager, SessionMaker, _login_headers
 
 if TYPE_CHECKING:
@@ -95,20 +93,11 @@ def app() -> Iterator[Litestar]:
         )
         session.commit()
 
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-role-admin-extension-secret-123456789012345",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="role-admin-extension-session-secret-1234567890",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=RoleAdminTestUserManager,

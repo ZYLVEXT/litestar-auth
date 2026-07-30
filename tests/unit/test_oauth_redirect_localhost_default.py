@@ -11,15 +11,15 @@ from litestar.config.app import AppConfig
 
 from litestar_auth._plugin.config import OAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 pytestmark = pytest.mark.unit
@@ -44,8 +44,8 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
     user_db = InMemoryUserDatabase([])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="oauth-redirect")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="oauth-redirect"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],

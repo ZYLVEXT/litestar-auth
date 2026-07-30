@@ -6,10 +6,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from litestar.connection import ASGIConnection
-from litestar.enums import MediaType
 from litestar.response import Response
 
-import litestar_auth.authentication.transport.bearer as bearer_module
 from litestar_auth.authentication.transport.base import LogoutTokenReadable, Transport
 from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 
@@ -27,25 +25,6 @@ def _get_response_cookie(response: Response[Any], key: str) -> Cookie:
     return next(cookie for cookie in response.cookies if cookie.key == key)
 
 
-def _build_connection(authorization: str | None = None) -> ASGIConnection[Any, Any, Any, Any]:
-    """Create a minimal connection with an optional Authorization header.
-
-    Returns:
-        A connection with the provided Authorization header.
-    """
-    headers: list[tuple[bytes, bytes]] = []
-    if authorization is not None:
-        headers.append((b"authorization", authorization.encode()))
-
-    scope = {
-        "type": "http",
-        "headers": headers,
-        "path_params": {},
-        "query_string": b"",
-    }
-    return ASGIConnection(scope=cast("HTTPScope", scope))
-
-
 def _build_cookie_connection(**cookies: str) -> ASGIConnection[Any, Any, Any, Any]:
     """Create a minimal connection with the provided cookies.
 
@@ -61,57 +40,6 @@ def _build_cookie_connection(**cookies: str) -> ASGIConnection[Any, Any, Any, An
         "query_string": b"",
     }
     return ASGIConnection(scope=cast("HTTPScope", scope))
-
-
-async def test_bearer_transport_reads_valid_authorization_header() -> None:
-    """BearerTransport extracts the token part from a valid bearer header."""
-    transport = bearer_module.BearerTransport()
-
-    assert isinstance(transport, Transport)
-    assert await transport.read_token(_build_connection("Bearer example-token")) == "example-token"
-    assert await transport.read_token(_build_connection("bearer lowercase-token")) == "lowercase-token"
-
-
-def test_bearer_transport_does_not_expose_explicit_logout_token_reader() -> None:
-    """BearerTransport relies on backend fallback instead of a dedicated logout reader."""
-    transport = bearer_module.BearerTransport()
-
-    assert not isinstance(transport, LogoutTokenReadable)
-
-
-async def test_bearer_transport_rejects_missing_or_invalid_authorization_header() -> None:
-    """BearerTransport returns ``None`` for missing or malformed headers."""
-    transport = bearer_module.BearerTransport()
-
-    assert await transport.read_token(_build_connection()) is None
-    assert await transport.read_token(_build_connection("Basic abc123")) is None
-    assert await transport.read_token(_build_connection("Bearer")) is None
-    assert await transport.read_token(_build_connection("Bearer ")) is None
-    assert await transport.read_token(_build_connection("Bearer   ")) is None
-    assert await transport.read_token(_build_connection("Bearer \t")) is None
-
-
-def test_bearer_transport_sets_login_token_in_response_body() -> None:
-    """BearerTransport writes the token payload into the response body."""
-    transport = bearer_module.BearerTransport()
-    response = Response(None)
-
-    result = transport.set_login_token(response, "issued-token")
-
-    assert result is response
-    assert response.content == {"access_token": "issued-token", "token_type": "bearer"}
-    assert response.media_type == MediaType.JSON
-
-
-def test_bearer_transport_clears_response_body_on_logout() -> None:
-    """BearerTransport removes any login payload when logging out."""
-    transport = bearer_module.BearerTransport()
-    response = Response({"access_token": "issued-token"})
-
-    result = transport.set_logout(response)
-
-    assert result is response
-    assert response.content is None
 
 
 async def test_cookie_transport_reads_token_from_named_cookie() -> None:

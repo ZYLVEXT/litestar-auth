@@ -18,7 +18,6 @@ from litestar_auth._permissions import (
     normalize_permissions,
     permission_grants,
     permission_grants_fixed_work,
-    permissions_cover_delegated_grant,
     permissions_grant,
     resolve_connection_permissions,
     set_scope_permission_resolver,
@@ -213,28 +212,6 @@ def test_permission_grants_fixed_work_supports_non_ascii_tokens(
     """
     assert permission_grants_fixed_work(granted_permissions, required_permission) is expected
     assert permissions_grant(granted_permissions, required_permission) is expected
-
-
-@pytest.mark.parametrize(
-    ("granted_permissions", "delegated_permission", "expected"),
-    [
-        pytest.param(("posts:*",), "posts:read", True, id="owner-wildcard-covers-specific"),
-        pytest.param(("posts:*",), "posts:*", True, id="owner-wildcard-covers-same-wildcard"),
-        pytest.param(("*",), "posts:*", True, id="owner-global-covers-resource-wildcard"),
-        pytest.param(("*",), "*", True, id="owner-global-covers-global"),
-        pytest.param(("posts:read",), "posts:*", False, id="specific-does-not-cover-resource-wildcard"),
-        pytest.param(("posts:*",), "*", False, id="resource-wildcard-does-not-cover-global"),
-        pytest.param(("users:*",), "posts:read", False, id="cross-resource-denied"),
-    ],
-)
-def test_permissions_cover_delegated_grant_for_api_key_scope_downscoping(
-    granted_permissions: tuple[str, ...],
-    delegated_permission: str,
-    *,
-    expected: bool,
-) -> None:
-    """Delegated API-key wildcard grants require owner grants at least as broad."""
-    assert permissions_cover_delegated_grant(granted_permissions, delegated_permission) is expected
 
 
 def test_static_role_permission_resolver_expands_multiple_roles() -> None:

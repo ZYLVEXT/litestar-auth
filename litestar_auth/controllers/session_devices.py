@@ -39,8 +39,8 @@ from litestar_auth.controllers._utils import (
     _mark_litestar_auth_route_handler,
 )
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated, requires_password_session
-from litestar_auth.payloads import RefreshSessionListResponse, RefreshSessionRead, RefreshTokenRequest
+from litestar_auth.guards import is_authenticated, is_human_authenticated
+from litestar_auth.payloads import RefreshSessionListResponse, RefreshSessionRead
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -192,13 +192,12 @@ def _is_safe_session_client_metadata_key(key: object) -> TypeGuard[str]:
 
 async def _handle_list_refresh_sessions[UP: UserProtocol[Any]](
     request: Request[Any, Any, Any],
-    data: RefreshTokenRequest | None,
     *,
     ctx: _SessionDevicesControllerContext[UP],
 ) -> RefreshSessionListResponse:
     """Return active refresh sessions for the authenticated user."""
     user = cast("UP", request.user)
-    current_session_id = await _resolve_current_refresh_session_id(request, user, data, ctx=ctx)
+    current_session_id = await _resolve_current_refresh_session_id(request, user, ctx=ctx)
     sessions = await ctx.strategy.list_refresh_sessions(user)
     return RefreshSessionListResponse(
         sessions=[
@@ -231,20 +230,18 @@ async def _handle_revoke_refresh_session[UP: UserProtocol[Any]](
 
 async def _handle_revoke_other_refresh_sessions[UP: UserProtocol[Any]](
     request: Request[Any, Any, Any],
-    data: RefreshTokenRequest | None,
     *,
     ctx: _SessionDevicesControllerContext[UP],
 ) -> None:
     """Revoke all refresh sessions for the authenticated user except the current one when known."""
     user = cast("UP", request.user)
-    current_session_id = await _resolve_current_refresh_session_id(request, user, data, ctx=ctx)
+    current_session_id = await _resolve_current_refresh_session_id(request, user, ctx=ctx)
     await ctx.strategy.revoke_other_refresh_sessions(user, current_session_id=current_session_id)
 
 
 async def _resolve_current_refresh_session_id[UP: UserProtocol[Any]](
     request: Request[Any, Any, Any],
     user: UP,
-    data: RefreshTokenRequest | None,
     *,
     ctx: _SessionDevicesControllerContext[UP],
 ) -> str | None:
@@ -256,7 +253,9 @@ async def _resolve_current_refresh_session_id[UP: UserProtocol[Any]](
     if not isinstance(ctx.strategy, RefreshSessionIdentifierStrategy):
         return None
     identifier_strategy = cast("RefreshSessionIdentifierStrategy[UP]", ctx.strategy)
-    refresh_token = await _resolve_refresh_token_value(request, data, cookie_transport=ctx.cookie_transport)
+    if ctx.cookie_transport is None:
+        return None
+    refresh_token = await _resolve_refresh_token_value(request, cookie_transport=ctx.cookie_transport)
     if refresh_token is None:
         return None
     return await identifier_strategy.identify_refresh_session(user, refresh_token)
@@ -326,7 +325,7 @@ def _create_list_refresh_sessions_handler[UP: UserProtocol[Any]](
 
     @get(
         "/sessions",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         security=security,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
@@ -336,35 +335,9 @@ def _create_list_refresh_sessions_handler[UP: UserProtocol[Any]](
         litestar_auth_backends: _OptionalBackendsDep = None,
     ) -> RefreshSessionListResponse:
         ctx = build_context(litestar_auth_backends)
-        return await _handle_list_refresh_sessions(request, None, ctx=ctx)
+        return await _handle_list_refresh_sessions(request, ctx=ctx)
 
     return list_refresh_sessions
-
-
-def _create_list_refresh_sessions_with_token_handler[UP: UserProtocol[Any]](
-    build_context: _RuntimeContextBuilder[UP],
-    *,
-    security: Sequence[SecurityRequirement] | None,
-) -> Callable[..., object]:
-    """Return the POST refresh-session listing handler."""
-
-    @post(
-        "/sessions",
-        guards=[is_authenticated, requires_password_session],
-        security=security,
-        status_code=200,
-        responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
-    )
-    async def list_refresh_sessions_with_refresh_token(
-        self: Controller,  # ruff: ignore[unused-function-argument]
-        request: Request[Any, Any, Any],
-        data: RefreshTokenRequest,
-        litestar_auth_backends: _OptionalBackendsDep = None,
-    ) -> RefreshSessionListResponse:
-        ctx = build_context(litestar_auth_backends)
-        return await _handle_list_refresh_sessions(request, data, ctx=ctx)
-
-    return list_refresh_sessions_with_refresh_token
 
 
 def _create_revoke_refresh_session_handler[UP: UserProtocol[Any]](
@@ -376,7 +349,7 @@ def _create_revoke_refresh_session_handler[UP: UserProtocol[Any]](
 
     @delete(
         "/sessions/{session_id:str}",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         security=security,
         status_code=204,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
@@ -402,7 +375,7 @@ def _create_revoke_other_refresh_sessions_handler[UP: UserProtocol[Any]](
 
     @post(
         "/sessions/revoke-others",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         security=security,
         status_code=204,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
@@ -411,10 +384,9 @@ def _create_revoke_other_refresh_sessions_handler[UP: UserProtocol[Any]](
         self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_backends: _OptionalBackendsDep = None,
-        data: RefreshTokenRequest | None = None,
     ) -> None:
         ctx = build_context(litestar_auth_backends)
-        await _handle_revoke_other_refresh_sessions(request, data, ctx=ctx)
+        await _handle_revoke_other_refresh_sessions(request, ctx=ctx)
 
     return revoke_other_refresh_sessions
 
@@ -434,10 +406,6 @@ def _define_session_devices_controller_class[UP: UserProtocol[Any]](
         """Authenticated refresh-session management endpoints."""
 
         list_refresh_sessions = _create_list_refresh_sessions_handler(build_context, security=security)
-        list_refresh_sessions_with_refresh_token = _create_list_refresh_sessions_with_token_handler(
-            build_context,
-            security=security,
-        )
         revoke_refresh_session = _create_revoke_refresh_session_handler(build_context, security=security)
         revoke_other_refresh_sessions = _create_revoke_other_refresh_sessions_handler(
             build_context,

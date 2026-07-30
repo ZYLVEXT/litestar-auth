@@ -15,14 +15,14 @@ import litestar_auth.contrib.organization_admin as organization_admin_module
 from litestar_auth._plugin.extensions import build_extension_registration_context, build_extension_validation_context
 from litestar_auth._plugin.features import OrganizationConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.contrib.organization_admin import (
     OrganizationAdminControllerConfig,
     OrganizationAdminExtension,
     create_organization_admin_controller,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.plugin import LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
@@ -62,7 +62,7 @@ def _minimal_config(
     user_db = InMemoryUserDatabase([])
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="organization-admin-extension")),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
@@ -196,7 +196,7 @@ def test_organization_admin_extension_register_contributes_marked_default_contro
     manual_controller = create_organization_admin_controller(config=config)
     assert context.is_auth_route_handler(controller) is True
     assert cast("Any", controller).path == manual_controller.path == "/organizations"
-    assert cast("Any", controller).guards == manual_controller.guards == [is_superuser, requires_password_session]
+    assert cast("Any", controller).guards == manual_controller.guards == [is_superuser, is_human_authenticated]
 
 
 def test_organization_admin_extension_register_uses_grouped_controller_config_path() -> None:

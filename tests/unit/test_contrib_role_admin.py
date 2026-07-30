@@ -17,7 +17,7 @@ import litestar_auth.contrib.role_admin._controller_handler_utils as role_admin_
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.models import Role, User, UserRole
 from tests.unit.test_plugin_role_admin import (
     TrackingSessionMaker,
@@ -59,7 +59,7 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
-    assert controller.guards == [is_superuser, requires_password_session]
+    assert controller.guards == [is_superuser, is_human_authenticated]
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole

@@ -14,8 +14,6 @@ from litestar_auth._manager.account_tokens import (
     AccountTokensServiceDependencies,
     _AccountTokensManagerProtocol,
 )
-from litestar_auth._manager.api_key_facade import ApiKeyManagerFacade
-from litestar_auth._manager.api_key_service import ApiKeyManagerService
 from litestar_auth._manager.construction import (
     DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME as _DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME,
 )
@@ -85,7 +83,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
     _UserLifecycleManagerProtocol[UP, ID],
     _AccountTokensManagerProtocol[UP, ID],
     _TotpSecretsManagerProtocol[UP],
-    ApiKeyManagerFacade[UP, ID],
     TotpManagerFacade[UP],
 ):
     """Coordinate user persistence, password hashing, and account tokens.
@@ -157,8 +154,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             ConstructorAttributes(
                 user_db=settings.user_db,
                 oauth_account_store=settings.oauth_account_store,
-                api_key_store=settings.api_key_store,
-                api_key_config=settings.api_key_config,
                 resolved_secret_inputs=resolved_secret_inputs,
                 verification_token_lifetime=settings.verification_token_lifetime,
                 reset_password_token_lifetime=settings.reset_password_token_lifetime,
@@ -184,8 +179,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         resolved_security = resolved_secret_inputs.security
         self.user_db = settings.user_db
         self.oauth_account_store = settings.oauth_account_store or resolve_oauth_account_store(settings.user_db)
-        self.api_key_store = settings.api_key_store
-        self.api_key_config = settings.api_key_config
         self._account_token_secrets = resolved_secret_inputs.account_token_secrets
         self.verification_token_secret = self._account_token_secrets.verification_token_secret
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
@@ -202,11 +195,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.password_validator = settings.password_validator
         self.reset_verification_on_email_change = settings.reset_verification_on_email_change
         self.totp_secret_key = resolved_security.totp_secret_key
-        self.api_key_hash_secret = (
-            _SecretValue(resolved_security.api_key_hash_secret)
-            if resolved_security.api_key_hash_secret is not None
-            else None
-        )
         self._totp_recovery_code_lookup_secret = resolved_security.totp_recovery_code_lookup_secret
         self.backends: tuple[object, ...] = settings.backends
         self.login_identifier: LoginIdentifier = settings.login_identifier
@@ -247,12 +235,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 policy=self.policy,
                 account_token_denylist_store=self._account_token_denylist_store,
             ),
-        )
-        self._api_keys = ApiKeyManagerService(
-            self,
-            api_key_store=self.api_key_store,
-            config=self.api_key_config,
-            hook_bus=self._hook_bus,
         )
         if self.totp_secret_keyring is None:
             self._totp_secrets = cast(

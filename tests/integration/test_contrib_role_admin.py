@@ -17,15 +17,13 @@ from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin.role_admin import SQLAlchemyRoleAdmin, SystemManagedRoleError
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.contrib.role_admin import create_role_admin_controller
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import RoleMixin, User, UserModelMixin, UserRoleAssociationMixin, UserRoleRelationshipMixin
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -268,7 +266,7 @@ async def _login_headers(
     """
     response = await client.post("/auth/login", json={"identifier": email, "password": password})
     assert response.status_code == HTTP_CREATED
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return {"Cookie": f"litestar_auth={response.cookies.get('litestar_auth')}"}
 
 
 def _load_role_assignments(engine: Engine, *, email: str) -> list[str]:
@@ -389,20 +387,11 @@ def app() -> Iterator[tuple[Litestar, Engine, LitestarAuthConfig[User, UUID]]]:
         )
         session.commit()
 
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-role-admin-secret-12345678901234567890",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="role-admin-session-hash-secret-1234567890",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=RoleAdminTestUserManager,

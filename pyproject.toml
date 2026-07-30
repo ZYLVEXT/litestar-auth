@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "6.0.0"
+version = "7.0.0"
 description = "Litestar Auth"
 readme = "README.md"
 license = "MIT"
@@ -26,6 +26,7 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
+    "authweave-core>=7.0.0,<8.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
     "idna>=3.18,<4.0",
@@ -81,6 +82,7 @@ include = ["litestar_auth", "tests"]
 
 [tool.deptry]
 experimental_namespace_package = true
+exclude = [".uv-cache", ".venv", "dist", "docker", "examples", "packages", "site", "tests"]
 
 [tool.deptry.per_rule_ignores]
 DEP001 = ["uvicorn"]
@@ -90,6 +92,12 @@ DEP003 = ["msgspec", "sqlalchemy"]
 
 [tool.uv]
 default-groups = []
+
+[tool.uv.sources]
+authweave-core = {workspace = true}
+
+[tool.uv.workspace]
+members = ["packages/*"]
 
 [tool.ruff]
 line-length = 120
@@ -125,6 +133,21 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+"docker/reference/*.py" = [
+    "assert",
+    "builtin-argument-shadowing",
+    "hardcoded-bind-all-interfaces",
+    "hardcoded-password-func-arg",
+    "import-outside-top-level",
+    "no-self-use",
+    "pytest-composite-assertion",
+    "try-consider-else",
+    "undocumented-public-class",
+    "undocumented-public-function",
+    "undocumented-public-init",
+    "undocumented-public-method",
+    "unused-method-argument",
+]
 "litestar_auth/ratelimit/__init__.py" = ["import-private-name"]
 "litestar_auth/models/__init__.py" = ["import-outside-top-level"]
 "litestar_auth/models/user.py" = ["typing-only-first-party-import"]
@@ -134,6 +157,78 @@ convention = "google"
 # secrets, but the values are stable error-code labels surfaced in API responses,
 # never credentials.
 "litestar_auth/exceptions.py" = ["hardcoded-password-string"]
+"litestar_auth/authentication/strategy/redis.py" = [
+    "hardcoded-password-string",
+    "too-many-return-statements",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-core/authweave_core/models.py" = ["hardcoded-password-string"]
+"packages/authweave-workload/authweave_workload/lifecycle.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "too-many-arguments",
+]
+"packages/authweave-workload/authweave_workload/models.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+]
+"packages/authweave-workload/authweave_workload/mtls.py" = [
+    "any-type",
+    "docstring-extraneous-exception",
+    "import-outside-top-level",
+    "magic-value-comparison",
+    "raise-vanilla-args",
+    "raise-within-try",
+    "raw-string-in-exception",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-workload/authweave_workload/provider.py" = [
+    "complex-structure",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "no-self-use",
+    "too-many-return-statements",
+]
+"packages/authweave-workload/authweave_workload/stores.py" = ["undocumented-public-method"]
+"packages/authweave-workload/authweave_workload/sqlalchemy.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+]
+"packages/authweave-workload/authweave_workload/jwks.py" = [
+    "any-type",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "import-outside-top-level",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "raise-within-try",
+    "too-many-statements-in-try-clause",
+    "multiple-with-statements",
+]
+"packages/authweave-workload/authweave_workload/jwt.py" = [
+    "any-type",
+    "complex-structure",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "import-outside-top-level",
+    "no-self-use",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "too-many-return-statements",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-statements",
+]
+"packages/authweave-workload/authweave_workload/delegation.py" = [
+    "complex-structure",
+    "docstring-missing-returns",
+    "too-many-arguments",
+    "too-many-return-statements",
+]
 # S105: JWT audience strings ("litestar-auth:verify", etc.) and secret-role
 # setting names are public protocol/catalog constants, not credentials.
 "litestar_auth/_secret_roles.py" = ["hardcoded-password-string"]
@@ -154,10 +249,41 @@ convention = "google"
     "S",
     "SLF",
 ]
+"packages/*/tests/**/*.py" = [
+    "unused-function-argument",
+    "unused-method-argument",
+    "invalid-function-name",
+    "non-lowercase-variable-in-function",
+    "import-private-name",
+    "too-many-locals",
+    "no-self-use",
+    "S",
+    "SLF",
+    "assert",
+    "undocumented-public-function",
+    "call-datetime-without-tzinfo",
+]
+"packages/*/tests/*.py" = [
+    "unused-function-argument",
+    "unused-method-argument",
+    "invalid-function-name",
+    "non-lowercase-variable-in-function",
+    "import-private-name",
+    "too-many-locals",
+    "no-self-use",
+    "S",
+    "SLF",
+    "assert",
+    "undocumented-public-function",
+    "undocumented-public-init",
+    "undocumented-public-method",
+    "call-datetime-without-tzinfo",
+]
 
 [tool.pytest.ini_options]
 timeout = 60
 pythonpath = ["."]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 minversion = "9.0"

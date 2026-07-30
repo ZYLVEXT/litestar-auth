@@ -33,7 +33,7 @@ from litestar_auth.controllers._utils import (
     _mark_litestar_auth_route_handler,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.guards import is_superuser, requires_password_session
+from litestar_auth.guards import is_human_authenticated, is_superuser
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def _resolve_role_admin_guards(settings: RoleAdminControllerConfig[Any]) -> tupl
         ConfigurationError: If an empty guard sequence is supplied.
     """
     if settings.guards is None:
-        return cast("tuple[Guard, ...]", (is_superuser, requires_password_session))
+        return cast("tuple[Guard, ...]", (is_superuser, is_human_authenticated))
     if not settings.guards:
         msg = "create_role_admin_controller guards must not be empty."
         raise ConfigurationError(msg)

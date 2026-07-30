@@ -7,8 +7,8 @@ _CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY = "totp_stepup_expires_at"
 _MAX_CLIENT_METADATA_VALUE_LENGTH = 255
 
 
-class _DatabaseRefreshTokenMetadataMixin:
-    """Capture bounded request metadata for database refresh sessions."""
+class _RefreshTokenMetadataMixin:
+    """Capture bounded request metadata for server-side refresh sessions."""
 
     _refresh_token_request_metadata: dict[str, str] | None
 

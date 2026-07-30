@@ -1,4 +1,4 @@
-"""End-to-end register/login flows across bearer and cookie JWT backends."""
+"""End-to-end registration and opaque cookie-session flows."""
 
 from __future__ import annotations
 
@@ -12,15 +12,12 @@ from litestar import Litestar, Request, get
 from sqlalchemy import create_engine, event
 from sqlalchemy.pool import StaticPool
 
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import SessionMaker
 
 if TYPE_CHECKING:
@@ -89,7 +86,7 @@ def protected_route(request: Request[Any, Any, Any]) -> dict[str, str]:
 
 @pytest.fixture
 def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
-    """Create a Litestar app wired with bearer and cookie JWT auth backends.
+    """Create a Litestar app wired with a database-backed cookie session.
 
     Yields:
         App under test and the shared verification-token tracker.
@@ -115,30 +112,6 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
 
     verification_tracker = VerificationTracker()
     password_helper = PasswordHelper()
-    bearer_backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-bearer-secret-1234567890-extra",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
-    cookie_backend = AuthenticationBackend[User, UUID](
-        name="cookie",
-        transport=CookieTransport(cookie_name=AUTH_COOKIE_NAME),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-cookie-secret-1234567890-extra",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
 
     def _build_user_manager(
         *,
@@ -159,7 +132,10 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         )
 
     config = LitestarAuthConfig[User, UUID](
-        backends=[bearer_backend, cookie_backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="database-session-token-hash-secret-1234567890",
+            cookie=CookieTransportConfig(cookie_name=AUTH_COOKIE_NAME),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_factory=_build_user_manager,
@@ -184,22 +160,12 @@ def test_client_base_url() -> str:
     return "https://testserver.local"
 
 
-@pytest.mark.parametrize(
-    ("login_path", "logout_path", "transport_name"),
-    [
-        ("/auth/login", "/auth/logout", "bearer"),
-        ("/auth/cookie/login", "/auth/cookie/logout", "cookie"),
-    ],
-)
 async def test_register_verify_login_logout_flow(
     client: tuple[AsyncTestClient[Litestar], VerificationTracker],
-    login_path: str,
-    logout_path: str,
-    transport_name: str,
 ) -> None:
-    """A full register-to-logout flow works for bearer and cookie JWT auth."""
+    """A full register-to-logout flow works with a server-side cookie session."""
     test_client, verification_tracker = client
-    email = f"{transport_name}@example.com"
+    email = "cookie-session@example.com"
     password = "correct horse battery staple"
 
     unauthorized_response = await test_client.get("/protected")
@@ -240,29 +206,24 @@ async def test_register_verify_login_logout_flow(
     }
 
     login_response = await test_client.post(
-        login_path,
+        "/auth/login",
         json={"identifier": email, "password": password},
         headers=csrf_headers,
     )
     assert login_response.status_code == HTTP_CREATED
 
     request_headers: dict[str, str] = dict(csrf_headers)
-    if transport_name == "bearer":
-        token = login_response.json()["access_token"]
-        request_headers["Authorization"] = f"Bearer {token}"
-    else:
-        assert test_client.cookies.get(AUTH_COOKIE_NAME) is not None
-        assert AUTH_COOKIE_NAME in login_response.headers["set-cookie"]
+    assert test_client.cookies.get(AUTH_COOKIE_NAME) is not None
+    assert AUTH_COOKIE_NAME in login_response.headers["set-cookie"]
 
     protected_response = await test_client.get("/protected", headers=request_headers)
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": email}
 
-    logout_response = await test_client.post(logout_path, headers=request_headers)
+    logout_response = await test_client.post("/auth/logout", headers=request_headers)
     assert logout_response.status_code == HTTP_CREATED
 
-    if transport_name == "cookie":
-        assert test_client.cookies.get(AUTH_COOKIE_NAME) is None
+    assert test_client.cookies.get(AUTH_COOKIE_NAME) is None
 
     post_logout_response = await test_client.get("/protected")
     assert post_logout_response.status_code == HTTP_UNAUTHORIZED

@@ -7,10 +7,16 @@ from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import Invalid
 
 from litestar_auth.authentication.strategy import _opaque_tokens as opaque_tokens_module
 from litestar_auth.authentication.strategy import redis as redis_strategy_module
 from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
+from litestar_auth.authentication.strategy.base import (
+    HumanSessionAuthenticated,
+    HumanSessionStrategy,
+    UserManagerProtocol,
+)
 from litestar_auth.authentication.strategy.redis import (
     DEFAULT_KEY_PREFIX,
     RedisClientProtocol,
@@ -32,6 +38,25 @@ FRACTIONAL_LIFETIME_REDIS_TTL_SECONDS = 2
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis, AsyncFakeRedisFactory
+
+
+async def _authenticated_user(
+    strategy: HumanSessionStrategy[ExampleUser, UUID],
+    token: str,
+    user_manager: UserManagerProtocol[ExampleUser, UUID],
+) -> ExampleUser:
+    attempt = await strategy.authenticate_token(token, user_manager)
+    assert isinstance(attempt, HumanSessionAuthenticated)
+    return attempt.user
+
+
+async def _assert_invalid(
+    strategy: HumanSessionStrategy[ExampleUser, UUID],
+    token: str,
+    user_manager: UserManagerProtocol[ExampleUser, UUID],
+) -> None:
+    attempt = await strategy.authenticate_token(token, user_manager)
+    assert isinstance(attempt, Invalid)
 
 
 class ExampleUserManager:
@@ -203,9 +228,10 @@ def test_redis_strategy_initializes_custom_configuration(
     assert strategy._decode_user_id(b"user-123") == "user-123"
     assert strategy._decode_user_id("user-123") == "user-123"
     assert strategy._decode_token_payload("v1:3:user-123") == (3, "user-123")
-    assert strategy._decode_token_payload("user-123") == (0, "user-123")
-    assert strategy._decode_token_payload("v1:3") == (0, "v1:3")
-    assert strategy._decode_token_payload("v1:not-int:user-123") == (0, "v1:not-int:user-123")
+    assert strategy._decode_token_payload("user-123") is None
+    assert strategy._decode_token_payload("v1:3") is None
+    assert strategy._decode_token_payload("v1:-1:user-123") is None
+    assert strategy._decode_token_payload("v1:not-int:user-123") is None
 
 
 def test_redis_strategy_fractional_lifetime_never_expires_early(
@@ -299,12 +325,12 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 
 
 @pytest.mark.parametrize("response_mode", ["bytes", "str"], ids=["bytes", "str"])
-async def test_redis_strategy_read_token_returns_user_from_stored_subject(
+async def test_redis_strategy_authenticates_stored_subject(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
     response_mode: str,
 ) -> None:
-    """read_token() should decode the stored user id and resolve the user."""
+    """Typed authentication decodes the stored user id and resolves the user."""
     _disable_optional_import(monkeypatch)
     user = ExampleUser(id=uuid4())
     user_manager = ExampleUserManager(user)
@@ -319,17 +345,37 @@ async def test_redis_strategy_read_token_returns_user_from_stored_subject(
         ),
     )
 
-    resolved_user = await strategy.read_token("token-read", user_manager)
+    resolved_user = await _authenticated_user(strategy, "token-read", user_manager)
 
     assert resolved_user == user
     assert user_manager.seen_user_ids == [user.id]
 
 
-async def test_redis_strategy_read_token_returns_none_for_missing_or_empty_input(
+async def test_redis_strategy_rejects_legacy_raw_user_id(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """read_token() should ignore absent tokens and Redis misses."""
+    """Version 7 never reinterprets a legacy raw-user-id session record."""
+    _disable_optional_import(monkeypatch)
+    user = ExampleUser(id=uuid4())
+    token = "legacy-token"
+    assert await async_fakeredis.set(_token_key(token), str(user.id)) is True
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
+        ),
+    )
+
+    await _assert_invalid(strategy, token, ExampleUserManager(user))
+
+
+async def test_redis_strategy_rejects_missing_token(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Typed authentication rejects Redis misses."""
     _disable_optional_import(monkeypatch)
     user = ExampleUser(id=uuid4())
     user_manager = ExampleUserManager(user)
@@ -340,16 +386,15 @@ async def test_redis_strategy_read_token_returns_none_for_missing_or_empty_input
         ),
     )
 
-    assert await strategy.read_token(None, user_manager) is None
-    assert await strategy.read_token("missing-token", user_manager) is None
+    await _assert_invalid(strategy, "missing-token", user_manager)
     assert user_manager.seen_user_ids == []
 
 
-async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails(
+async def test_redis_strategy_rejects_subject_when_decoder_fails(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
-    """read_token() should treat decoder failures as invalid tokens."""
+    """Typed authentication treats decoder failures as invalid tokens."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
     token_key = _token_key("token-invalid-subject")
@@ -369,14 +414,14 @@ async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails
             msg = "user manager should not be called for invalid token subjects"
             raise AssertionError(msg)
 
-    assert await strategy.read_token("token-invalid-subject", ShouldNotBeCalledUserManager()) is None
+    await _assert_invalid(strategy, "token-invalid-subject", ShouldNotBeCalledUserManager())
 
 
-async def test_redis_strategy_read_token_returns_none_when_epoch_is_corrupt(
+async def test_redis_strategy_rejects_corrupt_epoch(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
-    """read_token() should fail closed when the stored user epoch is not an integer."""
+    """Typed authentication fails closed when the stored user epoch is not an integer."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
     user = ExampleUser(id=uuid4())
@@ -391,7 +436,7 @@ async def test_redis_strategy_read_token_returns_none_when_epoch_is_corrupt(
     assert await redis.set(token_key, f"v1:0:{user.id}") is True
     assert await redis.set(strategy._user_epoch_key(str(user.id)), "not-int") is True
 
-    assert await strategy.read_token("token-corrupt-epoch", ExampleUserManager(user)) is None
+    await _assert_invalid(strategy, "token-corrupt-epoch", ExampleUserManager(user))
 
 
 async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_entry(
@@ -444,7 +489,7 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
     assert await async_fakeredis.get(token_key) is None
     assert await async_fakeredis.exists(index_key) == 0
     assert await async_fakeredis.get(extra_key) == str(user.id).encode()
-    assert await strategy.read_token("token-outside-index", ExampleUserManager(user)) is None
+    await _assert_invalid(strategy, "token-outside-index", ExampleUserManager(user))
     assert await async_fakeredis.get(strategy._user_epoch_key(str(user.id))) == b"1"
 
 
@@ -571,9 +616,9 @@ async def test_redis_strategy_invalidate_all_tokens_without_index_rejects_orphan
     assert await redis.get(matching_key_two) == f"v1:0:{user.id}"
     assert await redis.get(foreign_key) == f"v1:0:{other_user.id}"
     assert await redis.get(ignored_prefix_key) == str(user.id)
-    assert await strategy.read_token("orphan-a", ExampleUserManager(user)) is None
-    assert await strategy.read_token("orphan-b", ExampleUserManager(user)) is None
-    assert await strategy.read_token("orphan-other", ExampleUserManager(other_user)) == other_user
+    await _assert_invalid(strategy, "orphan-a", ExampleUserManager(user))
+    await _assert_invalid(strategy, "orphan-b", ExampleUserManager(user))
+    assert await _authenticated_user(strategy, "orphan-other", ExampleUserManager(other_user)) == other_user
 
 
 async def test_redis_strategy_write_token_after_invalidation_uses_current_epoch(
@@ -603,5 +648,69 @@ async def test_redis_strategy_write_token_after_invalidation_uses_current_epoch(
     await strategy.invalidate_all_tokens(user)
     after_token = await strategy.write_token(user)
 
-    assert await strategy.read_token(before_token, user_manager) is None
-    assert await strategy.read_token(after_token, user_manager) == user
+    await _assert_invalid(strategy, before_token, user_manager)
+    assert await _authenticated_user(strategy, after_token, user_manager) == user
+
+
+async def test_redis_refresh_rotation_revokes_access_and_replay_revokes_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis_factory: AsyncFakeRedisFactory,
+) -> None:
+    """Redis refresh rotation is single-use and replay revokes the whole session."""
+    _disable_optional_import(monkeypatch)
+    redis = async_fakeredis_factory(decode_responses=True)
+    user = ExampleUser(id=uuid4())
+    manager = ExampleUserManager(user)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast_fakeredis(redis, RedisClientProtocol),
+        token_hash_secret=TOKEN_HASH_SECRET,
+        subject_decoder=UUID,
+    )
+
+    first_refresh = await strategy.write_refresh_token(user)
+    session_id = await strategy.identify_refresh_session(user, first_refresh)
+    assert session_id is not None
+    first_access = await strategy.write_token_for_session(user, session_id)
+
+    rotation = await strategy.rotate_refresh_token(first_refresh, manager)
+    assert rotation is not None
+    _, second_refresh = rotation
+    await _assert_invalid(strategy, first_access, manager)
+    second_access = await strategy.write_token_for_session(user, session_id)
+    assert await _authenticated_user(strategy, second_access, manager) == user
+
+    assert await strategy.rotate_refresh_token(first_refresh, manager) is None
+    assert await strategy.identify_refresh_session(user, second_refresh) is None
+    await _assert_invalid(strategy, second_access, manager)
+
+
+async def test_redis_refresh_session_management_is_user_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis_factory: AsyncFakeRedisFactory,
+) -> None:
+    """Listing and targeted revocation never cross user ownership."""
+    _disable_optional_import(monkeypatch)
+    redis = async_fakeredis_factory(decode_responses=True)
+    user = ExampleUser(id=uuid4())
+    foreign_user = ExampleUser(id=uuid4())
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast_fakeredis(redis, RedisClientProtocol),
+        token_hash_secret=TOKEN_HASH_SECRET,
+        subject_decoder=UUID,
+    )
+
+    first = await strategy.write_refresh_token(user)
+    second = await strategy.write_refresh_token(user)
+    foreign = await strategy.write_refresh_token(foreign_user)
+    first_id = await strategy.identify_refresh_session(user, first)
+    second_id = await strategy.identify_refresh_session(user, second)
+    foreign_id = await strategy.identify_refresh_session(foreign_user, foreign)
+    assert first_id is not None
+    assert second_id is not None
+    assert foreign_id is not None
+    with pytest.raises(ValueError, match="inactive refresh session"):
+        await strategy.write_token_for_session(user, foreign_id)
+    assert await strategy.revoke_refresh_session(user, foreign_id) is False
+    assert await strategy.revoke_other_refresh_sessions(user, current_session_id=second_id) == 1
+    assert [session.session_id for session in await strategy.list_refresh_sessions(user)] == [second_id]
+    assert [session.session_id for session in await strategy.list_refresh_sessions(foreign_user)] == [foreign_id]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Any, cast, get_args, get_origin
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from litestar.connection import ASGIConnection
@@ -32,6 +32,7 @@ pytestmark = pytest.mark.unit
 class ExampleTransport:
     """Transport implementation that stores a token in headers."""
 
+    cookie_name = "session"
     header_name = "authorization"
 
     async def read_token(self, connection: ASGIConnection[Any, Any, Any, State]) -> str | None:
@@ -65,16 +66,6 @@ class ExampleStrategy:
     """Strategy implementation that derives tokens from a user id."""
 
     token_prefix = "token:"
-
-    async def read_token(self, token: str | None, user_manager: object) -> ExampleUser | None:
-        """Decode a user id from a token-like string.
-
-        Returns:
-            A user when a token is present, otherwise ``None``.
-        """
-        if token is None:
-            return None
-        return ExampleUser(id=UUID(token.removeprefix(self.token_prefix)))
 
     async def write_token(self, user: ExampleUser) -> str:
         """Encode a token-like string for a user.
@@ -169,14 +160,12 @@ async def test_transport_protocol_conformance() -> None:
 
 
 async def test_strategy_protocol_conformance() -> None:
-    """Strategy protocol resolves, writes, and destroys tokens."""
+    """Strategy protocol writes and destroys server-side session tokens."""
     user = ExampleUser(id=uuid4())
     strategy = ExampleStrategy()
 
     assert isinstance(strategy, StrategyProtocol)
     assert await strategy.write_token(user) == f"token:{user.id}"
-    assert await strategy.read_token(f"token:{user.id}", object()) == user
-    assert await strategy.read_token(None, object()) is None
     assert await strategy.destroy_token(f"token:{user.id}", user) is None
 
 

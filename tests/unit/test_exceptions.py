@@ -11,11 +11,6 @@ import litestar_auth._error_codes as error_codes_module
 import litestar_auth.exceptions as exceptions_module
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
-ApiKeyError = exceptions_module.ApiKeyError
-ApiKeyErrorCode = error_codes_module.ApiKeyErrorCode
-ApiKeyLimitReachedError = exceptions_module.ApiKeyLimitReachedError
-ApiKeyNotFoundError = exceptions_module.ApiKeyNotFoundError
-ApiKeyScopeDeniedError = exceptions_module.ApiKeyScopeDeniedError
 AuthenticationError = exceptions_module.AuthenticationError
 AuthErrorCode = error_codes_module.AuthErrorCode
 AuthorizationError = exceptions_module.AuthorizationError
@@ -80,18 +75,6 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
         "litestar-auth is configured incorrectly.",
         ErrorCode.CONFIGURATION_INVALID,
         LitestarAuthError,
-    ),
-    (
-        ApiKeyError,
-        "API-key operation failed.",
-        ApiKeyErrorCode.API_KEY_INVALID,
-        LitestarAuthError,
-    ),
-    (
-        ApiKeyNotFoundError,
-        "API key not found.",
-        ApiKeyErrorCode.API_KEY_INVALID,
-        ApiKeyError,
     ),
     (
         UserAlreadyExistsError,
@@ -171,7 +154,6 @@ EXPECTED_ERROR_CODE_GROUPS = {
         "UPDATE_USER_EMAIL_ALREADY_EXISTS": "UPDATE_USER_EMAIL_ALREADY_EXISTS",
         "UPDATE_USER_INVALID_PASSWORD": "UPDATE_USER_INVALID_PASSWORD",
         "SUPERUSER_CANNOT_DELETE_SELF": "SUPERUSER_CANNOT_DELETE_SELF",
-        "ORGANIZATION_SWITCH_DENIED": "ORGANIZATION_SWITCH_DENIED",
     },
     TokenErrorCode: {
         "TOKEN_PROCESSING_FAILED": "TOKEN_PROCESSING_FAILED",
@@ -216,16 +198,6 @@ EXPECTED_ERROR_CODE_GROUPS = {
         "OAUTH_USER_ALREADY_EXISTS": "OAUTH_USER_ALREADY_EXISTS",
         "OAUTH_ACCOUNT_ALREADY_LINKED": "OAUTH_ACCOUNT_ALREADY_LINKED",
     },
-    ApiKeyErrorCode: {
-        "API_KEY_INVALID": "API_KEY_INVALID",
-        "API_KEY_REVOKED": "API_KEY_REVOKED",
-        "API_KEY_EXPIRED": "API_KEY_EXPIRED",
-        "API_KEY_SCOPE_DENIED": "API_KEY_SCOPE_DENIED",
-        "API_KEY_LIMIT_REACHED": "API_KEY_LIMIT_REACHED",
-        "API_KEY_SIGNATURE_INVALID": "API_KEY_SIGNATURE_INVALID",
-        "API_KEY_SIGNATURE_TIMESTAMP_SKEW": "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
-        "API_KEY_SIGNATURE_NONCE_REPLAY": "API_KEY_SIGNATURE_NONCE_REPLAY",
-    },
 }
 
 EXPECTED_ERROR_CODES = {
@@ -250,7 +222,6 @@ EXPECTED_ERROR_CODES = {
     "UPDATE_USER_EMAIL_ALREADY_EXISTS": "UPDATE_USER_EMAIL_ALREADY_EXISTS",
     "UPDATE_USER_INVALID_PASSWORD": "UPDATE_USER_INVALID_PASSWORD",
     "SUPERUSER_CANNOT_DELETE_SELF": "SUPERUSER_CANNOT_DELETE_SELF",
-    "ORGANIZATION_SWITCH_DENIED": "ORGANIZATION_SWITCH_DENIED",
     "OAUTH_NOT_AVAILABLE_EMAIL": "OAUTH_NOT_AVAILABLE_EMAIL",
     "OAUTH_STATE_INVALID": "OAUTH_STATE_INVALID",
     "OAUTH_EMAIL_NOT_VERIFIED": "OAUTH_EMAIL_NOT_VERIFIED",
@@ -279,14 +250,6 @@ EXPECTED_ERROR_CODES = {
     "TOTP_ALREADY_ENABLED": "TOTP_ALREADY_ENABLED",
     "TOTP_ENROLL_BAD_TOKEN": "TOTP_ENROLL_BAD_TOKEN",
     "TOTP_STEPUP_REQUIRED": "TOTP_STEPUP_REQUIRED",
-    "API_KEY_INVALID": "API_KEY_INVALID",
-    "API_KEY_REVOKED": "API_KEY_REVOKED",
-    "API_KEY_EXPIRED": "API_KEY_EXPIRED",
-    "API_KEY_SCOPE_DENIED": "API_KEY_SCOPE_DENIED",
-    "API_KEY_LIMIT_REACHED": "API_KEY_LIMIT_REACHED",
-    "API_KEY_SIGNATURE_INVALID": "API_KEY_SIGNATURE_INVALID",
-    "API_KEY_SIGNATURE_TIMESTAMP_SKEW": "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
-    "API_KEY_SIGNATURE_NONCE_REPLAY": "API_KEY_SIGNATURE_NONCE_REPLAY",
 }
 _TRANSITIONAL_LOGIN_STATE_ERROR_CODES = {
     "LOGIN_USER_" + "INACTIVE",
@@ -374,7 +337,6 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
     assert str(reloaded_configuration_error) == ConfigurationError.default_message
     assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
-    assert reloaded_module.ApiKeyNotFoundError().code == ApiKeyErrorCode.API_KEY_INVALID
     assert str(reloaded_user_exists_error) == UserAlreadyExistsError.default_message
     assert reloaded_user_exists_error.code == ErrorCode.USER_ALREADY_EXISTS
     assert reloaded_user_exists_error.identifier_type == "email"
@@ -830,10 +792,6 @@ def test_exception_inheritance_hierarchy() -> None:
     assert issubclass(AuthorizationError, LitestarAuthError)
     assert issubclass(TokenError, LitestarAuthError)
     assert issubclass(ConfigurationError, LitestarAuthError)
-    assert issubclass(ApiKeyError, LitestarAuthError)
-    assert issubclass(ApiKeyNotFoundError, ApiKeyError)
-    assert issubclass(ApiKeyScopeDeniedError, ApiKeyError)
-    assert issubclass(ApiKeyLimitReachedError, ApiKeyError)
     assert issubclass(UserAlreadyExistsError, AuthenticationError)
     assert issubclass(UserNotExistsError, AuthenticationError)
     assert issubclass(InvalidPasswordError, AuthenticationError)
@@ -878,26 +836,11 @@ def test_error_code_domain_groups_match_aggregate_wire_values() -> None:
     } == EXPECTED_ERROR_CODE_GROUPS
     assert grouped_members == EXPECTED_ERROR_CODES
     assert {member.name: ERROR_CODE_REGISTRY[member].value for member in ErrorCode} == EXPECTED_ERROR_CODES
-    assert ERROR_CODE_REGISTRY[ErrorCode.API_KEY_INVALID] is ApiKeyErrorCode.API_KEY_INVALID
 
 
 def test_error_code_members_carry_emission_site_docstrings() -> None:
     """Documented code members link notable codes back to their emission sites."""
     assert "InvalidPasswordError" in (ErrorCode.LOGIN_BAD_CREDENTIALS.__doc__ or "")
-    assert "non-enumerating lookups" in (ApiKeyErrorCode.API_KEY_INVALID.__doc__ or "")
-
-
-def test_api_key_exceptions_use_api_key_domain_codes_by_default() -> None:
-    """API-key domain exceptions no longer inherit the generic authorization-denied code."""
-    scope_error = ApiKeyScopeDeniedError(denied_scopes=frozenset({"admin"}))
-    limit_error = ApiKeyLimitReachedError(max_keys_per_user=1)
-
-    assert ApiKeyError().code == ApiKeyErrorCode.API_KEY_INVALID
-    assert ApiKeyNotFoundError().code == ApiKeyErrorCode.API_KEY_INVALID
-    assert scope_error.code == ApiKeyErrorCode.API_KEY_SCOPE_DENIED
-    assert scope_error.denied_scopes == frozenset({"admin"})
-    assert limit_error.code == ApiKeyErrorCode.API_KEY_LIMIT_REACHED
-    assert limit_error.max_keys_per_user == 1
 
 
 def test_register_failed_error_code_is_available_for_register_response_collapse() -> None:

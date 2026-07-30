@@ -7,9 +7,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar.openapi.spec import Components, SecurityScheme
 
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 
 if TYPE_CHECKING:
@@ -19,19 +16,16 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth._plugin.config import StartupBackendTemplate
-    from litestar_auth.types import StrategyProtocol, TransportProtocol
+    from litestar_auth.types import TransportProtocol
 
 
 def security_scheme_for_transport(
     transport: TransportProtocol,
-    *,
-    strategy: StrategyProtocol[Any, Any] | None = None,
 ) -> SecurityScheme:
-    """Derive an OpenAPI ``SecurityScheme`` from a transport and optional strategy.
+    """Derive an OpenAPI ``SecurityScheme`` from a transport.
 
     Args:
         transport: The authentication transport to derive a scheme from.
-        strategy: Optional strategy used to refine the scheme (e.g. JWT bearer format).
 
     Returns:
         A ``SecurityScheme`` matching the transport's authentication mechanism.
@@ -39,23 +33,6 @@ def security_scheme_for_transport(
     Raises:
         TypeError: If the transport type is not supported for OpenAPI scheme derivation.
     """
-    if isinstance(transport, ApiKeyTransport):
-        return SecurityScheme(
-            type="http",
-            scheme="Bearer",
-            bearer_format="API key",
-            description=f"API-key authentication via Authorization bearer or {API_KEY_HEADER_NAME} header.",
-        )
-
-    if isinstance(transport, BearerTransport):
-        bearer_format = "JWT" if isinstance(strategy, JWTStrategy) else None
-        return SecurityScheme(
-            type="http",
-            scheme="Bearer",
-            bearer_format=bearer_format,
-            description="Bearer token authentication.",
-        )
-
     if isinstance(transport, CookieTransport):
         return SecurityScheme(
             type="apiKey",
@@ -79,32 +56,7 @@ def build_openapi_security_schemes(
     Returns:
         Dictionary keyed by backend name with corresponding security schemes.
     """
-    schemes = {
-        (
-            "apiKeyAuth" if isinstance(backend.transport, ApiKeyTransport) else backend.name
-        ): security_scheme_for_transport(
-            backend.transport,
-            strategy=backend.strategy,
-        )
-        for backend in backends
-    }
-    if any(
-        isinstance(backend.transport, ApiKeyTransport)
-        and (
-            getattr(getattr(backend.strategy, "api_key_config", None), "signing_enabled", False) is True
-            or getattr(backend.strategy, "secret_encryption_keyring", None) is not None
-        )
-        for backend in backends
-    ):
-        schemes["apiKeyHmacAuth"] = SecurityScheme(
-            type="http",
-            scheme="LSA1-HMAC-SHA256",
-            description=(
-                "Signed API-key authentication via Authorization: "
-                "LSA1-HMAC-SHA256 Credential=<key_id>, SignedHeaders=<headers>, Signature=<hex>."
-            ),
-        )
-    return schemes
+    return {backend.name: security_scheme_for_transport(backend.transport) for backend in backends}
 
 
 def build_security_requirement(

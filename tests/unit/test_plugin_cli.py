@@ -40,7 +40,7 @@ from litestar_auth._plugin.role_cli import (
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.extensions import EXTENSION_API_VERSION
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -50,6 +50,7 @@ from litestar_auth.types import UserProtocol
 from tests._helpers import ExampleUser
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
+from tests.integration.test_orchestrator import build_test_redis_strategy
 
 if TYPE_CHECKING:
     from click import Group
@@ -207,8 +208,8 @@ def _minimal_config[UP: _EmailUserProtocol](
     user_db = InMemoryUserDatabase[UP]([])
     backend = AuthenticationBackend[UP, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=_as_any(_CLIInMemoryTokenStrategy[UP]()),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=_as_any(build_test_redis_strategy(key_prefix="plugin-cli")),
     )
     return LitestarAuthConfig[UP, UUID](
         backends=[backend],

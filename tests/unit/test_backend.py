@@ -231,29 +231,6 @@ async def test_terminate_session_falls_back_to_read_token_without_logout_reader(
     transport.set_logout.assert_called_once()
 
 
-async def test_backend_authenticate_reads_transport_token_and_resolves_user() -> None:
-    """Authenticate reads the transport token before asking the strategy."""
-    user = ExampleUser(id=uuid4())
-    connection = _build_connection()
-    user_manager = AsyncMock()
-    transport = Mock()
-    transport.read_token = AsyncMock()
-    strategy = AsyncMock()
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="redis-cookie",
-        transport=transport,
-        strategy=strategy,
-    )
-    transport.read_token.return_value = "token-2"
-    strategy.read_token.return_value = user
-
-    result = await backend.authenticate(connection, user_manager)
-
-    assert result == user
-    transport.read_token.assert_awaited_once_with(connection)
-    strategy.read_token.assert_awaited_once_with("token-2", user_manager)
-
-
 def test_backend_with_session_rebinds_strategy_when_supported() -> None:
     """with_session returns a new backend instance when the strategy supports rebinding."""
     transport = Mock()
@@ -263,9 +240,6 @@ def test_backend_with_session_rebinds_strategy_when_supported() -> None:
     class StrategyWithSession:
         def __init__(self) -> None:
             self.with_session = Mock(return_value=rebound_strategy)
-
-        async def read_token(self, token: str | None, user_manager: object) -> object:
-            return None
 
         async def write_token(self, user: object) -> str:
             return "token"
@@ -294,9 +268,6 @@ def test_backend_with_session_returns_self_for_non_bindable_strategy() -> None:
     """with_session returns the existing backend when the strategy is not session-bindable."""
 
     class StrategyWithoutSession:
-        async def read_token(self, token: str | None, user_manager: object) -> object:
-            return None
-
         async def write_token(self, user: object) -> str:
             return "token"
 
@@ -322,9 +293,6 @@ def test_bind_strategy_session_uses_with_session_when_callable() -> None:
         def __init__(self) -> None:
             self.with_session = Mock(return_value=sentinel_strategy)
 
-        async def read_token(self, token: str | None, user_manager: object) -> object:
-            return None
-
         async def write_token(self, user: object) -> str:
             return "token"
 
@@ -343,9 +311,6 @@ def test_bind_strategy_session_leaves_non_bindable_strategy_unchanged() -> None:
     """_bind_strategy_session returns the original strategy when it is not SessionBindable."""
 
     class StrategyWithoutSession:
-        async def read_token(self, token: str | None, user_manager: object) -> object:
-            return None
-
         async def write_token(self, user: object) -> str:
             return "token"
 

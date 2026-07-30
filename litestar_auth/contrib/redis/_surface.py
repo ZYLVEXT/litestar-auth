@@ -14,11 +14,7 @@ from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 import litestar_auth._redis_protocols as redis_protocols_module
-from litestar_auth.authentication.strategy._api_key_nonce_store import (
-    RedisApiKeyNonceStore,
-    RedisApiKeyNonceStoreClient,
-)
-from litestar_auth.authentication.strategy.jwt import RedisJWTDenylistStore
+from litestar_auth.authentication.strategy._jwt_denylist import RedisJWTDenylistStore
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.ratelimit import (
     DEFAULT_KEY_PREFIX,
@@ -257,8 +253,6 @@ class RedisAuthPreset:
 
 
 __all__ = (
-    "RedisApiKeyNonceStore",
-    "RedisApiKeyNonceStoreClient",
     "RedisAuthClientProtocol",
     "RedisAuthPreset",
     "RedisAuthRateLimitConfigOptions",

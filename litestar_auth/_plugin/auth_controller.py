@@ -34,7 +34,7 @@ from litestar_auth.controllers.auth import (
 )
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
-from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # ruff: ignore[typing-only-first-party-import]
+from litestar_auth.payloads import LoginCredentials  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
 from litestar_auth.types import UserProtocol
 
@@ -228,14 +228,12 @@ def _define_plugin_refresh_auth_controller_class[UP: UserProtocol[Any], ID](
         async def refresh(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
-            data: RefreshTokenRequest,
             litestar_auth_user_manager: _AuthUserManagerDep,
             litestar_auth_backends: _AuthBackendsDep,
         ) -> Response[Any]:
             return await _handle_auth_refresh(
                 request,
                 ctx=assembly.factory_kit.runtime_context(litestar_auth_backends),
-                data=data,
                 user_manager=litestar_auth_user_manager,
             )
 

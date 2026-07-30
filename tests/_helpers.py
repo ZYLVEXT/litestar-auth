@@ -16,6 +16,8 @@ from litestar.di import Provide
 
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
+from litestar_auth.authentication.human_session import HumanSessionProvider
+from litestar_auth.authentication.middleware import LitestarProviderBinding
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterable, Sequence
@@ -335,6 +337,32 @@ def auth_middleware_get_request_session(session_maker: SessionFactory) -> Callab
         with ``session_maker`` bound.
     """
     return partial(get_or_create_scoped_session, session_maker=session_maker)
+
+
+def human_session_bindings_factory(
+    *,
+    name: str,
+    cookie_name: str,
+    strategy: object,
+    user_manager: object,
+) -> Callable[[object], tuple[LitestarProviderBinding]]:
+    """Build request-scoped typed human-provider bindings for integration tests.
+
+    Returns:
+        Provider factory accepted by :class:`LitestarAuthMiddleware`.
+    """
+
+    def build(_session: object) -> tuple[LitestarProviderBinding]:
+        provider = HumanSessionProvider(
+            name=name,
+            cookie_name=cookie_name,
+            issuer="urn:litestar-auth:test",
+            strategy=cast("Any", strategy),
+            user_manager=cast("Any", user_manager),
+        )
+        return (LitestarProviderBinding(provider=provider, load_principal=provider.load_principal),)
+
+    return build
 
 
 def litestar_app_with_user_manager(

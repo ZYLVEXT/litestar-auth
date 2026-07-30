@@ -26,9 +26,8 @@ try:
 except ImportError:
     import click  # type: ignore[no-redef]
 
-from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, SQLAlchemyUserModelProtocol
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import (
@@ -39,7 +38,7 @@ from litestar_auth.models import (
     UserRoleAssociationMixin,
     UserRoleRelationshipMixin,
 )
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
 
 if TYPE_CHECKING:
@@ -585,11 +584,6 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # ruff: ignore[too-many-arg
     Raises:
         AssertionError: If neither ``engine`` nor ``session_maker`` is supplied.
     """
-    backend = AuthenticationBackend[UP, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", _RoleCLITokenStrategy[UP]()),
-    )
     if session_maker is None:
         if engine is None:
             msg = "Role CLI test helpers require an engine when session_maker is omitted."
@@ -612,7 +606,10 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # ruff: ignore[too-many-arg
     )
     if user_manager_factory is not None:
         return LitestarAuthConfig[UP, UUID](
-            backends=[backend],
+            database_token_auth=DatabaseTokenAuthConfig(
+                token_hash_secret="role-cli-session-hash-secret-123456789012345",
+                cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+            ),
             session_maker=session_maker,
             user_model=user_model,
             user_manager_factory=user_manager_factory,
@@ -624,7 +621,10 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # ruff: ignore[too-many-arg
             include_users=False,
         )
     return LitestarAuthConfig[UP, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="role-cli-session-hash-secret-123456789012345",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=session_maker,
         user_model=user_model,
         user_manager_class=user_manager_class or _RoleCLIUserManager,

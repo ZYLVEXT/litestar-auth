@@ -9,13 +9,10 @@ from litestar.connection import ASGIConnection
 
 from litestar_auth._auth_model_mixins import OrganizationMixin
 from litestar_auth._tenant_resolution import (
-    ClaimTenantResolver,
     HeaderTenantResolver,
     SubdomainTenantResolver,
     TenantResolver,
 )
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext
-from litestar_auth.authentication.strategy.jwt import JWTContext
 from litestar_auth.ratelimit._client_host import _get_header_value, _normalize_host_value
 
 pytestmark = pytest.mark.unit
@@ -77,38 +74,6 @@ def test_header_tenant_resolver_extracts_configured_header_and_normalizes_slug()
     connection = _build_connection([(b"x-tenant", b" Acme Team ")])
 
     assert resolver(connection) == _organization_mixin_normalized_slug(" Acme Team ")
-
-
-def test_claim_tenant_resolver_extracts_verified_jwt_context_and_normalizes_slug() -> None:
-    """Signed JWT organization context is the trusted tenant source."""
-    connection = _build_connection(
-        [(b"x-organization", b"untrusted-header")],
-        auth=JWTContext(organization=" Acme Team "),
-    )
-
-    assert ClaimTenantResolver()(connection) == _organization_mixin_normalized_slug(" Acme Team ")
-
-
-@pytest.mark.parametrize(
-    "auth",
-    [
-        pytest.param(None, id="missing"),
-        pytest.param(JWTContext(), id="jwt-without-organization"),
-        pytest.param(ApiKeyContext(key_id="key-id", scopes=(), prefix_env="prod"), id="non-jwt-context"),
-    ],
-)
-def test_claim_tenant_resolver_returns_none_without_signed_jwt_organization_context(auth: object | None) -> None:
-    """Requests without signed JWT organization context fail closed."""
-    connection = _build_connection([(b"x-organization", b"acme")], auth=auth)
-
-    assert ClaimTenantResolver()(connection) is None
-
-
-def test_claim_tenant_resolver_returns_none_for_malformed_jwt_organization_context() -> None:
-    """Malformed JWT organization values fail closed after contextual auth."""
-    connection = _build_connection([], auth=JWTContext(organization="   "))
-
-    assert ClaimTenantResolver()(connection) is None
 
 
 @pytest.mark.parametrize(

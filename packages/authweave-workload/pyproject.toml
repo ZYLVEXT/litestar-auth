@@ -1,0 +1,71 @@
+[project]
+name = "authweave-workload"
+version = "7.0.0"
+description = "Framework-neutral sender-constrained workload authentication"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Vladislav Shepilov", email = "shepilov.v@protonmail.com"},
+]
+maintainers = [
+    {name = "Vladislav Shepilov", email = "shepilov.v@protonmail.com"},
+]
+keywords = ["authentication", "workload", "mtls", "oauth", "x509"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+requires-python = "<3.15.0,>=3.12.0"
+dependencies = ["authweave-core>=7.0.0,<8.0"]
+
+[project.urls]
+homepage = "https://github.com/ZYLVEXT/litestar-auth"
+documentation = "https://zylvext.github.io/litestar-auth/"
+source = "https://github.com/ZYLVEXT/litestar-auth"
+tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
+
+[project.optional-dependencies]
+sqlalchemy = ["sqlalchemy>=2.0.48,<3.0"]
+mtls = ["cryptography>=49.0.0"]
+jwt = ["authweave-workload[mtls]", "anyio>=4.14.2,<5.0", "httpx>=0.28.1,<1.0", "pyjwt>=2.13.0,<3.0"]
+litestar = ["authweave-workload[sqlalchemy]", "litestar>=2.22.0,<3.0", "litestar-auth>=7.0.0,<8.0"]
+all = ["authweave-workload[jwt,litestar]"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["authweave_workload"]
+artifacts = ["authweave_workload/py.typed", "authweave_workload/migrations/*.sql"]
+
+[tool.coverage.run]
+source = ["authweave_workload"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["authweave_workload", "tests"]
+
+[tool.deptry]
+experimental_namespace_package = true
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["authweave-workload"]
+
+[tool.uv.sources]
+authweave-core = {workspace = true}
+litestar-auth = {workspace = true}

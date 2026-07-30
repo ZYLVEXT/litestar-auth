@@ -7,10 +7,12 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from fakeredis import FakeAsyncRedis
 from litestar import Litestar
 
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -22,7 +24,7 @@ from tests.integration.test_controller_reset import build_app as build_reset_app
 from tests.integration.test_controller_totp import build_app as build_totp_app
 from tests.integration.test_controller_users import build_app as build_users_app
 from tests.integration.test_controller_verify import build_app as build_verify_app
-from tests.integration.test_orchestrator import InMemoryRefreshTokenStrategy, PluginUserManager
+from tests.integration.test_orchestrator import PluginUserManager
 
 pytestmark = [pytest.mark.integration]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -67,10 +69,6 @@ COMPONENT_CONTRACTS = {
             "identifier": PropertyContract(min_length=1, max_length=320),
             "password": PropertyContract(min_length=1, max_length=128),
         },
-    ),
-    "RefreshTokenRequest": ComponentContract(
-        required=frozenset({"refresh_token"}),
-        properties={"refresh_token": PropertyContract(min_length=1, max_length=512)},
     ),
     "RequestVerifyToken": ComponentContract(
         required=frozenset({"email"}),
@@ -135,17 +133,21 @@ COMPONENT_CONTRACTS = {
 
 
 def _build_plugin_openapi_app() -> Litestar:
-    """Build a plugin-mounted app using the consumer-reported ``/auth/jwt`` prefix.
+    """Build a plugin-mounted app using the v7 ``/auth`` prefix.
 
     Returns:
-        Litestar app exposing plugin-managed auth routes under ``/auth/jwt``.
+        Litestar app exposing plugin-managed auth routes under ``/auth``.
     """
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="openapi")),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
+                strategy=RedisTokenStrategy(
+                    redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+                    token_hash_secret="openapi-session-hash-secret-1234567890123456",
+                    subject_decoder=UUID,
+                ),
             ),
         ],
         session_maker=cast("Any", DummySessionMaker()),
@@ -158,8 +160,8 @@ def _build_plugin_openapi_app() -> Litestar:
             id_parser=UUID,
             password_helper=PasswordHelper(),
         ),
-        auth_path="/auth/jwt",
-        enable_refresh=True,
+        auth_path="/auth",
+        enable_refresh=False,
         include_users=False,
         include_verify=True,
     )
@@ -264,7 +266,7 @@ def _assert_request_body_component_contract(
 
 @pytest.fixture
 def plugin_app() -> Litestar:
-    """Provide the plugin-mounted app used to lock `/auth/jwt/*` schema paths.
+    """Provide the plugin-mounted app used to lock `/auth/*` schema paths.
 
     Returns:
         Litestar app exposing the plugin-mounted auth schema.
@@ -275,13 +277,12 @@ def plugin_app() -> Litestar:
 @pytest.mark.parametrize(
     ("path", "schema_ref"),
     [
-        ("/auth/jwt/login", "#/components/schemas/LoginCredentials"),
-        ("/auth/jwt/register", "#/components/schemas/UserCreate"),
-        ("/auth/jwt/request-verify-token", "#/components/schemas/RequestVerifyToken"),
-        ("/auth/jwt/verify", "#/components/schemas/VerifyToken"),
-        ("/auth/jwt/forgot-password", "#/components/schemas/ForgotPassword"),
-        ("/auth/jwt/reset-password", "#/components/schemas/ResetPassword"),
-        ("/auth/jwt/refresh", "#/components/schemas/RefreshTokenRequest"),
+        ("/auth/login", "#/components/schemas/LoginCredentials"),
+        ("/auth/register", "#/components/schemas/UserCreate"),
+        ("/auth/request-verify-token", "#/components/schemas/RequestVerifyToken"),
+        ("/auth/verify", "#/components/schemas/VerifyToken"),
+        ("/auth/forgot-password", "#/components/schemas/ForgotPassword"),
+        ("/auth/reset-password", "#/components/schemas/ResetPassword"),
     ],
 )
 def test_plugin_mounted_auth_routes_publish_expected_request_bodies_and_component_shapes(
@@ -289,10 +290,9 @@ def test_plugin_mounted_auth_routes_publish_expected_request_bodies_and_componen
     path: str,
     schema_ref: str,
 ) -> None:
-    """Plugin-mounted auth routes retain the documented `/auth/jwt/*` request contracts."""
+    """Plugin-mounted auth routes retain the documented `/auth/*` request contracts."""
     paths = cast("Any", plugin_app.openapi_schema.paths)
 
-    assert "/auth/login" not in paths
     assert path in paths
     _assert_request_body_component_contract(plugin_app, path=path, method_name="post", schema_ref=schema_ref)
 
@@ -300,14 +300,13 @@ def test_plugin_mounted_auth_routes_publish_expected_request_bodies_and_componen
 def test_plugin_mounted_auth_routes_keep_stable_route_table(plugin_app: Litestar) -> None:
     """Plugin-mounted auth routes retain their generated OpenAPI path and method table."""
     assert _route_table_snapshot(plugin_app) == (
-        ("/auth/jwt/forgot-password", ("post",)),
-        ("/auth/jwt/login", ("post",)),
-        ("/auth/jwt/logout", ("post",)),
-        ("/auth/jwt/refresh", ("post",)),
-        ("/auth/jwt/register", ("post",)),
-        ("/auth/jwt/request-verify-token", ("post",)),
-        ("/auth/jwt/reset-password", ("post",)),
-        ("/auth/jwt/verify", ("post",)),
+        ("/auth/forgot-password", ("post",)),
+        ("/auth/login", ("post",)),
+        ("/auth/logout", ("post",)),
+        ("/auth/register", ("post",)),
+        ("/auth/request-verify-token", ("post",)),
+        ("/auth/reset-password", ("post",)),
+        ("/auth/verify", ("post",)),
     )
 
 
@@ -315,17 +314,23 @@ def test_plugin_mounted_auth_routes_keep_stable_route_table(plugin_app: Litestar
     ("path", "schema_ref"),
     [
         ("/auth/login", "#/components/schemas/LoginCredentials"),
-        ("/auth/refresh", "#/components/schemas/RefreshTokenRequest"),
     ],
 )
 def test_direct_auth_routes_publish_expected_request_bodies_and_component_shapes(
     path: str,
     schema_ref: str,
 ) -> None:
-    """Direct auth-controller mounts keep the built-in login and refresh request contracts."""
+    """Direct auth-controller mounts keep the built-in login request contract."""
     app, *_ = build_auth_app(enable_refresh=True)
 
     _assert_request_body_component_contract(app, path=path, method_name="post", schema_ref=schema_ref)
+
+
+def test_refresh_routes_are_cookie_only_and_have_no_request_body() -> None:
+    """Refresh consumes only the dedicated HttpOnly cookie."""
+    app = build_auth_app(enable_refresh=True)[0]
+    operation = cast("Any", app.openapi_schema.paths)["/auth/refresh"].post
+    assert operation.request_body is None
 
 
 def test_direct_register_route_publishes_expected_request_body_component_shape() -> None:

@@ -15,14 +15,7 @@ if TYPE_CHECKING:
 
 
 class StrategyProto[UP: UserProtocol[Any], ID](Protocol):
-    """Narrow strategy contract consumed by plugin backend factories."""
-
-    async def read_token(
-        self,
-        token: str | None,
-        user_manager: object,
-    ) -> UP | None:
-        """Resolve a user from a transport token."""
+    """Narrow session-lifecycle contract consumed by plugin backend factories."""
 
     async def write_token(self, user: UP) -> str:
         """Create a transport token for ``user``."""

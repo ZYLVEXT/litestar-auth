@@ -20,7 +20,6 @@ from litestar_auth._plugin import config as plugin_config
 from litestar_auth._plugin.exception_handlers import client_exception_handler
 from litestar_auth.authentication import LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import (
@@ -35,9 +34,9 @@ from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 if TYPE_CHECKING:
@@ -94,8 +93,8 @@ def _minimal_config(
     user_db = InMemoryUserDatabase([])
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-hooks")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-hooks"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend or default_backend],
@@ -315,7 +314,7 @@ def test_register_middleware_without_hook_keeps_default_definition() -> None:
     cookie_backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=CookieTransport(cookie_name="auth_cookie", secure=False, path="/", samesite="lax"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-hooks-cookie")),
+        strategy=build_test_redis_strategy(key_prefix="plugin-hooks-cookie"),
     )
     config = _minimal_config(backend=cookie_backend)
     config.csrf_secret = "0123456789abcdef" * 4

@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin.advanced_alchemy import bind_auth_session_to_alchemy
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
@@ -91,6 +92,7 @@ def _build_coexistence_app(
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="0123456789abcdef" * 4,
             backend_name="opaque-db",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,

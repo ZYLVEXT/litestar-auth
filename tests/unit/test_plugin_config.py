@@ -17,12 +17,10 @@ import msgspec
 import pytest
 from cryptography.fernet import Fernet
 
-import litestar_auth._plugin.api_key as api_key_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth._plugin.startup as startup_module
-import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME, AuthExtension
 from litestar_auth._permissions import StaticRolePermissionResolver, permissions_grant
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
@@ -34,7 +32,7 @@ from litestar_auth._plugin.user_manager_builder import (
     resolve_password_validator,
     resolve_user_manager_factory,
 )
-from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER, ClaimTenantResolver, HeaderTenantResolver
+from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER, HeaderTenantResolver
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy._jwt_denylist import (
     InMemoryJWTDenylistStore,
@@ -44,9 +42,8 @@ from litestar_auth.authentication.strategy._jwt_denylist import (
 )
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
-from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, UNSET, OAuthProviderConfig, require_password_length
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, OAuthProviderConfig, require_password_length
 from litestar_auth.exceptions import ConfigurationError, InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -68,20 +65,15 @@ from tests.integration.test_orchestrator import (
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 # Canonical substring from ``_raise_startup_only_database_token_runtime_error`` (database_token.py).
 _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
-_API_KEY_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
 DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS
 DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS
-API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
-ApiKeyConfig = plugin_config_module.ApiKeyConfig
-DEFAULT_API_KEY_MAX_KEYS_PER_USER = plugin_config_module.DEFAULT_API_KEY_MAX_KEYS_PER_USER
-DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = plugin_config_module.DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
-DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = plugin_config_module.DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
 DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
 OrganizationConfig = plugin_config_module.OrganizationConfig
@@ -161,14 +153,56 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
     return OAuthProviderConfig(name=name, client=client)
 
 
-def test_plugin_config_reexports_feature_config_contracts() -> None:
-    """Historical config-module imports resolve to the relocated feature config classes."""
-    assert plugin_config_module.AccountLockoutConfig is AccountLockoutConfig
-    assert plugin_config_module.ApiKeyConfig is plugin_features_module.ApiKeyConfig
-    assert plugin_config_module.DatabaseTokenAuthConfig is plugin_features_module.DatabaseTokenAuthConfig
-    assert plugin_config_module.OAuthConfig is plugin_features_module.OAuthConfig
-    assert plugin_config_module.OrganizationConfig is plugin_features_module.OrganizationConfig
-    assert plugin_config_module.TotpConfig is plugin_features_module.TotpConfig
+def _minimal_config(  # ruff: ignore[too-many-arguments]
+    *,
+    backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
+    include_users: bool = False,
+    totp_config: TotpConfig | None = None,
+    account_lockout_config: AccountLockoutConfig | None = None,
+    organization_config: OrganizationConfig | None = None,
+    user_manager_security: UserManagerSecurity[UUID] | None = None,
+    user_manager_class: type[Any] | None = None,
+    id_parser: type[UUID] | None = None,
+    login_identifier: Literal["email", "username"] = "email",
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
+    role_permissions: dict[str, object] | None = None,
+    permission_resolver: PermissionResolver | None = None,
+) -> LitestarAuthConfig[ExampleUser, UUID]:
+    """Build a minimal config for plugin tests.
+
+    Returns:
+        A minimal plugin configuration.
+    """
+    user_db = InMemoryUserDatabase([])
+    default_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config"),
+    )
+    return LitestarAuthConfig[ExampleUser, UUID](
+        backends=backends if backends is not None else [default_backend],
+        user_model=ExampleUser,
+        user_manager_class=user_manager_class or PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: user_db,
+        user_manager_security=user_manager_security
+        or UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+        ),
+        include_users=include_users,
+        account_lockout_config=AccountLockoutConfig() if account_lockout_config is None else account_lockout_config,
+        organization_config=OrganizationConfig() if organization_config is None else organization_config,
+        id_parser=id_parser,
+        totp_config=totp_config,
+        login_identifier=login_identifier,
+        superuser_role_name=superuser_role_name,
+        role_permissions={} if role_permissions is None else role_permissions,
+        permission_resolver=permission_resolver,
+    )
 
 
 def test_backend_inventory_resolve_returns_consistent_inventory() -> None:
@@ -199,191 +233,14 @@ def test_backend_inventory_resolve_returns_consistent_inventory() -> None:
 
     mismatched_backend = AuthenticationBackend[ExampleUser, UUID](
         name="mismatch",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="mismatch")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="mismatch"),
     )
     with pytest.raises(RuntimeError, match="no longer matches"):
         inventory.resolve_request_backend(
             [mismatched_backend],
             backend_index=0,
         )
-
-
-def test_backend_inventory_appends_api_key_backend_only_when_enabled() -> None:
-    """Disabled API keys leave backend order unchanged; enabling appends the backend."""
-    disabled_config = _minimal_config()
-    enabled_config = _minimal_config(
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-
-    disabled_backends = plugin_config_module.resolve_backend_inventory(disabled_config).startup_backends()
-    enabled_backends = plugin_config_module.resolve_backend_inventory(enabled_config).startup_backends()
-
-    assert [backend.name for backend in disabled_backends] == ["primary"]
-    assert [backend.name for backend in enabled_backends] == ["primary", "api_key"]
-    assert enabled_backends[1].transport.__class__.__name__ == "ApiKeyTransport"
-    assert cast("Any", enabled_backends[1].strategy).prefix_env == "prod"
-
-
-def test_backend_inventory_skips_api_key_backend_until_secret_is_available() -> None:
-    """Direct inventory resolution leaves API-key auth absent until validation supplies a hash secret."""
-    no_security_config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
-    no_security_config.user_manager_security = None
-    no_hash_secret_config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
-
-    assert [backend.name for backend in no_security_config.resolve_startup_backends()] == ["primary"]
-    assert [backend.name for backend in no_hash_secret_config.resolve_startup_backends()] == ["primary"]
-
-
-def test_feature_registry_captures_feature_configs_and_backend_inventory_once() -> None:
-    """FeatureRegistry is the canonical cached source for enabled features and startup backends."""
-    config = _minimal_config(
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
-        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    oauth_config = OAuthConfig(
-        oauth_providers=(_oauth_provider(name="github", client=object()),),
-        oauth_redirect_base_url="https://example.com/auth/oauth",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-    )
-    config.oauth_config = oauth_config
-
-    registry = config.resolve_feature_registry()
-
-    assert config.resolve_feature_registry() is registry
-    assert registry.config_for("api_key") is config.api_keys
-    assert registry.config_for("totp") is config.totp_config
-    assert registry.config_for("oauth") is oauth_config
-    assert registry.config_for("organization") is config.organization_config
-    assert registry.config_for("database_token") is None
-    assert registry.is_enabled("api_key") is True
-    assert registry.is_enabled("totp") is True
-    assert registry.is_enabled("oauth") is True
-    assert registry.is_enabled("organization") is False
-    assert registry.is_enabled("database_token") is False
-    assert [backend.name for backend in registry.startup_backends()] == ["primary", "api_key"]
-    assert registry.backend_by_feature["api_key"] == (1, registry.startup_backends()[1])
-    assert plugin_config_module.resolve_backend_inventory(config) is registry.backend_inventory
-
-
-def test_feature_registry_enabled_disabled_permutations() -> None:
-    """FeatureRegistry reports enabled optional features without changing backend assembly."""
-    disabled_registry = _minimal_config().resolve_feature_registry()
-    api_key_registry = _minimal_config(
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    ).resolve_feature_registry()
-    database_token_registry = LitestarAuthConfig[ExampleUser, UUID](
-        backends=(),
-        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
-            assert_structural_session_factory(DummySessionMaker()),
-        ),
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-        ),
-    ).resolve_feature_registry()
-    organization_registry = _minimal_config(
-        organization_config=OrganizationConfig(enabled=True, store_factory=cast("Any", lambda _session: object())),
-    ).resolve_feature_registry()
-
-    assert disabled_registry.enabled_features == frozenset()
-    assert api_key_registry.enabled_features == frozenset({plugin_features_module.API_KEY_FEATURE})
-    assert [backend.name for backend in api_key_registry.startup_backends()] == ["primary", "api_key"]
-    assert database_token_registry.enabled_features == frozenset({plugin_features_module.DATABASE_TOKEN_FEATURE})
-    assert [backend.name for backend in database_token_registry.startup_backends()] == ["database"]
-    assert database_token_registry.backend_by_feature["database_token"] == (
-        0,
-        database_token_registry.startup_backends()[0],
-    )
-    assert organization_registry.enabled_features == frozenset({plugin_features_module.ORGANIZATION_FEATURE})
-    assert [backend.name for backend in organization_registry.startup_backends()] == ["primary"]
-    assert plugin_features_module.ORGANIZATION_FEATURE not in organization_registry.backend_by_feature
-
-
-def test_resolve_backends_binds_api_key_store_factory_to_request_session() -> None:
-    """The API-key backend is startup-lazy and binds its store per request session."""
-    sessions: list[object] = []
-    api_key_store = object()
-
-    def _store_factory(session: object) -> object:
-        sessions.append(session)
-        return api_key_store
-
-    config = _minimal_config(
-        backends=[],
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            store_factory=cast("Any", _store_factory),
-            allowed_scopes=("read",),
-            environment_marker="test",
-        ),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    session = DummySession()
-
-    (backend,) = config.resolve_backends(cast("Any", session))
-
-    assert backend.name == "api_key"
-    assert sessions == [session]
-    assert cast("Any", backend.strategy).api_key_store is api_key_store
-    assert cast("Any", backend.strategy).prefix_env == "test"
-    assert cast("Any", backend.strategy).scope_authority is api_key_guards_module.default_api_key_scope_authority
-
-
-def test_resolve_backends_preserves_custom_api_key_scope_authority() -> None:
-    """A custom API-key scope authority is passed through to the request-bound strategy."""
-    sessions: list[object] = []
-
-    def _store_factory(session: object) -> object:
-        sessions.append(session)
-        return object()
-
-    def _scope_authority(_connection: object, _api_key_scopes: frozenset[str]) -> bool:
-        return True
-
-    config = _minimal_config(
-        backends=[],
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            store_factory=cast("Any", _store_factory),
-            allowed_scopes=("read",),
-            scope_authority=cast("Any", _scope_authority),
-        ),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-
-    (backend,) = config.resolve_backends(cast("Any", DummySession()))
-
-    assert sessions
-    assert cast("Any", backend.strategy).scope_authority is _scope_authority
 
 
 def test_feature_configs_module_constructors_apply_documented_defaults() -> None:
@@ -402,7 +259,6 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
         == plugin_features_module.FEATURE_DEFAULTS.organization.slug_max_length
     )
     assert organization_config_type().tenant_header_name == DEFAULT_ORGANIZATION_HEADER
-    assert organization_config_type().include_switch_organization is False
     assert organization_config_type().include_organization_invitations is False
     assert organization_config_type().role_precedence == "replace"
     assert organization_config_type().require_authorization_context is False
@@ -623,61 +479,6 @@ def test_default_builder_constructor_mismatch_diagnostic_matches_security_bundle
     assert "directly instead" not in msg
 
 
-def _minimal_config(  # ruff: ignore[too-many-arguments]
-    *,
-    backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
-    include_users: bool = False,
-    totp_config: TotpConfig | None = None,
-    api_keys: ApiKeyConfig | None = None,
-    account_lockout_config: AccountLockoutConfig | None = None,
-    organization_config: OrganizationConfig | None = None,
-    user_manager_security: UserManagerSecurity[UUID] | None = None,
-    user_manager_class: type[Any] | None = None,
-    id_parser: type[UUID] | None = None,
-    login_identifier: Literal["email", "username"] = "email",
-    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-    role_permissions: dict[str, object] | None = None,
-    permission_resolver: PermissionResolver | None = None,
-) -> LitestarAuthConfig[ExampleUser, UUID]:
-    """Build a minimal config for plugin tests.
-
-    Returns:
-        LitestarAuthConfig instance for the given options.
-    """
-    resolved_manager_security = user_manager_security or UserManagerSecurity[UUID](
-        verification_token_secret=VERIFICATION_SECRET,
-        reset_password_token_secret=RESET_PASSWORD_SECRET,
-    )
-    user_db = InMemoryUserDatabase([])
-    default_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
-    )
-    strategies = backends if backends is not None else [default_backend]
-    return LitestarAuthConfig[ExampleUser, UUID](
-        backends=strategies,
-        user_model=ExampleUser,
-        user_manager_class=user_manager_class or PluginUserManager,
-        session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
-            assert_structural_session_factory(DummySessionMaker()),
-        ),
-        user_db_factory=lambda _session: user_db,
-        user_manager_security=resolved_manager_security,
-        include_users=include_users,
-        api_keys=api_keys or ApiKeyConfig(),
-        account_lockout_config=AccountLockoutConfig() if account_lockout_config is None else account_lockout_config,
-        organization_config=OrganizationConfig() if organization_config is None else organization_config,
-        id_parser=id_parser,
-        totp_config=totp_config,
-        login_identifier=login_identifier,
-        superuser_role_name=superuser_role_name,
-        role_permissions={} if role_permissions is None else role_permissions,
-        permission_resolver=permission_resolver,
-    )
-
-
 def test_litestar_auth_config_declares_oauth_config_field() -> None:
     """The plugin config exposes an explicit nested OAuth config field."""
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
@@ -695,7 +496,6 @@ def test_litestar_auth_config_declares_organization_config_field() -> None:
     assert isinstance(config.organization_config, OrganizationConfig)
     assert config.organization_config.enabled is False
     assert config.organization_config.store_factory is None
-    assert config.organization_config.include_switch_organization is False
     assert config.organization_config.tenant_header_name == DEFAULT_ORGANIZATION_HEADER
     assert config.organization_config.role_precedence == "replace"
     assert config.organization_config.require_authorization_context is False
@@ -713,13 +513,6 @@ def test_organization_config_custom_header_updates_default_tenant_resolver() -> 
     assert organization_config.tenant_header_name == "X-Tenant"
     assert isinstance(tenant_resolver, HeaderTenantResolver)
     assert tenant_resolver.header_name == "X-Tenant"
-
-
-def test_organization_config_switch_endpoint_selects_claim_resolver_by_default() -> None:
-    """Switch-organization tokens use signed JWT claims as the default tenant source."""
-    organization_config = OrganizationConfig(include_switch_organization=True)
-
-    assert isinstance(organization_config.tenant_resolver, ClaimTenantResolver)
 
 
 def test_disabled_organization_config_keeps_tenant_resolution_settings_inert() -> None:
@@ -809,15 +602,6 @@ def test_organization_config_enabled_without_store_fails_startup_validation() ->
             OrganizationConfig(
                 enabled=True,
                 store_factory=cast("Any", lambda _session: object()),
-                include_switch_organization=cast("Any", "yes"),
-            ),
-            r"organization_config\.include_switch_organization must be a boolean",
-            id="non-boolean-switch-organization",
-        ),
-        pytest.param(
-            OrganizationConfig(
-                enabled=True,
-                store_factory=cast("Any", lambda _session: object()),
                 include_organization_admin=cast("Any", "yes"),
             ),
             r"organization_config\.include_organization_admin must be a boolean",
@@ -890,14 +674,6 @@ def test_organization_config_rejects_required_authorization_when_disabled() -> N
         LitestarAuth(config)
 
 
-def test_organization_config_rejects_switch_endpoint_when_disabled() -> None:
-    """Switch-organization route opt-in requires the organization feature."""
-    config = _minimal_config(organization_config=OrganizationConfig(include_switch_organization=True))
-
-    with pytest.raises(ConfigurationError, match=r"include_switch_organization cannot be True"):
-        LitestarAuth(config)
-
-
 def test_organization_config_rejects_admin_when_disabled() -> None:
     """Organization admin opt-in requires the organization feature."""
     config = _minimal_config(organization_config=OrganizationConfig(include_organization_admin=True))
@@ -926,153 +702,6 @@ def test_organization_config_rejects_invitation_routes_without_invitation_secret
 
     with pytest.raises(ConfigurationError, match=r"organization_invitation_token_secret"):
         LitestarAuth(config)
-
-
-def test_api_key_config_defaults_match_plugin_contract() -> None:
-    """API-key config defaults are opt-in and bounded where production can be inferred."""
-    api_key_config = ApiKeyConfig()
-
-    assert api_key_config.enabled is False
-    assert api_key_config.store_factory is None
-    assert api_key_config.backend_name == "api_key"
-    assert api_key_config.prefix == "ak"
-    assert api_key_config.environment_marker == "prod"
-    assert api_key_config.max_keys_per_user == DEFAULT_API_KEY_MAX_KEYS_PER_USER
-    assert api_key_config.default_ttl == timedelta(days=365)
-    assert api_key_config.require_step_up_on_create is True
-    assert api_key_config.allowed_scopes == ()
-    assert api_key_config.scope_subset_check is True
-    assert api_key_config.scope_authority is None
-    assert api_key_config.last_used_write_strategy == "throttled"
-    assert api_key_config.last_used_throttle_seconds == DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
-    assert api_key_config.signed_body_max_messages == DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
-    assert api_key_config.nonce_store is None
-    assert api_key_config.secret_encryption_keyring is None
-
-
-def test_litestar_auth_config_resolved_defaults_snapshot_is_coherent() -> None:
-    """Resolved plugin defaults have one startup snapshot and preserve explicit feature values."""
-    config = _minimal_config(
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            backend_name="custom-api-key",
-            allowed_scopes=("read",),
-            default_ttl=None,
-        ),
-        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    config.oauth_config = OAuthConfig(oauth_cookie_secure=False)
-
-    defaults = config.resolve_defaults()
-
-    assert not UNSET
-    assert {
-        "user_db_factory": "explicit" if defaults.user_db_factory is not UNSET else "default",
-        "id_parser": "unset" if defaults.id_parser is UNSET else "explicit",
-        "database_token": {
-            "enabled": defaults.features.database_token.config is not None,
-            "backend_name": "unset"
-            if defaults.features.database_token.backend_name is UNSET
-            else defaults.features.database_token.backend_name,
-        },
-        "api_key": {
-            "enabled": defaults.features.api_key.enabled,
-            "backend_name": defaults.features.api_key.backend_name,
-            "default_ttl": defaults.features.api_key.config.default_ttl,
-            "hash_secret": "set" if defaults.features.api_key.hash_secret is not UNSET else "unset",
-        },
-        "totp": {
-            "enabled": defaults.features.totp.config is not None,
-            "backend_name": "unset"
-            if defaults.features.totp.backend_name is UNSET
-            else defaults.features.totp.backend_name,
-            "stepup_ttl_seconds": defaults.features.totp.stepup_ttl_seconds,
-            "stepup_allow_recovery": defaults.features.totp.stepup_allow_recovery,
-        },
-        "oauth": {
-            "enabled": defaults.features.oauth.config is not None,
-            "cookie_secure": defaults.features.oauth.config.oauth_cookie_secure
-            if defaults.features.oauth.config
-            else None,
-        },
-        "organization": {
-            "enabled": defaults.features.organization.enabled,
-            "store_factory": "set" if defaults.features.organization.config.store_factory is not None else "unset",
-            "slug_min_length": defaults.features.organization.config.slug_min_length,
-            "slug_max_length": defaults.features.organization.config.slug_max_length,
-        },
-    } == {
-        "user_db_factory": "explicit",
-        "id_parser": "unset",
-        "database_token": {"enabled": False, "backend_name": "unset"},
-        "api_key": {
-            "enabled": True,
-            "backend_name": "custom-api-key",
-            "default_ttl": None,
-            "hash_secret": "set",
-        },
-        "totp": {
-            "enabled": True,
-            "backend_name": "unset",
-            "stepup_ttl_seconds": 300,
-            "stepup_allow_recovery": False,
-        },
-        "oauth": {"enabled": True, "cookie_secure": False},
-        "organization": {
-            "enabled": False,
-            "store_factory": "unset",
-            "slug_min_length": 1,
-            "slug_max_length": 128,
-        },
-    }
-
-
-@pytest.mark.parametrize("signed_body_max_messages", [0, -1])
-def test_api_key_config_rejects_non_positive_signed_body_message_limit(signed_body_max_messages: int) -> None:
-    """API-key signing body frame limits must fail closed when enabled."""
-    config = _minimal_config(
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            allowed_scopes=("read",),
-            signed_body_max_messages=signed_body_max_messages,
-        ),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-
-    with pytest.raises(
-        ConfigurationError,
-        match=re.escape("api_keys.signed_body_max_messages must be greater than 0."),
-    ):
-        LitestarAuth(config)
-
-
-def test_litestar_auth_config_declares_api_key_config_field() -> None:
-    """The plugin config exposes an explicit nested API-key config field."""
-    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
-
-    assert "api_keys" in dataclass_fields
-    assert isinstance(
-        LitestarAuthConfig[ExampleUser, UUID](
-            backends=[],
-            user_model=ExampleUser,
-            user_manager_class=PluginUserManager,
-            session_maker=cast("Any", DummySessionMaker()),
-            user_manager_security=UserManagerSecurity[UUID](
-                verification_token_secret=VERIFICATION_SECRET,
-                reset_password_token_secret=RESET_PASSWORD_SECRET,
-            ),
-        ).api_keys,
-        ApiKeyConfig,
-    )
 
 
 def test_litestar_auth_config_declares_password_validator_factory_fields() -> None:
@@ -1389,8 +1018,8 @@ def test_litestar_auth_config_direct_construction_preserves_user_and_id_types() 
     """Direct construction preserves the configured user and ID generic parameters."""
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-create")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config-create"),
     )
     user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret=VERIFICATION_SECRET,
@@ -1415,8 +1044,8 @@ def test_litestar_auth_config_direct_default_manager_path_builds_expected_config
     """Direct construction supports the plugin-owned default manager path."""
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-default-manager")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config-default-manager"),
     )
     user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret=VERIFICATION_SECRET,
@@ -1505,8 +1134,8 @@ def test_litestar_auth_config_direct_custom_manager_factory_path_builds_expected
 
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-custom-manager-factory")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config-custom-manager-factory"),
     )
     user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret=VERIFICATION_SECRET,
@@ -1557,8 +1186,8 @@ def test_litestar_auth_config_direct_custom_manager_factory_invokes_factory_for_
 
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-custom-manager-request")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config-custom-manager-request"),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         user_model=ExampleUser,
@@ -1604,8 +1233,8 @@ async def test_litestar_auth_config_direct_custom_manager_factory_wrong_return_t
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="primary",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-wrong-manager")),
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
+                strategy=build_test_redis_strategy(key_prefix="plugin-config-wrong-manager"),
             ),
         ],
         session_maker=cast(
@@ -1724,8 +1353,8 @@ def test_litestar_auth_config_direct_manager_paths_run_post_init_once(monkeypatc
                 "backends": [
                     AuthenticationBackend[ExampleUser, UUID](
                         name="manual",
-                        transport=BearerTransport(),
-                        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="post-init-conflict")),
+                        transport=CookieTransport(allow_insecure_cookie_auth=True),
+                        strategy=build_test_redis_strategy(key_prefix="post-init-conflict"),
                     ),
                 ],
                 "database_token_auth": DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
@@ -2280,7 +1909,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     startup_strategy = cast("Any", backend.strategy)
     assert isinstance(backend, StartupBackendTemplate)
     assert backend.name == "database"
-    assert isinstance(backend.transport, BearerTransport)
+    assert isinstance(backend.transport, CookieTransport)
     assert not isinstance(startup_strategy, database_token_strategy_type)
     assert callable(getattr(startup_strategy, "with_session", None))
     assert startup_strategy.max_age == timedelta(minutes=5)
@@ -2293,8 +1922,8 @@ def test_resolve_startup_backends_wrap_manual_backends_in_startup_templates() ->
     """Manual backends are exposed through the startup-only template type."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="manual")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="manual"),
     )
     config = _minimal_config(backends=[backend])
 
@@ -2311,14 +1940,14 @@ def test_openapi_security_helpers_follow_the_configured_backend_inventory() -> N
     config = _minimal_config(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
-                name="bearer",
-                transport=BearerTransport(),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="bearer-openapi")),
+                name="primary",
+                transport=CookieTransport(allow_insecure_cookie_auth=True),
+                strategy=build_test_redis_strategy(key_prefix="primary-openapi"),
             ),
             AuthenticationBackend[ExampleUser, UUID](
                 name="cookie",
                 transport=CookieTransport(cookie_name="auth_cookie"),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-openapi")),
+                strategy=build_test_redis_strategy(key_prefix="cookie-openapi"),
             ),
         ],
     )
@@ -2326,12 +1955,12 @@ def test_openapi_security_helpers_follow_the_configured_backend_inventory() -> N
     schemes = config.resolve_openapi_security_schemes()
     requirements = config.resolve_openapi_security_requirements()
 
-    assert set(schemes) == {"bearer", "cookie"}
-    assert schemes["bearer"].type == "http"
-    assert schemes["bearer"].scheme == "Bearer"
+    assert set(schemes) == {"primary", "cookie"}
+    assert schemes["primary"].type == "apiKey"
+    assert schemes["primary"].name == "litestar_auth"
     assert schemes["cookie"].type == "apiKey"
     assert schemes["cookie"].name == "auth_cookie"
-    assert requirements == [{"bearer": []}, {"cookie": []}]
+    assert requirements == [{"primary": []}, {"cookie": []}]
 
 
 def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -> None:
@@ -2362,8 +1991,8 @@ def test_startup_backend_template_eq_identity_short_circuits() -> None:
     """StartupBackendTemplate.__eq__ returns True for the same instance."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="a",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="a"),
     )
     template = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
     assert eq(template, template)
@@ -2373,8 +2002,8 @@ def test_startup_backend_template_eq_rejects_foreign_type() -> None:
     """StartupBackendTemplate.__eq__ returns NotImplemented for non-template types."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="a",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="a"),
     )
     template = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
     assert template != "not-a-template"
@@ -2384,8 +2013,8 @@ def test_startup_backend_template_hash_consistent_with_eq() -> None:
     """Equal StartupBackendTemplate instances produce the same hash."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="a",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="a"),
     )
     t1 = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
     t2 = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
@@ -2440,7 +2069,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
     startup_strategy = cast("Any", config.resolve_startup_backends()[0].strategy)
     user = ExampleUser(id=uuid4())
     runtime_calls = (
-        startup_strategy.read_token(None, object()),
+        startup_strategy.authenticate_token("token", object()),
         startup_strategy.destroy_token("token", user),
         startup_strategy.write_refresh_token(user),
         startup_strategy.rotate_refresh_token("refresh", object()),
@@ -2450,38 +2079,6 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
 
     for operation in runtime_calls:
         with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
-            _ = await operation
-
-
-def test_default_api_key_store_factory_builds_bundled_sqlalchemy_store_lazily() -> None:
-    """The API-key default store factory resolves the bundled SQLAlchemy store only when called."""
-    store_factory = api_key_module.resolve_api_key_store_factory(ApiKeyConfig())
-
-    store = store_factory(cast("Any", DummySession()))
-
-    assert store.__class__.__name__ == "SQLAlchemyApiKeyStore"
-
-
-async def test_startup_api_key_templates_fail_closed_for_runtime_work() -> None:
-    """Startup-only API-key templates fail closed if callers skip request-session binding."""
-    config = _minimal_config(
-        backends=[],
-        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            api_key_hash_secret=API_KEY_HASH_SECRET,
-        ),
-    )
-    startup_strategy = cast("Any", config.resolve_startup_backends()[0].strategy)
-    user = ExampleUser(id=uuid4())
-
-    for operation in (
-        startup_strategy.read_token(None, object()),
-        startup_strategy.write_token(user),
-        startup_strategy.destroy_token("token", user),
-    ):
-        with pytest.raises(RuntimeError, match=_API_KEY_STARTUP_ONLY_FAIL_CLOSED):
             _ = await operation
 
 
@@ -2509,8 +2106,8 @@ def test_database_token_auth_rejects_manual_backends() -> None:
     """Explicit backends and the canonical DB-token preset are mutually exclusive."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config"),
     )
 
     with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
@@ -2548,7 +2145,7 @@ def test_resolve_backends_binds_manual_backends_without_database_token_preset() 
     strategy = _SessionAwareStrategy(token_prefix="manual")
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     config = _minimal_config(backends=[backend])
@@ -2612,12 +2209,12 @@ def test_resolve_backends_preserves_manual_backend_inventory_order() -> None:
     secondary_strategy = _SessionAwareStrategy(token_prefix="secondary")
     primary_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", primary_strategy),
     )
     secondary_backend = AuthenticationBackend[ExampleUser, UUID](
         name="secondary",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", secondary_strategy),
     )
     config = _minimal_config(backends=[primary_backend, secondary_backend])
@@ -2691,8 +2288,8 @@ def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_b
     config.backends = [
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
-            transport=BearerTransport(),
-            strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=build_test_redis_strategy(key_prefix="plugin-config"),
         ),
     ]
 
@@ -3239,8 +2836,8 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
     """Omitting user_db_factory exposes a lazy SQLAlchemy-builder partial without importing the adapter."""
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config"),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[default_backend],
@@ -3270,7 +2867,7 @@ def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundl
     strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="0123456789abcdef" * 4)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     config = _minimal_config(backends=[backend])
@@ -3342,8 +2939,8 @@ def _invalid_db_session_config_kwargs(invalid_db_session_key: str) -> dict[str, 
     user_db = InMemoryUserDatabase([])
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config"),
     )
     return {
         "backends": [default_backend],
@@ -3379,8 +2976,8 @@ def test_litestar_auth_config_rejects_invalid_login_identifier() -> None:
     user_db = InMemoryUserDatabase([])
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-config"),
     )
     with pytest.raises(plugin_config_module.ConfigurationError, match=r"Invalid login_identifier"):
         LitestarAuthConfig[ExampleUser, UUID](

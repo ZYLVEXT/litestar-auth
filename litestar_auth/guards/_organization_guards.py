@@ -14,7 +14,6 @@ from litestar_auth.exceptions import (
     InsufficientOrganizationPermissionsError,
     InsufficientOrganizationRolesError,
 )
-from litestar_auth.guards._api_key_guards import api_key_delegation_scopes
 from litestar_auth.guards._guards import _normalize_required_roles, _roles_include_all_fixed_work
 from litestar_auth.guards._permission_guards import _normalize_required_permissions, _permissions_include_all
 from litestar_auth.guards._protocol_narrowing import _require_active_guarded_user, _require_role_capable_user
@@ -91,7 +90,7 @@ def has_organization_permission[OrganizationPermissionNameT: str](
             )
 
         granted_permissions = resolve_connection_permissions(connection)
-        if _permissions_include_all(granted_permissions, api_key_delegation_scopes(connection), required_permissions):
+        if _permissions_include_all(granted_permissions, required_permissions):
             return
         raise InsufficientOrganizationPermissionsError(
             required_permissions=required_permission_set,

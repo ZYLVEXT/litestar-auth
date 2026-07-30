@@ -16,7 +16,7 @@ from litestar.testing import AsyncTestClient
 import litestar_auth._plugin.extensions._discovery as extension_discovery_module
 from litestar_auth._plugin.extensions import EXTENSION_ENTRY_POINT_GROUP
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -24,9 +24,9 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 from tests.support import extensions as support_extensions
 from tests.support.extensions import EXTENSION_HTTP_TEAPOT, ExtensionHeaderMiddleware, WiringProbeExtension
@@ -62,8 +62,8 @@ def _build_config(
     )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-extension-integration")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="plugin-extension-integration"),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
@@ -242,7 +242,7 @@ def test_auto_discovered_incompatible_extension_fails_closed_end_to_end(
     )
     config = _build_config(auto_discover_extensions=True)
 
-    with pytest.raises(ConfigurationError, match=r"requires extension API 999\.0, but litestar-auth provides 1\.0"):
+    with pytest.raises(ConfigurationError, match=r"requires extension API 999\.0, but litestar-auth provides 2\.0"):
         Litestar(plugins=[LitestarAuth(config)])
 
     assert support_extensions.EXTERNAL_DISCOVERED_EVENTS == []

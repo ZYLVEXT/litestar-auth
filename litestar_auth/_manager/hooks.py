@@ -17,9 +17,6 @@ type ManagerHookName = Literal[
     "after_update",
     "before_delete",
     "after_delete",
-    "after_api_key_created",
-    "after_api_key_revoked",
-    "after_api_key_used",
     "after_organization_invitation",
 ]
 
@@ -184,25 +181,6 @@ class ManagerHookBus[UP]:
     @overload
     async def fire(
         self,
-        name: Literal["after_api_key_created"],
-        user: UP,
-        api_key: object,
-    ) -> None: ...
-
-    @overload
-    async def fire(
-        self,
-        name: Literal["after_api_key_revoked"],
-        user: UP,
-        api_key: object,
-    ) -> None: ...
-
-    @overload
-    async def fire(self, name: Literal["after_api_key_used"], api_key: object) -> None: ...
-
-    @overload
-    async def fire(
-        self,
         name: Literal["after_organization_invitation"],
         invitation: object,
         token: str,
@@ -271,15 +249,6 @@ class UserManagerHooks[UP]:
 
     async def on_after_delete(self, user: UP) -> None:
         """Hook invoked after a user is deleted permanently."""
-
-    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:
-        """Hook invoked after an API key is created."""
-
-    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:
-        """Hook invoked after an API key is revoked."""
-
-    async def on_after_api_key_used(self, api_key: object) -> None:
-        """Hook invoked after an API-key last-used timestamp is persisted."""
 
     async def on_after_organization_invitation(self, invitation: object, token: str) -> None:
         """Hook invoked after an organization invitation is created.

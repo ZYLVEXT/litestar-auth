@@ -13,9 +13,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -33,6 +31,7 @@ if TYPE_CHECKING:
     from sqlalchemy.sql.base import Executable
 
 pytestmark = [pytest.mark.e2e]
+AUTH_COOKIE_NAME = "litestar_auth"
 
 HTTP_BAD_REQUEST = 400
 HTTP_ACCEPTED = 202
@@ -210,14 +209,17 @@ async def _login_headers(
     email: str,
     password: str,
 ) -> dict[str, str]:
-    """Authenticate a user and return bearer auth headers.
+    """Authenticate a user and return an isolated cookie header.
 
     Returns:
-        Authorization headers containing the issued bearer token.
+        Cookie header containing the issued opaque session token.
     """
+    client.cookies.delete(AUTH_COOKIE_NAME)
     response = await client.post("/auth/login", json={"identifier": email, "password": password})
     assert response.status_code == HTTP_CREATED
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    token = client.cookies.get(AUTH_COOKIE_NAME)
+    assert token is not None
+    return {"Cookie": f"{AUTH_COOKIE_NAME}={token}"}
 
 
 async def _login_payload(
@@ -226,14 +228,18 @@ async def _login_payload(
     email: str,
     password: str,
 ) -> dict[str, object]:
-    """Authenticate a user and return the full login payload.
+    """Authenticate a user and return the issued cookie values.
 
     Returns:
-        Full login response payload including issued token fields.
+        Access and refresh session cookie values.
     """
     response = await client.post("/auth/login", json={"identifier": email, "password": password})
     assert response.status_code == HTTP_CREATED
-    return cast("dict[str, object]", response.json())
+    access_token = client.cookies.get(AUTH_COOKIE_NAME)
+    refresh_token = client.cookies.get(f"{AUTH_COOKIE_NAME}_refresh")
+    assert access_token is not None
+    assert refresh_token is not None
+    return {"access_token": access_token, "refresh_token": refresh_token}
 
 
 async def _verify_then_login_headers(
@@ -242,11 +248,12 @@ async def _verify_then_login_headers(
     email: str,
     password: str,
 ) -> dict[str, str]:
-    """Verify the current email address and then return fresh bearer headers.
+    """Verify the current email address and then return a fresh session cookie.
 
     Returns:
-        Authorization headers for the newly verified account.
+        Cookie header for the newly verified account.
     """
+    client.cookies.delete(AUTH_COOKIE_NAME)
     response = await client.post("/auth/login", json={"identifier": email, "password": password})
     assert response.status_code == HTTP_BAD_REQUEST
     login_payload = response.json()
@@ -269,7 +276,7 @@ def _assert_public_user(payload: dict[str, object], expected: dict[str, object])
 
 @pytest.fixture
 def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
-    """Create a Litestar app wired with bearer JWT auth and users CRUD routes.
+    """Create a Litestar app wired with a database-backed cookie session.
 
     Yields:
         App under test, backing engine, password helper, and seeded user ids.
@@ -326,20 +333,11 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
             "extra": extra_user.id,
         }
 
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-bearer-secret-1234567890-extra",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="database-session-token-hash-secret-1234567890",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=UsersFlowManager,
@@ -429,6 +427,7 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
     config = LitestarAuthConfig[User, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="database-token-secret-12345678901234567890",
+            cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
         ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
@@ -509,8 +508,7 @@ async def test_users_crud_flow_via_plugin(
         },
     )
 
-    # Updating email changes the JWT session fingerprint. Previously minted access tokens should
-    # no longer authenticate.
+    # Updating email invalidates previously minted server-side sessions.
     response = await test_client.get(f"/users/{user_ids['admin']}", headers=regular_headers)
     assert response.status_code == HTTP_UNAUTHORIZED
     response = await test_client.get("/users", headers=regular_headers)
@@ -677,7 +675,7 @@ async def test_change_password_endpoint_invalidates_prior_access_and_refresh_tok
         )
         access_token = cast("str", login_payload["access_token"])
         refresh_token = cast("str", login_payload["refresh_token"])
-        old_headers = {"Authorization": f"Bearer {access_token}"}
+        old_headers = {"Cookie": f"{AUTH_COOKIE_NAME}={access_token}"}
 
         change_password_response = await test_client.post(
             "/users/me/change-password",
@@ -690,7 +688,7 @@ async def test_change_password_endpoint_invalidates_prior_access_and_refresh_tok
         old_access_response = await test_client.get("/users/me", headers=old_headers)
         old_refresh_response = await test_client.post(
             "/auth/refresh",
-            json={"refresh_token": refresh_token},
+            headers={"Cookie": f"{AUTH_COOKIE_NAME}_refresh={refresh_token}"},
         )
         old_password_login_response = await test_client.post(
             "/auth/login",
@@ -716,8 +714,8 @@ async def test_change_password_endpoint_invalidates_prior_access_and_refresh_tok
     ).get("code")
     assert old_login_code == ErrorCode.LOGIN_BAD_CREDENTIALS
     assert new_login_response.status_code == HTTP_CREATED
-    assert isinstance(new_login_response.json()["access_token"], str)
-    assert isinstance(new_login_response.json()["refresh_token"], str)
+    assert test_client.cookies.get(AUTH_COOKIE_NAME) is not None
+    assert test_client.cookies.get(f"{AUTH_COOKIE_NAME}_refresh") is not None
 
     with SASession(engine) as session:
         stored_member = session.scalar(select(User).where(User.id == user_ids["member"]))

@@ -11,17 +11,15 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 type AuthRateLimitEndpointGroup = Literal[
-    "api_keys",
     "login",
     "organization_invitations",
-    "organizations",
     "password_reset",
     "refresh",
     "register",
     "totp",
     "verification",
 ]
-type _RecipeScope = Literal["api_key_id", "ip", "ip_email"]
+type _RecipeScope = Literal["ip", "ip_email"]
 
 
 class _BuilderNamesValidator(Protocol):
@@ -55,12 +53,8 @@ class AuthRateLimitSlot(StrEnum):
     TOTP_REGENERATE_RECOVERY_CODES = auto()
     VERIFY_TOKEN = auto()
     REQUEST_VERIFY_TOKEN = auto()
-    ORGANIZATION_SWITCH = auto()
     ORGANIZATION_INVITATION_ACCEPT = auto()
     ORGANIZATION_INVITATION_DECLINE = auto()
-    API_KEY_CREATE = auto()
-    API_KEY_UPDATE = auto()
-    API_KEY_USE = auto()
 
 
 @dataclass(slots=True, frozen=True)
@@ -153,12 +147,6 @@ _AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
         group="verification",
     ),
     _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.ORGANIZATION_SWITCH,
-        default_scope="ip",
-        default_namespace="organization-switch",
-        group="organizations",
-    ),
-    _AuthRateLimitEndpointRecipe(
         slot=AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
         default_scope="ip",
         default_namespace="organization-invitation-accept",
@@ -169,24 +157,6 @@ _AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
         default_scope="ip",
         default_namespace="organization-invitation-decline",
         group="organization_invitations",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.API_KEY_CREATE,
-        default_scope="ip",
-        default_namespace="api-key-create",
-        group="api_keys",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.API_KEY_UPDATE,
-        default_scope="ip",
-        default_namespace="api-key-update",
-        group="api_keys",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.API_KEY_USE,
-        default_scope="api_key_id",
-        default_namespace="api-key-use",
-        group="api_keys",
     ),
 )
 

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 type ExceptionHandlerKey = int | type[Exception]
 type ExtensionApiVersion = tuple[int, int]
 
-EXTENSION_API_VERSION: ExtensionApiVersion = (1, 0)
+EXTENSION_API_VERSION: ExtensionApiVersion = (2, 0)
 EXTENSION_ENTRY_POINT_GROUP = "litestar_auth.extensions"
 
 
@@ -159,6 +159,25 @@ class AuthExtensionRegistrationContext(AuthExtensionValidationContext, Protocol)
 
     def add_middleware(self, middleware: object) -> None:
         """Accumulate a middleware contribution for later registration."""
+        ...
+
+    def add_authentication_provider(
+        self,
+        extension_name: str,
+        *,
+        name: str,
+        profile: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Contribute one request-scoped typed authentication provider binding."""
+        ...
+
+    def add_tls_peer_evidence_factory(
+        self,
+        extension_name: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Contribute the single trusted TLS-evidence projection for the middleware."""
         ...
 
     def add_openapi_security_scheme(self, extension_name: str, name: str, scheme: SecurityScheme) -> None:

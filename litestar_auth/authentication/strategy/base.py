@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from datetime import datetime
 
+    from authweave_core import Invalid, Unavailable
+
     from litestar_auth.types import StrategyProtocol
 
 
@@ -25,6 +27,28 @@ class RefreshSession:
     client_metadata: Mapping[str, str] | None
 
 
+@dataclass(frozen=True, slots=True)
+class HumanSessionAuthenticated[UP: UserProtocol[Any]]:
+    """Successful lookup of a server-side human session."""
+
+    user: UP
+    issued_at: datetime | None = None
+    expires_at: datetime | None = None
+    credential_id: str | None = None
+
+
+@runtime_checkable
+class HumanSessionStrategy[UP: UserProtocol[Any], ID](Protocol):
+    """Typed authentication contract for supported server-side sessions."""
+
+    async def authenticate_token(
+        self,
+        token: str,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> HumanSessionAuthenticated[UP] | Invalid | Unavailable:
+        """Resolve one presented opaque token without collapsing failure states."""
+
+
 class UserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
     """Protocol for user manager lookups used by token strategies."""
 
@@ -33,11 +57,7 @@ class UserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
 
 
 class Strategy[UP: UserProtocol[Any], ID](ABC):
-    """Abstract base class for token storage and validation strategies."""
-
-    @abstractmethod
-    async def read_token(self, token: str | None, user_manager: UserManagerProtocol[UP, ID]) -> UP | None:
-        """Resolve a user from a token."""
+    """Abstract base class for server-side session token lifecycle."""
 
     @abstractmethod
     async def write_token(self, user: UP) -> str:
@@ -46,18 +66,6 @@ class Strategy[UP: UserProtocol[Any], ID](ABC):
     @abstractmethod
     async def destroy_token(self, token: str, user: UP) -> None:
         """Invalidate a token for the provided user."""
-
-
-@runtime_checkable
-class ContextualStrategy[UP: UserProtocol[Any], ID, AuthT](Protocol):
-    """Protocol for strategies that return custom request auth context."""
-
-    async def read_token_with_context(
-        self,
-        token: str | None,
-        user_manager: UserManagerProtocol[UP, ID],
-    ) -> AuthT | None:
-        """Resolve a user plus strategy-specific authentication context."""
 
 
 @runtime_checkable

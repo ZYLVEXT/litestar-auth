@@ -24,10 +24,6 @@ TOTP_VERIFICATION_CODE_PATTERN = rf"^(?:\d{{{TOTP_CODE_LENGTH}}}|[0-9a-f]{{{TOTP
 SESSION_CLIENT_METADATA_KEY_PATTERN = r"^[a-z][a-z0-9_]*$"
 SESSION_CLIENT_METADATA_KEY_MAX_LENGTH = 64
 SESSION_CLIENT_METADATA_VALUE_MAX_LENGTH = 255
-API_KEY_NAME_MAX_LENGTH = 120
-API_KEY_SCOPE_MAX_LENGTH = 120
-API_KEY_SCOPE_PATTERN = r"^[A-Za-z0-9:_-]+$"
-API_KEY_ID_MAX_LENGTH = 128
 ORGANIZATION_SLUG_MAX_LENGTH = 128
 
 EMAIL_FIELD_META = msgspec.Meta(max_length=EMAIL_MAX_LENGTH, pattern=EMAIL_PATTERN)
@@ -63,10 +59,4 @@ type SessionClientMetadataValue = Annotated[
     str,
     msgspec.Meta(min_length=1, max_length=SESSION_CLIENT_METADATA_VALUE_MAX_LENGTH),
 ]
-type ApiKeyNameField = Annotated[str, msgspec.Meta(min_length=1, max_length=API_KEY_NAME_MAX_LENGTH)]
-type ApiKeyScopeField = Annotated[
-    str,
-    msgspec.Meta(min_length=1, max_length=API_KEY_SCOPE_MAX_LENGTH, pattern=API_KEY_SCOPE_PATTERN),
-]
-type ApiKeyIdField = Annotated[str, msgspec.Meta(min_length=1, max_length=API_KEY_ID_MAX_LENGTH)]
 type OrganizationSlugField = Annotated[str, msgspec.Meta(min_length=1, max_length=ORGANIZATION_SLUG_MAX_LENGTH)]

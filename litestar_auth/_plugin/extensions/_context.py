@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.config import (
+    DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
     DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+    DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
     DEFAULT_DB_SESSION_DEPENDENCY_KEY,
     DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
@@ -88,12 +90,32 @@ class ExtensionExceptionHandlerContribution:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionAuthenticationProviderContribution:
+    """Request-scoped typed authentication provider contributed by an extension."""
+
+    extension_name: str
+    name: str
+    profile: str
+    factory: Callable[[object], object]
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionTLSEvidenceContribution:
+    """Trusted TLS evidence factory contributed by one extension."""
+
+    extension_name: str
+    factory: Callable[[object], object]
+
+
+@dataclass(frozen=True, slots=True)
 class ExtensionRegistrationContributions:
     """Accumulated extension contributions consumed by the later wiring phase."""
 
     controllers: list[object] = field(default_factory=list)
     dependencies: list[ExtensionDependencyContribution] = field(default_factory=list)
     middleware: list[object] = field(default_factory=list)
+    authentication_providers: list[ExtensionAuthenticationProviderContribution] = field(default_factory=list)
+    tls_evidence: ExtensionTLSEvidenceContribution | None = None
     openapi_security_schemes: list[ExtensionOpenAPISecurityContribution] = field(default_factory=list)
     startup_hooks: list[Callable[[], object]] = field(default_factory=list)
     shutdown_hooks: list[Callable[[], object]] = field(default_factory=list)
@@ -110,6 +132,8 @@ class ExtensionDependencyKeys:
     backends: str
     user_model: str
     resolved_permissions: str
+    current_principal: str
+    authentication_context: str
     session: str
     current_organization: str | None
     organization_store: str | None
@@ -278,6 +302,8 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
             backends=DEFAULT_BACKENDS_DEPENDENCY_KEY,
             user_model=DEFAULT_USER_MODEL_DEPENDENCY_KEY,
             resolved_permissions=DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+            current_principal=DEFAULT_CURRENT_PRINCIPAL_DEPENDENCY_KEY,
+            authentication_context=DEFAULT_AUTHENTICATION_CONTEXT_DEPENDENCY_KEY,
             session=self.config.db_session_dependency_key or DEFAULT_DB_SESSION_DEPENDENCY_KEY,
             current_organization=(DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY if self.organization_enabled else None),
             organization_store=DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY if self.organization_enabled else None,
@@ -308,6 +334,68 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
     def add_middleware(self, middleware: object) -> None:
         """Accumulate a middleware contribution for later registration."""
         self.contributions.middleware.append(middleware)
+
+    def add_authentication_provider(
+        self,
+        extension_name: str,
+        *,
+        name: str,
+        profile: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Accumulate one request-scoped typed authentication provider binding.
+
+        Raises:
+            ValueError: If an identifier is empty or duplicated.
+            TypeError: If ``factory`` is not callable.
+        """
+        if not extension_name or not name or not profile:
+            msg = "Authentication provider extension_name, name, and profile must be non-empty."
+            raise ValueError(msg)
+        if not callable(factory):
+            msg = "Authentication provider factory must be callable."
+            raise TypeError(msg)
+        for contribution in self.contributions.authentication_providers:
+            if contribution.name == name:
+                msg = f"Duplicate authentication provider name: {name!r}."
+                raise ValueError(msg)
+            if contribution.profile == profile:
+                msg = f"Duplicate authentication provider profile: {profile!r}."
+                raise ValueError(msg)
+        self.contributions.authentication_providers.append(
+            ExtensionAuthenticationProviderContribution(
+                extension_name=extension_name,
+                name=name,
+                profile=profile,
+                factory=factory,
+            ),
+        )
+
+    def add_tls_peer_evidence_factory(
+        self,
+        extension_name: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Contribute the single trusted TLS-evidence projection for the middleware.
+
+        Raises:
+            TypeError: If the factory is not callable.
+            ValueError: If another extension already owns TLS evidence projection.
+        """
+        if not callable(factory):
+            msg = "TLS peer evidence factory must be callable."
+            raise TypeError(msg)
+        existing = self.contributions.tls_evidence
+        if existing is not None:
+            msg = (
+                f"TLS peer evidence factory from extension {extension_name!r} conflicts with "
+                f"extension {existing.extension_name!r}."
+            )
+            raise ValueError(msg)
+        self.contributions = replace(
+            self.contributions,
+            tls_evidence=ExtensionTLSEvidenceContribution(extension_name, factory),
+        )
 
     def add_openapi_security_scheme(self, extension_name: str, name: str, scheme: SecurityScheme) -> None:
         """Accumulate an OpenAPI security scheme contribution."""
@@ -390,12 +478,14 @@ def build_extension_registration_context[UP: UserProtocol[Any], ID](
 
 __all__ = (
     "ExceptionHandlerKey",
+    "ExtensionAuthenticationProviderContribution",
     "ExtensionDependencyContribution",
     "ExtensionDependencyKeys",
     "ExtensionExceptionHandlerContribution",
     "ExtensionOpenAPISecurityContribution",
     "ExtensionRegistrationContext",
     "ExtensionRegistrationContributions",
+    "ExtensionTLSEvidenceContribution",
     "ExtensionValidationContext",
     "build_extension_registration_context",
     "build_extension_validation_context",

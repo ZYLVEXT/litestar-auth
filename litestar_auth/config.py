@@ -17,7 +17,6 @@ from re import fullmatch
 from typing import Final
 
 from litestar_auth._secret_roles import (
-    JWT_ACCESS_TOKEN_AUDIENCE,
     ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
     RESET_PASSWORD_TOKEN_AUDIENCE,
     TOTP_ENROLL_AUDIENCE,
@@ -49,7 +48,6 @@ OAUTH_PROVIDER_NAME_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?"
 
 __all__ = (
     "DEFAULT_MINIMUM_PASSWORD_LENGTH",
-    "JWT_ACCESS_TOKEN_AUDIENCE",
     "JWT_TIME_CLAIM_LEEWAY_SECONDS",
     "MAX_PASSWORD_LENGTH",
     "MINIMUM_SECRET_ENTROPY_BITS",

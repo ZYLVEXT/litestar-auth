@@ -1,8 +1,6 @@
 """Database abstractions and implementations."""
 
 from litestar_auth.db.base import (
-    ApiKeyData,
-    BaseApiKeyStore,
     BaseOAuthAccountStore,
     BaseOrganizationStore,
     BaseUserStore,
@@ -13,8 +11,6 @@ from litestar_auth.db.base import (
 )
 
 __all__ = (
-    "ApiKeyData",
-    "BaseApiKeyStore",
     "BaseOAuthAccountStore",
     "BaseOrganizationStore",
     "BaseUserStore",

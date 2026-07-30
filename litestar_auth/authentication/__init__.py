@@ -1,7 +1,23 @@
 """Authentication package."""
 
-from litestar_auth.authentication.authenticator import Authenticator
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.middleware import LitestarAuthMiddleware, LitestarAuthMiddlewareConfig
+from litestar_auth.authentication.human_session import HumanSessionProvider
+from litestar_auth.authentication.middleware import (
+    AUTHENTICATION_PROVIDERS_KEY,
+    CorrelationIdFactory,
+    LitestarAuthMiddleware,
+    LitestarAuthMiddlewareConfig,
+    LitestarProviderBinding,
+    TlsPeerEvidenceFactory,
+    route_provider_policy,
+)
 
-__all__ = ("AuthenticationBackend", "Authenticator", "LitestarAuthMiddleware", "LitestarAuthMiddlewareConfig")
+__all__ = (
+    "AUTHENTICATION_PROVIDERS_KEY",
+    "CorrelationIdFactory",
+    "HumanSessionProvider",
+    "LitestarAuthMiddleware",
+    "LitestarAuthMiddlewareConfig",
+    "LitestarProviderBinding",
+    "TlsPeerEvidenceFactory",
+    "route_provider_policy",
+)

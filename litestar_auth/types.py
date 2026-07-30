@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
     from litestar.response import Response
 
+
 ID = TypeVar("ID", bound=Hashable)
 
 
@@ -100,6 +101,8 @@ UP = TypeVar("UP", bound=UserProtocol)
 class TransportProtocol(Protocol):
     """Protocol describing how auth tokens move in and out of requests."""
 
+    cookie_name: str
+
     async def read_token(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
         """Extract a login token from an incoming connection."""
 
@@ -112,24 +115,13 @@ class TransportProtocol(Protocol):
 
 @runtime_checkable
 class StrategyProtocol(Protocol[UP, ID]):
-    """Protocol describing how auth tokens map to users."""
-
-    async def read_token(self, token: str | None, user_manager: object) -> UP | None:
-        """Resolve a user from a transport token."""
+    """Protocol describing server-side session token lifecycle."""
 
     async def write_token(self, user: UP) -> str:
         """Create a token for a given user."""
 
     async def destroy_token(self, token: str, user: UP) -> None:
         """Invalidate a token for strategies that keep server-side state."""
-
-
-@runtime_checkable
-class ContextualStrategyProtocol(StrategyProtocol[UP, ID], Protocol[UP, ID]):
-    """Protocol for strategies that expose custom request authentication context."""
-
-    async def read_token_with_context(self, token: str | None, user_manager: object) -> object | None:
-        """Resolve a user plus strategy-specific request auth context."""
 
 
 class PermissionResolver(Protocol):

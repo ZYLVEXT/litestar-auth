@@ -51,7 +51,7 @@ from litestar_auth.controllers._step_up import (
 )
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.oauth import service as _oauth_service
 from litestar_auth.oauth._account_state import require_account_state as _require_oauth_account_state
 from litestar_auth.oauth._client import OAuthClientProtocol, _build_oauth_client_adapter
@@ -248,7 +248,7 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
         assembly=assembly,
         route_params_spec=_OAuthCallbackRouteParamsSpec(
             path="/callback",
-            guards=[is_authenticated, requires_password_session],
+            guards=[is_authenticated, is_human_authenticated],
             security=security,
             responses=responses,
         ),
@@ -701,7 +701,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
         authorize_handler=_create_associate_authorize_handler(
             assembly=assembly,
             responses=_OAUTH_OPENAPI_RESPONSES,
-            guards=[is_authenticated, requires_password_session],
+            guards=[is_authenticated, is_human_authenticated],
             security=settings.security,
         ),
         callback_handler=_create_associate_callback_handler(

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import pytest
+from fakeredis import FakeAsyncRedis
 from litestar import Litestar, Request, get
 from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine, event, select
@@ -18,8 +19,8 @@ from sqlalchemy.pool import StaticPool
 from litestar_auth._manager._coercions import _account_state_user
 from litestar_auth._plugin.config import OAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.controllers import create_oauth_associate_controller
 from litestar_auth.controllers.oauth import _decode_oauth_flow_cookie
@@ -372,7 +373,6 @@ def build_app(
 
     password_helper = PasswordHelper()
     session_maker = SessionMaker(engine)
-    jwt_secret = "oauth-jwt-secret-1234567890-extra"
     oauth_token_encryption_key = base64.urlsafe_b64encode(b"0" * 32).decode()
     configured_plugin_oauth = plugin_oauth_config or OAuthConfig()
     if configured_plugin_oauth.oauth_token_encryption_key is None:
@@ -388,11 +388,12 @@ def build_app(
     assert configured_plugin_oauth.oauth_token_encryption_key is not None
     oauth_token_encryption = OAuthTokenEncryption(configured_plugin_oauth.oauth_token_encryption_key)
     backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](secret=jwt_secret, subject_decoder=UUID, allow_inmemory_denylist=True),
+        name="redis-session",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=RedisTokenStrategy[User, UUID](
+            redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+            token_hash_secret="oauth-session-hash-secret-123456789012345",
+            subject_decoder=UUID,
         ),
     )
     config = LitestarAuthConfig[User, UUID](
@@ -597,7 +598,7 @@ async def test_oauth_authorize_callback_creates_user_and_returns_token(
     )
 
     assert callback_response.status_code == HTTP_OK
-    token = callback_response.json()["access_token"]
+    token = callback_response.cookies.get("litestar_auth")
     assert token
     created_user = await get_user_by_email(state, "oauth@example.com")
     assert created_user is not None
@@ -619,7 +620,7 @@ async def test_oauth_authorize_callback_creates_user_and_returns_token(
         ("provider-code", "https://testserver.local/auth/oauth/github/callback", code_verifier),
     ]
 
-    protected_response = await test_client.get("/protected", headers={"Authorization": f"Bearer {token}"})
+    protected_response = await test_client.get("/protected", headers={"Cookie": f"litestar_auth={token}"})
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": "oauth@example.com"}
 
@@ -757,11 +758,11 @@ async def test_oauth_callback_returns_existing_user_when_provider_identity_alrea
             params={"code": "provider-code", "state": oauth_state},
         )
         assert callback_response.status_code == HTTP_OK
-        token = callback_response.json()["access_token"]
+        token = callback_response.cookies.get("litestar_auth")
         assert token
         protected_response = await client.get(
             "/protected",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert protected_response.status_code == HTTP_OK
@@ -814,11 +815,11 @@ async def test_oauth_associate_links_provider_to_authenticated_user() -> None:
             json={"identifier": "linked@example.com", "password": "existing-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         authorize_response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
             follow_redirects=False,
         )
         assert authorize_response.status_code == HTTP_FOUND
@@ -832,7 +833,9 @@ async def test_oauth_associate_links_provider_to_authenticated_user() -> None:
         callback_response = await client.get(
             "/auth/associate/github/callback",
             params={"code": "provider-code", "state": oauth_state},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Cookie": f"litestar_auth={access_token}; __oauth_associate_state_github={state_cookie}",
+            },
         )
         assert callback_response.status_code == HTTP_OK
         assert callback_response.json() == {"linked": True}
@@ -875,11 +878,11 @@ async def test_plugin_managed_oauth_associate_routes_link_provider_to_authentica
             json={"identifier": "linked@example.com", "password": "existing-password"},
         )
         assert login_response.status_code == HTTP_CREATED
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
         authorize_response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
             follow_redirects=False,
         )
         assert authorize_response.status_code == HTTP_FOUND
@@ -891,7 +894,9 @@ async def test_plugin_managed_oauth_associate_routes_link_provider_to_authentica
         callback_response = await client.get(
             "/auth/associate/github/callback",
             params={"code": "provider-code", "state": oauth_state},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Cookie": f"litestar_auth={access_token}; __oauth_associate_state_github={state_cookie}",
+            },
         )
         assert callback_response.status_code == HTTP_OK
         assert callback_response.json() == {"linked": True}

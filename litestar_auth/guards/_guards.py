@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from authweave_core import AuthenticationContext
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
 from litestar_auth._roles import normalize_role_name as _normalize_role_name
@@ -180,6 +181,25 @@ def is_authenticated(
         return
 
     msg = "Authentication credentials were not provided."
+    raise NotAuthorizedException(detail=msg)
+
+
+def is_human_authenticated(
+    connection: ASGIConnection[Any, Any, Any, Any],
+    _handler: BaseRouteHandler,
+) -> None:
+    """Require an authenticated human principal.
+
+    Raises:
+        NotAuthorizedException: When the request is anonymous or authenticated as a non-human principal.
+    """
+    if (
+        connection.user is not None
+        and isinstance(connection.auth, AuthenticationContext)
+        and connection.auth.subject.kind == "human"
+    ):
+        return
+    msg = "A human authentication session is required."
     raise NotAuthorizedException(detail=msg)
 
 

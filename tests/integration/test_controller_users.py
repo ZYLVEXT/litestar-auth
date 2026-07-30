@@ -8,24 +8,21 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import RouteProviderPolicy
 from litestar import Request, get
 from litestar.middleware import DefineMiddleware
 
 from litestar_auth._plugin.exception_handlers import authorization_error_handler
 from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy
-from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import create_auth_controller, create_users_controller
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import ApiKeyConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     EndpointRateLimit,
@@ -35,14 +32,18 @@ from litestar_auth.ratelimit import (
     RedisRateLimiter,
 )
 from litestar_auth.totp import generate_totp_secret
-from tests._helpers import auth_middleware_get_request_session, cast_fakeredis, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    cast_fakeredis,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import (
     DummySessionMaker,
     ExampleUser,
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
 )
-from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMemoryApiKeyStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,7 +53,6 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import OpenAPIResponse
     from litestar.testing import AsyncTestClient
 
-    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.integration
@@ -98,8 +98,6 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
         *,
         password_helper: PasswordHelper,
         backends: tuple[object, ...] = (),
-        api_key_store: InMemoryApiKeyStore | None = None,
-        api_key_config: ApiKeyConfigProtocol | None = None,
     ) -> None:
         """Initialize the manager and track hard-delete hooks."""
         super().__init__(
@@ -108,11 +106,8 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
-                api_key_hash_secret=API_KEY_HASH_SECRET,
             ),
             backends=backends,
-            api_key_store=api_key_store,
-            api_key_config=api_key_config,
         )
         self.deleted_users: list[ExampleUser] = []
 
@@ -172,7 +167,6 @@ class InvalidationCapableInMemoryTokenStrategy(InMemoryTokenStrategy):
 def build_app(
     *,
     hard_delete: bool = False,
-    include_api_keys: bool = False,
     rate_limit_config: AuthRateLimitConfig | None = None,
 ) -> tuple[
     Litestar,
@@ -211,32 +205,16 @@ def build_app(
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user, extra_user])
     strategy = InvalidationCapableInMemoryTokenStrategy()
-    api_key_store = InMemoryApiKeyStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     backends: list[AuthenticationBackend[ExampleUser, UUID]] = [backend]
-    if include_api_keys:
-        backends.append(
-            AuthenticationBackend[ExampleUser, UUID](
-                name="api_key",
-                transport=ApiKeyTransport(),
-                strategy=ApiKeyStrategy[ExampleUser, UUID](
-                    api_key_store=api_key_store,
-                    api_key_hash_secret=API_KEY_HASH_SECRET,
-                    prefix_env="prod",
-                    unsafe_testing=True,
-                ),
-            ),
-        )
     user_manager = UsersControllerManager(
         user_db,
         password_helper=password_helper,
         backends=tuple(backends),
-        api_key_store=api_key_store if include_api_keys else None,
-        api_key_config=ApiKeyConfig(enabled=include_api_keys, allowed_scopes=("member",), environment_marker="prod"),
     )
     auth_controller = create_auth_controller(
         backend=backend,
@@ -250,7 +228,13 @@ def build_app(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator(backends, user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     route_handlers = [
         auth_controller,
@@ -403,7 +387,7 @@ async def test_me_endpoints_return_public_payload_and_allow_non_privileged_updat
     """Authenticated users can read and patch their own public profile safely."""
     test_client, user_db, _, strategy, _, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
     original_email = regular_user.email
 
     get_response = await test_client.get("/users/me", headers=headers)
@@ -453,7 +437,7 @@ async def test_patch_me_rejects_email_change_without_current_password(
     """PATCH /users/me requires current-password proof before changing email."""
     test_client, user_db, _, strategy, _, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch(
         "/users/me",
@@ -480,7 +464,7 @@ async def test_patch_me_email_reauth_uses_change_password_rate_limit(
 
     async with async_test_client_factory(app_value) as client:
         test_client, _user_db, _, strategy, _, regular_user = client
-        headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+        headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
 
         first_response = await test_client.patch(
             "/users/me",
@@ -517,7 +501,7 @@ async def test_change_password_rejects_wrong_current_password_and_preserves_hash
     test_client, user_db, _, strategy, _, regular_user = client
     original_hash = regular_user.hashed_password
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.post(
         "/users/me/change-password",
@@ -534,44 +518,6 @@ async def test_change_password_rejects_wrong_current_password_and_preserves_hash
     assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
 
 
-async def test_change_password_rejects_api_key_authenticated_callers(
-    async_test_client_factory: Callable[[Any], Any],
-) -> None:
-    """POST /users/me/change-password requires a password session, not an API-key principal."""
-    app_value = build_app(include_api_keys=True)
-    app, _user_db, manager, _strategy, _admin_user, regular_user = app_value
-    created = await manager.create_api_key(user=regular_user, name="CLI", scopes=["member"])
-
-    async with async_test_client_factory(app) as test_client:
-        response = await test_client.post(
-            "/users/me/change-password",
-            headers={"Authorization": f"Bearer {created.secret.get_secret_value()}"},
-            json={"current_password": "user-password", "new_password": "rotated-password"},
-        )
-
-    assert response.status_code == HTTP_FORBIDDEN
-    assert (response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
-
-
-async def test_user_admin_routes_reject_scoped_api_key_owned_by_superuser(
-    async_test_client_factory: Callable[[Any], Any],
-) -> None:
-    """A superuser-owned API key cannot inherit global user-administration authority."""
-    app_value = build_app(include_api_keys=True)
-    app, _user_db, manager, _strategy, admin_user, regular_user = app_value
-    created = await manager.create_api_key(user=admin_user, name="Automation", scopes=["member"])
-    headers = {"Authorization": f"Bearer {created.secret.get_secret_value()}"}
-
-    async with async_test_client_factory(app) as test_client:
-        read_response = await test_client.get(f"/users/{regular_user.id}", headers=headers)
-        list_response = await test_client.get("/users", headers=headers)
-
-    assert read_response.status_code == HTTP_FORBIDDEN
-    assert list_response.status_code == HTTP_FORBIDDEN
-    assert (read_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
-    assert (list_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
-
-
 async def test_patch_me_rejects_password_and_preserves_hash(
     client: tuple[
         AsyncTestClient[Litestar],
@@ -586,7 +532,7 @@ async def test_patch_me_rejects_password_and_preserves_hash(
     test_client, user_db, _, strategy, _, regular_user = client
     original_hash = regular_user.hashed_password
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch(
         "/users/me",
@@ -620,10 +566,11 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
         json={"identifier": regular_user.email, "password": "user-password"},
     )
     assert login_response.status_code == HTTP_CREATED
-    login_payload = login_response.json()
-    access_token = cast("str", login_payload["access_token"])
-    refresh_token = cast("str", login_payload["refresh_token"])
-    headers = {"Authorization": f"Bearer {access_token}"}
+    access_token = login_response.cookies.get("litestar_auth")
+    refresh_token = login_response.cookies.get("litestar_auth_refresh")
+    assert access_token is not None
+    assert refresh_token is not None
+    headers = {"Cookie": f"litestar_auth={access_token}"}
 
     response = await test_client.post(
         "/users/me/change-password",
@@ -631,7 +578,10 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
         json={"current_password": "user-password", "new_password": "rotated-password"},
     )
     old_access_response = await test_client.get("/users/me", headers=headers)
-    old_refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    old_refresh_response = await test_client.post(
+        "/auth/refresh",
+        headers={"Cookie": f"litestar_auth_refresh={refresh_token}"},
+    )
     new_login_response = await test_client.post(
         "/auth/login",
         json={"identifier": regular_user.email, "password": "rotated-password"},
@@ -644,8 +594,8 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
     assert old_refresh_response.json()["detail"] == "The refresh token is invalid."
     assert (old_refresh_response.json().get("extra") or {}).get("code") == ErrorCode.REFRESH_TOKEN_INVALID
     assert new_login_response.status_code == HTTP_CREATED
-    assert isinstance(new_login_response.json()["access_token"], str)
-    assert isinstance(new_login_response.json()["refresh_token"], str)
+    assert isinstance(new_login_response.cookies.get("litestar_auth"), str)
+    assert isinstance(new_login_response.cookies.get("litestar_auth_refresh"), str)
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert PasswordHelper().verify("rotated-password", stored_user.hashed_password) is True
@@ -663,7 +613,7 @@ async def test_change_password_rate_limit_returns_429_after_invalid_current_pass
 
     async with async_test_client_factory(app_value) as client:
         test_client, _user_db, _, strategy, _, regular_user = client
-        headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+        headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
 
         first_response = await test_client.post(
             "/users/me/change-password",
@@ -697,7 +647,7 @@ async def test_change_password_rate_limit_resets_after_success(
 
     async with async_test_client_factory(app_value) as client:
         test_client, _user_db, _, strategy, _, regular_user = client
-        headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+        headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
 
         first_failure = await test_client.post(
             "/users/me/change-password",
@@ -709,7 +659,7 @@ async def test_change_password_rate_limit_resets_after_success(
             headers=headers,
             json={"current_password": "user-password", "new_password": "rotated-password"},
         )
-        rotated_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+        rotated_headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
         post_reset_first_failure = await test_client.post(
             "/users/me/change-password",
             headers=rotated_headers,
@@ -753,7 +703,7 @@ async def test_change_password_redis_rate_limit_returns_429_after_invalid_curren
 
     async with async_test_client_factory(app_value) as client:
         test_client, _user_db, _, strategy, _, regular_user = client
-        headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+        headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
 
         first_response = await test_client.post(
             "/users/me/change-password",
@@ -801,7 +751,7 @@ async def test_me_endpoints_reject_blocked_self_update_fields(
     test_client, user_db, _, strategy, _, regular_user = client
     original_hash = regular_user.hashed_password
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch("/users/me", headers=headers, json=payload)
 
@@ -830,7 +780,7 @@ async def test_me_endpoints_reject_unknown_fields_from_builtin_schema(
     """Built-in self-update schema rejects undeclared fields during request decoding."""
     test_client, user_db, _, strategy, _, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch(
         "/users/me",
@@ -888,7 +838,7 @@ async def test_me_endpoints_reject_inactive_users(
     regular_user.is_active = False
     await user_db.update(regular_user, {"is_active": False})
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     get_response = await test_client.get("/users/me", headers=headers)
     patch_response = await test_client.patch(
@@ -921,7 +871,7 @@ async def test_update_me_maps_user_manager_errors(
     """PATCH /me maps manager exceptions into ErrorCode responses."""
     test_client, _, user_manager, strategy, _, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     exists_message = "Email already exists."
     monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(message=exists_message)))
@@ -961,7 +911,7 @@ async def test_update_me_rejects_schema_validation_errors(
     """PATCH /me returns 422 for invalid self-update payloads."""
     test_client, _, _, strategy, _, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.patch(
         "/users/me",
@@ -992,7 +942,7 @@ async def test_users_patch_routes_reject_malformed_json_with_controller_error_co
     request_path = route_path.format(user_id=regular_user.id)
     token = await strategy.write_token(target_user)
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Cookie": f"litestar_auth={token}",
         "Content-Type": "application/json",
     }
 
@@ -1017,7 +967,7 @@ async def test_update_user_maps_user_manager_errors(
     """PATCH /users/{id} maps manager exceptions into ErrorCode responses."""
     test_client, _, user_manager, strategy, admin_user, regular_user = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     exists_message = "Email already exists."
     monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(message=exists_message)))
@@ -1056,7 +1006,7 @@ async def test_admin_update_requires_admin_current_password_step_up(
 ) -> None:
     """PATCH /users/{id} re-authenticates the admin before mutating the target user."""
     test_client, user_db, _, strategy, admin_user, regular_user = client
-    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
 
     missing_response = await test_client.patch(
         f"/users/{regular_user.id}",
@@ -1091,7 +1041,7 @@ async def test_admin_delete_requires_admin_current_password_step_up(
 ) -> None:
     """DELETE /users/{id} re-authenticates the admin before soft deleting the target user."""
     test_client, user_db, _, strategy, admin_user, regular_user = client
-    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
 
     missing_response = await test_client.request("DELETE", f"/users/{regular_user.id}", headers=headers, json={})
     wrong_response = await test_client.request(
@@ -1127,7 +1077,7 @@ async def test_admin_update_requires_totp_step_up_when_admin_is_enrolled(
     secret = generate_totp_secret()
     await user_db.update(admin_user, {"totp_secret": secret})
     monkeypatch.setattr(user_manager, "read_totp_secret", AsyncMock(return_value=secret))
-    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
 
     missing_totp_response = await test_client.patch(
         f"/users/{regular_user.id}",
@@ -1163,7 +1113,7 @@ async def test_admin_user_lookup_returns_404_for_unparseable_ids(
     """Admin get/delete routes return 404 for identifiers that cannot be parsed."""
     test_client, _, _, strategy, admin_user, _ = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     get_response = await test_client.get("/users/not-a-uuid", headers=headers)
     delete_response = await test_client.request(
@@ -1193,7 +1143,7 @@ async def test_get_user_not_found_returns_404(
     """GET /users/{id} returns 404 when the manager has no matching user."""
     test_client, _, user_manager, strategy, admin_user, _ = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     def _missing_user(user_id: UUID) -> ExampleUser | None:
         return admin_user if user_id == admin_user.id else None
@@ -1218,7 +1168,7 @@ async def test_soft_delete_calls_update_and_skips_hard_delete(
     """Soft delete uses update(is_active=False) and never calls delete()."""
     test_client, _, user_manager, strategy, admin_user, regular_user = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     update_spy: AsyncMock = AsyncMock(wraps=user_manager.update)
     delete_spy: AsyncMock = AsyncMock(wraps=user_manager.delete)
@@ -1251,7 +1201,7 @@ async def test_admin_endpoints_require_superuser(
     """Non-superusers receive 403 responses for admin-only routes."""
     test_client, _, _, strategy, admin_user, regular_user = client
     token = await strategy.write_token(regular_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     get_response = await test_client.get(f"/users/{admin_user.id}", headers=headers)
     list_response = await test_client.get("/users", headers=headers)
@@ -1281,8 +1231,8 @@ async def test_role_guard_factories_enforce_normalized_membership_at_runtime(
     test_client, user_db, _, strategy, admin_user, regular_user = client
     await user_db.update(admin_user, {"roles": [" Billing ", "ADMIN"]})
     await user_db.update(regular_user, {"roles": ["support"]})
-    admin_headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
-    member_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+    admin_headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
+    member_headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
 
     any_admin_response = await test_client.get("/role-guarded/any", headers=admin_headers)
     all_admin_response = await test_client.get("/role-guarded/all", headers=admin_headers)
@@ -1309,14 +1259,14 @@ async def test_admin_role_updates_feed_request_user_role_contract_at_runtime(
 ) -> None:
     """Admin role updates are visible as normalized ``list[str]`` membership on ``request.user``."""
     test_client, user_db, _, strategy, admin_user, regular_user = client
-    admin_headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    admin_headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
 
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=admin_headers,
         json={"roles": [" Billing ", "ADMIN"], "current_password": "admin-password"},
     )
-    member_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+    member_headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
     runtime_response = await test_client.get("/role-guarded/runtime", headers=member_headers)
 
     assert patch_response.status_code == HTTP_OK
@@ -1340,7 +1290,7 @@ async def test_superuser_update_accepts_admin_user_update_fields_including_passw
 ) -> None:
     """Admin PATCH keeps accepting the full privileged update surface, including password rotation."""
     test_client, user_db, _, strategy, admin_user, regular_user = client
-    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
 
     response = await test_client.patch(
         f"/users/{regular_user.id}",
@@ -1385,7 +1335,7 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     """Superusers can manage other users and deletes are soft."""
     test_client, user_db, user_manager, strategy, admin_user, regular_user = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     get_response = await test_client.get(f"/users/{regular_user.id}", headers=headers)
     patch_response = await test_client.patch(
@@ -1431,7 +1381,7 @@ async def test_superuser_cannot_delete_their_own_account(
     """Superusers receive a 403 response when attempting to delete themselves."""
     test_client, user_db, user_manager, strategy, admin_user, _ = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.request(
         "DELETE",
@@ -1463,7 +1413,7 @@ async def test_superuser_can_hard_delete_users(
     """Superusers can permanently delete users when configured."""
     test_client, user_db, user_manager, strategy, admin_user, regular_user = hard_delete_client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     delete_response = await test_client.request(
         "DELETE",
@@ -1498,7 +1448,7 @@ async def test_users_list_returns_paginated_public_payload(
     """Superusers receive paginated public user listings."""
     test_client, _, _, strategy, admin_user, regular_user = client
     token = await strategy.write_token(admin_user)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     response = await test_client.get("/users?limit=1&offset=1", headers=headers)
 

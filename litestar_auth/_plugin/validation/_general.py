@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from importlib import import_module
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-import litestar_auth._plugin.validation.api_key as _api_key_validation
 from litestar_auth._plugin.config._validation import validate_organization_configuration
 from litestar_auth._plugin.validation.credentials import validate_credential_config
 from litestar_auth._plugin.validation.oauth_routes import validate_oauth_route_registration_config
@@ -20,22 +18,11 @@ from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
-    from litestar_auth.authentication.strategy.jwt import JWTStrategy
-
-
-validate_api_key_config = _api_key_validation.validate_api_key_config
-
-
-def _current_jwt_strategy_type() -> type[JWTStrategy]:
-    """Return the live JWT strategy class."""
-    jwt_module = import_module("litestar_auth.authentication.strategy.jwt")
-    return cast("type[JWTStrategy]", jwt_module.JWTStrategy)
 
 
 def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate the requested plugin configuration during plugin construction."""
     for validator in (
-        validate_api_key_config,
         validate_organization_configuration,
         validate_core_session_config,
         validate_credential_config,

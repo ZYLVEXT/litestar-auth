@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
-
-from litestar.enums import MediaType
 
 import litestar_auth._schema_fields as schema_fields
 from litestar_auth.authentication.strategy.base import (
@@ -24,7 +21,6 @@ if TYPE_CHECKING:
     from litestar.response import Response
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.payloads import RefreshTokenRequest
 _LOGIN_EMAIL_MAX_LENGTH = schema_fields.LOGIN_IDENTIFIER_MAX_LENGTH
 _LOGIN_USERNAME_MAX_LENGTH = 150
 _EMAIL_PATTERN = re.compile(schema_fields.EMAIL_PATTERN)
@@ -94,47 +90,37 @@ def _attach_refresh_token(
     response: Response[Any],
     refresh_token: str,
     *,
-    cookie_transport: CookieTransport | None = None,
+    cookie_transport: CookieTransport,
 ) -> Response[Any]:
-    """Merge a refresh token into the controller response payload.
+    """Set the dedicated HttpOnly refresh cookie.
 
     Returns:
-        Response containing the existing access-token payload plus the refresh token.
+        Response containing the access and refresh session cookies.
     """
-    if cookie_transport is not None:
-        return cookie_transport.set_refresh_token(response, refresh_token)
-
-    content = response.content
-    payload = dict(content) if isinstance(content, Mapping) else {}
-    payload["refresh_token"] = refresh_token
-    response.content = payload
-    response.media_type = MediaType.JSON
-    return response
+    return cookie_transport.set_refresh_token(response, refresh_token)
 
 
 def _resolve_cookie_transport[UP: UserProtocol[Any], ID](
     backend: AuthenticationBackend[UP, ID],
-) -> CookieTransport | None:
-    """Return the backend cookie transport when refresh-cookie behavior is available."""
+) -> CookieTransport:
+    """Return the required v7 cookie transport.
+
+    Raises:
+        ConfigurationError: If a manual controller bypassed v7 transport validation.
+    """
     transport = backend.transport
-    return transport if isinstance(transport, CookieTransport) else None
+    if isinstance(transport, CookieTransport):
+        return transport
+    msg = "litestar-auth 7 human authentication requires CookieTransport."
+    raise ConfigurationError(msg)
 
 
 async def _resolve_refresh_token_value(
     request: Request[Any, Any, Any],
-    data: RefreshTokenRequest | None,
     *,
-    cookie_transport: CookieTransport | None = None,
+    cookie_transport: CookieTransport,
 ) -> str | None:
-    """Return a raw refresh token from a request body or refresh cookie.
-
-    Body values take precedence so non-cookie clients keep the same explicit request contract.
-    Cookie refresh tokens are only read when the configured backend uses ``CookieTransport``.
-    """
-    if data is not None:
-        return data.refresh_token
-    if cookie_transport is None:
-        return None
+    """Return the raw refresh token from its dedicated HttpOnly cookie."""
     return await cookie_transport.read_refresh_token(request)
 
 

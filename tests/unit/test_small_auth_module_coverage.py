@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import litestar_auth.oauth as oauth_module
-from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key, digest_opaque_token
+from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -30,16 +30,6 @@ def _current_oauth_client_adapter_module() -> ModuleType:
 def _current_oauth_router_module() -> ModuleType:
     """Return the current OAuth router module after any reloads."""
     return importlib.import_module("litestar_auth.oauth.router")
-
-
-def test_digest_opaque_token_matches_expected_hmac_digest() -> None:
-    """Digesting an opaque token should remain stable for persisted tokens."""
-    digest = digest_opaque_token(
-        token_hash_secret=b"small-auth-gap-secret",
-        token="opaque-token",
-    )
-
-    assert digest == "ce0133e3cb70fc8d44594a89a14c808f408e0ab495eb02560931fea996b0849d"
 
 
 def test_build_opaque_token_key_prefixes_digest() -> None:

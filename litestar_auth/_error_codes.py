@@ -46,7 +46,7 @@ class AuthErrorCode(_DocumentedErrorCode):
         "LOGIN_ACCOUNT_UNAVAILABLE",
         "Emitted by InactiveUserError, UnverifiedUserError, and account-state HTTP guards.",
     )
-    AUTHORIZATION_DENIED = ("AUTHORIZATION_DENIED", "Emitted by AuthorizationError and bearer-auth guards.")
+    AUTHORIZATION_DENIED = ("AUTHORIZATION_DENIED", "Emitted by AuthorizationError and authorization guards.")
     REQUEST_BODY_INVALID = ("REQUEST_BODY_INVALID", "Emitted by request-body decoding and validation helpers.")
     LOGIN_PAYLOAD_INVALID = ("LOGIN_PAYLOAD_INVALID", "Emitted by login payload validation helpers.")
     UPDATE_USER_EMAIL_ALREADY_EXISTS = (
@@ -60,10 +60,6 @@ class AuthErrorCode(_DocumentedErrorCode):
     SUPERUSER_CANNOT_DELETE_SELF = (
         "SUPERUSER_CANNOT_DELETE_SELF",
         "Emitted by user-delete self-protection checks.",
-    )
-    ORGANIZATION_SWITCH_DENIED = (
-        "ORGANIZATION_SWITCH_DENIED",
-        "Emitted by switch-organization when target membership cannot be verified.",
     )
 
 
@@ -170,31 +166,6 @@ class OAuthErrorCode(_DocumentedErrorCode):
     )
 
 
-class ApiKeyErrorCode(_DocumentedErrorCode):
-    """API-key bearer, scope, quota, and request-signature error codes."""
-
-    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
-    API_KEY_INVALID = ("API_KEY_INVALID", "Emitted by API-key credential validation and non-enumerating lookups.")
-    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
-    API_KEY_REVOKED = ("API_KEY_REVOKED", "Emitted by API-key strategy revoked-key classification.")
-    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
-    API_KEY_EXPIRED = ("API_KEY_EXPIRED", "Emitted by API-key strategy expiry classification.")
-    API_KEY_SCOPE_DENIED = ("API_KEY_SCOPE_DENIED", "Emitted by ApiKeyScopeDeniedError and API-key scope guards.")
-    API_KEY_LIMIT_REACHED = ("API_KEY_LIMIT_REACHED", "Emitted by ApiKeyLimitReachedError.")
-    API_KEY_SIGNATURE_INVALID = (
-        "API_KEY_SIGNATURE_INVALID",
-        "Emitted by signed API-key request validation failures.",
-    )
-    API_KEY_SIGNATURE_TIMESTAMP_SKEW = (
-        "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
-        "Emitted by signed API-key timestamp-window validation.",
-    )
-    API_KEY_SIGNATURE_NONCE_REPLAY = (
-        "API_KEY_SIGNATURE_NONCE_REPLAY",
-        "Emitted by signed API-key nonce replay detection.",
-    )
-
-
 def _documented_member(member: _DocumentedErrorCode) -> tuple[str, str]:
     """Return a value/doc tuple for the aggregate ``ErrorCode`` registry."""
     return member.value, member.__doc__ or ""
@@ -226,7 +197,6 @@ class ErrorCode(_DocumentedErrorCode):
     UPDATE_USER_EMAIL_ALREADY_EXISTS = _documented_member(AuthErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS)
     UPDATE_USER_INVALID_PASSWORD = _documented_member(AuthErrorCode.UPDATE_USER_INVALID_PASSWORD)
     SUPERUSER_CANNOT_DELETE_SELF = _documented_member(AuthErrorCode.SUPERUSER_CANNOT_DELETE_SELF)
-    ORGANIZATION_SWITCH_DENIED = _documented_member(AuthErrorCode.ORGANIZATION_SWITCH_DENIED)
     OAUTH_NOT_AVAILABLE_EMAIL = _documented_member(OAuthErrorCode.OAUTH_NOT_AVAILABLE_EMAIL)
     OAUTH_STATE_INVALID = _documented_member(OAuthErrorCode.OAUTH_STATE_INVALID)
     OAUTH_EMAIL_NOT_VERIFIED = _documented_member(OAuthErrorCode.OAUTH_EMAIL_NOT_VERIFIED)
@@ -257,14 +227,6 @@ class ErrorCode(_DocumentedErrorCode):
     TOTP_ALREADY_ENABLED = _documented_member(TotpErrorCode.TOTP_ALREADY_ENABLED)
     TOTP_ENROLL_BAD_TOKEN = _documented_member(TotpErrorCode.TOTP_ENROLL_BAD_TOKEN)
     TOTP_STEPUP_REQUIRED = _documented_member(TotpErrorCode.TOTP_STEPUP_REQUIRED)
-    API_KEY_INVALID = _documented_member(ApiKeyErrorCode.API_KEY_INVALID)
-    API_KEY_REVOKED = _documented_member(ApiKeyErrorCode.API_KEY_REVOKED)
-    API_KEY_EXPIRED = _documented_member(ApiKeyErrorCode.API_KEY_EXPIRED)
-    API_KEY_SCOPE_DENIED = _documented_member(ApiKeyErrorCode.API_KEY_SCOPE_DENIED)
-    API_KEY_LIMIT_REACHED = _documented_member(ApiKeyErrorCode.API_KEY_LIMIT_REACHED)
-    API_KEY_SIGNATURE_INVALID = _documented_member(ApiKeyErrorCode.API_KEY_SIGNATURE_INVALID)
-    API_KEY_SIGNATURE_TIMESTAMP_SKEW = _documented_member(ApiKeyErrorCode.API_KEY_SIGNATURE_TIMESTAMP_SKEW)
-    API_KEY_SIGNATURE_NONCE_REPLAY = _documented_member(ApiKeyErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY)
 
 
 ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
@@ -289,7 +251,6 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS: AuthErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS,
     ErrorCode.UPDATE_USER_INVALID_PASSWORD: AuthErrorCode.UPDATE_USER_INVALID_PASSWORD,
     ErrorCode.SUPERUSER_CANNOT_DELETE_SELF: AuthErrorCode.SUPERUSER_CANNOT_DELETE_SELF,
-    ErrorCode.ORGANIZATION_SWITCH_DENIED: AuthErrorCode.ORGANIZATION_SWITCH_DENIED,
     ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL: OAuthErrorCode.OAUTH_NOT_AVAILABLE_EMAIL,
     ErrorCode.OAUTH_STATE_INVALID: OAuthErrorCode.OAUTH_STATE_INVALID,
     ErrorCode.OAUTH_EMAIL_NOT_VERIFIED: OAuthErrorCode.OAUTH_EMAIL_NOT_VERIFIED,
@@ -318,20 +279,11 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.TOTP_ALREADY_ENABLED: TotpErrorCode.TOTP_ALREADY_ENABLED,
     ErrorCode.TOTP_ENROLL_BAD_TOKEN: TotpErrorCode.TOTP_ENROLL_BAD_TOKEN,
     ErrorCode.TOTP_STEPUP_REQUIRED: TotpErrorCode.TOTP_STEPUP_REQUIRED,
-    ErrorCode.API_KEY_INVALID: ApiKeyErrorCode.API_KEY_INVALID,
-    ErrorCode.API_KEY_REVOKED: ApiKeyErrorCode.API_KEY_REVOKED,
-    ErrorCode.API_KEY_EXPIRED: ApiKeyErrorCode.API_KEY_EXPIRED,
-    ErrorCode.API_KEY_SCOPE_DENIED: ApiKeyErrorCode.API_KEY_SCOPE_DENIED,
-    ErrorCode.API_KEY_LIMIT_REACHED: ApiKeyErrorCode.API_KEY_LIMIT_REACHED,
-    ErrorCode.API_KEY_SIGNATURE_INVALID: ApiKeyErrorCode.API_KEY_SIGNATURE_INVALID,
-    ErrorCode.API_KEY_SIGNATURE_TIMESTAMP_SKEW: ApiKeyErrorCode.API_KEY_SIGNATURE_TIMESTAMP_SKEW,
-    ErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY: ApiKeyErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY,
 }
 
 
 __all__ = (
     "ERROR_CODE_REGISTRY",
-    "ApiKeyErrorCode",
     "AuthErrorCode",
     "ErrorCode",
     "OAuthErrorCode",

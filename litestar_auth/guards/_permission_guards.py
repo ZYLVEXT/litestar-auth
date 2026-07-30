@@ -10,7 +10,6 @@ from litestar_auth._permissions import (
     resolve_connection_permissions,
 )
 from litestar_auth.exceptions import InsufficientPermissionsError
-from litestar_auth.guards._api_key_guards import api_key_delegation_scopes
 from litestar_auth.guards._protocol_narrowing import _require_active_guarded_user, _require_role_capable_user
 
 if TYPE_CHECKING:
@@ -51,28 +50,14 @@ def _normalize_required_permissions(permissions: tuple[object, ...]) -> tuple[st
 
 def _requirement_satisfied(
     granted_permissions: frozenset[str],
-    delegation_scopes: frozenset[str] | None,
     required_permission: str,
 ) -> bool:
-    """Return whether one requirement is satisfied by the user and any delegating credential.
-
-    The authenticated user must grant the permission. When the request is
-    API-key authenticated (``delegation_scopes is not None``), the key's delegated
-    scopes must independently grant it too, so a scoped API key can never exceed
-    its delegation on a permission-guarded route. This mirrors the
-    ``scope_subset_check`` ceiling already applied to ``has_scope`` guards
-    (least privilege). Both checks are evaluated without short-circuit.
-    """
-    user_grants = permission_grants_fixed_work(granted_permissions, required_permission)
-    if delegation_scopes is None:
-        return user_grants
-    key_delegates = permission_grants_fixed_work(delegation_scopes, required_permission)
-    return bool(int(user_grants) * int(key_delegates))
+    """Return whether one requirement is satisfied by the authenticated human."""
+    return permission_grants_fixed_work(granted_permissions, required_permission)
 
 
 def _permissions_include_all(
     granted_permissions: frozenset[str],
-    delegation_scopes: frozenset[str] | None,
     required_permissions: tuple[str, ...],
 ) -> bool:
     """Return whether every required permission is satisfied, without early exit.
@@ -82,14 +67,13 @@ def _permissions_include_all(
     """
     includes_all = True
     for required_permission in required_permissions:
-        requirement_satisfied = _requirement_satisfied(granted_permissions, delegation_scopes, required_permission)
+        requirement_satisfied = _requirement_satisfied(granted_permissions, required_permission)
         includes_all = bool(int(includes_all) * int(requirement_satisfied))
     return includes_all
 
 
 def _permissions_intersect(
     granted_permissions: frozenset[str],
-    delegation_scopes: frozenset[str] | None,
     required_permissions: tuple[str, ...],
 ) -> bool:
     """Return whether any required permission is satisfied, without early exit.
@@ -99,7 +83,7 @@ def _permissions_intersect(
     """
     intersects = False
     for required_permission in required_permissions:
-        requirement_satisfied = _requirement_satisfied(granted_permissions, delegation_scopes, required_permission)
+        requirement_satisfied = _requirement_satisfied(granted_permissions, required_permission)
         intersects = bool(int(intersects) + int(requirement_satisfied))
     return intersects
 
@@ -129,14 +113,8 @@ def _build_permission_guard(
         guarded = _require_active_guarded_user(connection, guard_name=guard_name)
         _require_role_capable_user(guarded, guard_name=guard_name)
         granted_permissions = resolve_connection_permissions(connection)
-        # Security (least privilege): a delegated API key may never exceed its own
-        # scopes on a permission-guarded route. ``None`` for non-API-key requests
-        # leaves user-permission semantics unchanged; an empty set (legacy/invalid
-        # key scopes) fails closed.
-        delegation_scopes = api_key_delegation_scopes(connection)
-
         if require_all:
-            if _permissions_include_all(granted_permissions, delegation_scopes, required_permissions):
+            if _permissions_include_all(granted_permissions, required_permissions):
                 return
             raise InsufficientPermissionsError(
                 required_permissions=required_permission_set,
@@ -144,7 +122,7 @@ def _build_permission_guard(
                 require_all=True,
             )
 
-        if _permissions_intersect(granted_permissions, delegation_scopes, required_permissions):
+        if _permissions_intersect(granted_permissions, required_permissions):
             return
         raise InsufficientPermissionsError(
             required_permissions=required_permission_set,

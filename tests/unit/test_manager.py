@@ -26,8 +26,8 @@ from litestar_auth._manager.construction import resolve_oauth_account_store
 from litestar_auth._manager.security import _SecretValue
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth._manager.user_policy import UserPolicy
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
     AuthorizationError,
@@ -56,7 +56,6 @@ manager_logger = manager_module.logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth._manager.hooks import ManagerHookEvent
     from litestar_auth.db import OAuthAccountData
 
@@ -150,9 +149,6 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
         login_identifier_telemetry_secret: str | None = LOGIN_IDENTIFIER_TELEMETRY_SECRET,
-        api_key_store: object | None = None,
-        api_key_config: ApiKeyConfigProtocol | None = None,
-        api_key_hash_secret: str | None = None,
         creatable_fields: frozenset[str] = frozenset({"email", "password"}),
         updatable_fields: frozenset[str] = frozenset({"email", "password"}),
         account_token_denylist_store: object | None = None,
@@ -166,11 +162,8 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
                 reset_password_token_secret="fedcba9876543210" * 4,
                 organization_invitation_token_secret="c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2,
                 login_identifier_telemetry_secret=login_identifier_telemetry_secret,
-                api_key_hash_secret=api_key_hash_secret,
                 id_parser=UUID,
             ),
-            api_key_store=cast("Any", api_key_store),
-            api_key_config=api_key_config,
             password_validator=password_validator,
             reset_verification_on_email_change=reset_verification_on_email_change,
             backends=backends,
@@ -190,9 +183,6 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.after_update_events: list[tuple[ExampleUser, dict]] = []
         self.before_delete_users: list[ExampleUser] = []
         self.deleted_users: list[ExampleUser] = []
-        self.created_api_key_events: list[tuple[ExampleUser, object]] = []
-        self.revoked_api_key_events: list[tuple[ExampleUser, object]] = []
-        self.used_api_key_events: list[object] = []
 
     async def on_after_register(self, user: ExampleUser, token: str) -> None:
         """Record a successful registration."""
@@ -234,18 +224,6 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     async def on_after_delete(self, user: ExampleUser) -> None:
         """Record a completed hard delete."""
         self.deleted_users.append(user)
-
-    async def on_after_api_key_created(self, user: ExampleUser, api_key: object) -> None:
-        """Record an API-key creation."""
-        self.created_api_key_events.append((user, api_key))
-
-    async def on_after_api_key_revoked(self, user: ExampleUser, api_key: object) -> None:
-        """Record an API-key revocation."""
-        self.revoked_api_key_events.append((user, api_key))
-
-    async def on_after_api_key_used(self, api_key: object) -> None:
-        """Record an API-key use write."""
-        self.used_api_key_events.append(api_key)
 
 
 class _StepUpStrategy:
@@ -794,23 +772,6 @@ def test_manager_init_rejects_short_login_telemetry_secret_in_production() -> No
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
                 login_identifier_telemetry_secret="short",
-            ),
-        )
-
-
-def test_manager_init_rejects_short_api_key_hash_secret_in_production() -> None:
-    """Configured API-key hash secrets must meet the normal secret-length floor."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-
-    with pytest.raises(ConfigurationError, match="api_key_hash_secret"):
-        BaseUserManager(
-            user_db,
-            password_helper=password_helper,
-            security=UserManagerSecurity[UUID](
-                verification_token_secret="0123456789abcdef" * 4,
-                reset_password_token_secret="fedcba9876543210" * 4,
-                api_key_hash_secret="short",
             ),
         )
 
@@ -2815,92 +2776,6 @@ def test_load_cryptography_fernet_raises_with_install_hint(monkeypatch: pytest.M
     )
     with pytest.raises(ImportError, match=r"Install litestar-auth\[totp\]"):
         totp_facade_module._load_cryptography_fernet()
-
-
-async def test_base_hooks_are_noops() -> None:
-    """Base hooks are safe no-ops and accept the required parameters."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = BaseUserManager(
-        user_db,
-        password_helper=password_helper,
-        security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
-            id_parser=UUID,
-        ),
-    )
-    user = _build_user(password_helper)
-
-    assert await manager.on_after_register(user, "token") is None
-    assert await manager.on_after_register_duplicate(user) is None
-    assert await manager.on_after_login(user) is None
-    assert await manager.on_after_verify(user) is None
-    assert await manager.on_after_request_verify_token(user, "token") is None
-    assert await manager.on_after_request_verify_token(None, None) is None
-    assert await manager.on_after_forgot_password(user, "token") is None
-    assert await manager.on_after_reset_password(user) is None
-    assert await manager.on_after_update(user, {"email": user.email}) is None
-    assert await manager.on_before_delete(user) is None
-    assert await manager.on_after_delete(user) is None
-    assert await manager.on_after_api_key_created(user, object()) is None
-    assert await manager.on_after_api_key_revoked(user, object()) is None
-    assert await manager.on_after_api_key_used(object()) is None
-
-
-async def test_hook_bus_fires_named_events_with_argument_shapes() -> None:
-    """Hook bus subscribers receive canonical names and positional hook arguments."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = BaseUserManager(
-        user_db,
-        password_helper=password_helper,
-        security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
-            id_parser=UUID,
-        ),
-    )
-    user = _build_user(password_helper)
-    api_key = object()
-    update_dict = {"email": user.email}
-    events: list[ManagerHookEvent] = []
-
-    async def record(event: ManagerHookEvent) -> None:
-        await asyncio.sleep(0)
-        events.append(event)
-
-    manager.hook_bus.subscribe(record)
-
-    await manager.hook_bus.fire("after_register", user, "verify-token")
-    await manager.hook_bus.fire("after_register_duplicate", user)
-    await manager.hook_bus.fire("after_login", user)
-    await manager.hook_bus.fire("after_verify", user)
-    await manager.hook_bus.fire("after_request_verify_token", user, "verify-token")
-    await manager.hook_bus.fire("after_forgot_password", None, None)
-    await manager.hook_bus.fire("after_reset_password", user)
-    await manager.hook_bus.fire("after_update", user, update_dict)
-    await manager.hook_bus.fire("before_delete", user)
-    await manager.hook_bus.fire("after_delete", user)
-    await manager.hook_bus.fire("after_api_key_created", user, api_key)
-    await manager.hook_bus.fire("after_api_key_revoked", user, api_key)
-    await manager.hook_bus.fire("after_api_key_used", api_key)
-
-    assert [(event.name, event.args) for event in events] == [
-        ("after_register", (user, "verify-token")),
-        ("after_register_duplicate", (user,)),
-        ("after_login", (user,)),
-        ("after_verify", (user,)),
-        ("after_request_verify_token", (user, "verify-token")),
-        ("after_forgot_password", (None, None)),
-        ("after_reset_password", (user,)),
-        ("after_update", (user, update_dict)),
-        ("before_delete", (user,)),
-        ("after_delete", (user,)),
-        ("after_api_key_created", (user, api_key)),
-        ("after_api_key_revoked", (user, api_key)),
-        ("after_api_key_used", (api_key,)),
-    ]
 
 
 def test_require_account_state_raises_for_inactive_user() -> None:

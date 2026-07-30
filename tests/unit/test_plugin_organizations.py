@@ -11,9 +11,9 @@ from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
-from litestar import Litestar, get
+from fakeredis import FakeAsyncRedis
+from litestar import Litestar
 from litestar.config.app import AppConfig
-from litestar.di import NamedDependency
 from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.organization_admin._mutations as organization_mutations_module
@@ -21,9 +21,8 @@ import litestar_auth.contrib.organization_admin as organization_admin_contrib
 import litestar_auth.plugin as plugin_module
 from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.controllers.organization import OrganizationControllerConfig, create_organization_controller
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.db import OrganizationInvitationData
 from litestar_auth.exceptions import (
     ConfigurationError,
@@ -31,7 +30,7 @@ from litestar_auth.exceptions import (
     InvalidOrganizationInvitationTokenError,
     OrganizationInvitationEmailMismatchError,
 )
-from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
+from litestar_auth.guards import is_human_authenticated, is_superuser
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from tests.integration.test_orchestrator import (
@@ -474,40 +473,24 @@ class SwitchOrganizationStore:
         return invitation
 
 
-_CurrentOrganizationDep = NamedDependency[object | None]
-
-
-@get("/current-organization", sync_to_thread=False)
-def current_organization_probe(litestar_auth_current_organization: _CurrentOrganizationDep) -> dict[str, str | None]:
-    """Expose the middleware-published current organization slug.
-
-    Returns:
-        Current organization slug, if middleware published one.
-    """
-    organization_context = litestar_auth_current_organization
-    organization = getattr(organization_context, "organization", None)
-    return {"slug": getattr(organization, "slug", None)}
-
-
-def _switch_organization_app(  # ruff: ignore[too-many-arguments]
+def _organization_app(  # ruff: ignore[too-many-arguments]
     *,
     user: ExampleUser,
-    strategy: JWTStrategy[ExampleUser, UUID],
+    strategy: RedisTokenStrategy[ExampleUser, UUID],
     organization_store: SwitchOrganizationStore,
-    include_switch_organization: bool,
     include_organization_admin: bool = False,
     include_organization_invitations: bool = False,
     rate_limit_config: AuthRateLimitConfig | None = None,
     user_manager_class: type[PluginUserManager] = PluginUserManager,
 ) -> Litestar:
-    """Build a plugin app configured for switch-organization route tests.
+    """Build a plugin app configured for organization route tests.
 
     Returns:
-        Litestar app with the auth plugin and current-organization probe route.
+        Litestar app with the requested organization routes.
     """
     backend = AuthenticationBackend[ExampleUser, UUID](
-        name="jwt",
-        transport=BearerTransport(),
+        name="redis-session",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -529,36 +512,20 @@ def _switch_organization_app(  # ruff: ignore[too-many-arguments]
         organization_config=plugin_module.OrganizationConfig(
             enabled=True,
             store_factory=cast("Any", lambda _session: organization_store),
-            include_switch_organization=include_switch_organization,
             include_organization_admin=include_organization_admin,
             include_organization_invitations=include_organization_invitations,
         ),
     )
-    return Litestar(route_handlers=[current_organization_probe], plugins=[LitestarAuth(config)])
+    return Litestar(plugins=[LitestarAuth(config)])
 
 
-def test_switch_organization_route_requires_password_session() -> None:
-    """A delegated API key cannot exchange its authority for an organization-bound JWT."""
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
+def _session_strategy() -> RedisTokenStrategy[ExampleUser, UUID]:
+    """Return a supported server-side session strategy for request tests."""
+    return RedisTokenStrategy(
+        redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+        token_hash_secret=TOKEN_HASH_SECRET,
         subject_decoder=UUID,
-        allow_inmemory_denylist=True,
     )
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="jwt",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-    controller = create_organization_controller(
-        OrganizationControllerConfig(
-            backend=cast("Any", backend),
-            backend_inventory=cast("Any", object()),
-            backend_index=0,
-        ),
-    )
-
-    assert controller.__dict__["switch_organization"].guards == [is_authenticated, requires_password_session]
 
 
 class OrganizationInvitationCaptureManager(PluginUserManager):
@@ -615,210 +582,24 @@ async def _create_organization_invitation(  # ruff: ignore[too-many-arguments]
     return invitation, issued.token
 
 
-async def test_switch_organization_issues_member_org_bound_token_and_publishes_context() -> None:
-    """Authenticated members can activate an organization through a signed JWT claim."""
-    user = ExampleUser(id=uuid4(), email="member@example.com", is_verified=True)
-    organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
-    store = SwitchOrganizationStore(
-        organizations=[organization],
-        memberships=[
-            SwitchOrganizationMembership(
-                organization_id=organization.id,
-                user_id=user.id,
-                roles=["owner"],
-            ),
-        ],
-    )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
-        user=user,
-        strategy=strategy,
-        organization_store=store,
-        include_switch_organization=True,
-    )
-    initial_token = await strategy.write_token(user)
-
-    async with AsyncTestClient(app) as client:
-        switch_response = await client.post(
-            "/auth/switch-organization",
-            json={"organization_slug": " Acme "},
-            headers={"Authorization": f"Bearer {initial_token}"},
-        )
-        assert store.organization_slug_calls == ["acme"]
-        assert store.membership_calls == [(organization.id, user.id)]
-
-        access_token = switch_response.json()["access_token"]
-        probe_response = await client.get(
-            "/current-organization",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-
-    assert switch_response.status_code == HTTP_OK
-    assert probe_response.status_code == HTTP_OK
-    assert probe_response.json() == {"slug": "acme"}
-
-
-async def test_switch_organization_denies_nonmember_unknown_and_malformed_slugs_uniformly() -> None:
-    """Membership failures collapse to the same fail-closed response."""
-    user = ExampleUser(id=uuid4(), email="member@example.com", is_verified=True)
-    organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
-    store = SwitchOrganizationStore(organizations=[organization], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
-        user=user,
-        strategy=strategy,
-        organization_store=store,
-        include_switch_organization=True,
-    )
-    initial_token = await strategy.write_token(user)
-
-    async with AsyncTestClient(app) as client:
-        nonmember_response = await client.post(
-            "/auth/switch-organization",
-            json={"organization_slug": "acme"},
-            headers={"Authorization": f"Bearer {initial_token}"},
-        )
-        unknown_response = await client.post(
-            "/auth/switch-organization",
-            json={"organization_slug": "missing"},
-            headers={"Authorization": f"Bearer {initial_token}"},
-        )
-        malformed_response = await client.post(
-            "/auth/switch-organization",
-            json={"organization_slug": "   "},
-            headers={"Authorization": f"Bearer {initial_token}"},
-        )
-
-    assert nonmember_response.status_code == HTTP_FORBIDDEN
-    assert unknown_response.status_code == HTTP_FORBIDDEN
-    assert malformed_response.status_code == HTTP_FORBIDDEN
-    assert nonmember_response.json() == unknown_response.json() == malformed_response.json()
-    assert nonmember_response.json()["extra"]["code"] == "ORGANIZATION_SWITCH_DENIED"
-    assert store.organization_slug_calls == ["acme", "missing"]
-    assert store.membership_calls == [(organization.id, user.id)]
-
-
-async def test_switch_organization_uses_configured_rate_limit_slot() -> None:
-    """Configured switch-organization rate limits reject before organization lookup."""
-    user = ExampleUser(id=uuid4(), email="member@example.com", is_verified=True)
-    organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
-    store = SwitchOrganizationStore(
-        organizations=[organization],
-        memberships=[
-            SwitchOrganizationMembership(
-                organization_id=organization.id,
-                user_id=user.id,
-                roles=["owner"],
-            ),
-        ],
-    )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
-        user=user,
-        strategy=strategy,
-        organization_store=store,
-        include_switch_organization=True,
-        rate_limit_config=AuthRateLimitConfig(
-            organization_switch=EndpointRateLimit(
-                backend=AlwaysBlockedRateLimiter(),
-                scope="ip",
-                namespace="organization-switch",
-            ),
-        ),
-    )
-    initial_token = await strategy.write_token(user)
-
-    async with AsyncTestClient(app) as client:
-        response = await client.post(
-            "/auth/switch-organization",
-            json={"organization_slug": "acme"},
-            headers={"Authorization": f"Bearer {initial_token}"},
-        )
-
-    assert response.status_code == HTTP_TOO_MANY_REQUESTS
-    assert response.headers["Retry-After"] == "2"
-    assert response.json()["detail"] == "Too many requests."
-    assert store.organization_slug_calls == []
-    assert store.membership_calls == []
-
-
-async def test_switch_organization_route_is_absent_without_route_flag() -> None:
-    """The switch-organization route is opt-in even when organization lookup is enabled."""
-    user = ExampleUser(id=uuid4(), email="member@example.com", is_verified=True)
-    store = SwitchOrganizationStore(organizations=[], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
-        user=user,
-        strategy=strategy,
-        organization_store=store,
-        include_switch_organization=False,
-    )
-
-    async with AsyncTestClient(app) as client:
-        response = await client.post("/auth/switch-organization", json={"organization_slug": "acme"})
-
-    assert response.status_code == HTTP_NOT_FOUND
-
-
-async def test_switch_organization_route_is_absent_for_non_organization_token_backends() -> None:
-    """The switch route is not registered for backends that cannot sign organization claims."""
-    organization_config = plugin_module.OrganizationConfig(
-        enabled=True,
-        store_factory=cast("Any", lambda _session: SwitchOrganizationStore(organizations=[], memberships=[])),
-        include_switch_organization=True,
-    )
-    app = Litestar(route_handlers=[], plugins=[LitestarAuth(_minimal_config(organization_config=organization_config))])
-
-    async with AsyncTestClient(app) as client:
-        response = await client.post("/auth/switch-organization", json={"organization_slug": "acme"})
-
-    assert response.status_code == HTTP_NOT_FOUND
-
-
 async def test_organization_admin_routes_are_absent_without_route_flag() -> None:
     """Organization admin routes are not mounted by the organization feature alone."""
     user = ExampleUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
     store = SwitchOrganizationStore(organizations=[], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
     )
     token = await strategy.write_token(user)
 
     async with AsyncTestClient(app) as client:
-        response = await client.get("/organizations", headers={"Authorization": f"Bearer {token}"})
+        response = await client.get("/organizations", headers={"Cookie": f"litestar_auth={token}"})
         invitation_response = await client.post(
             "/auth/organization-invitations/accept",
             json={"token": "not-a-token"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert response.status_code == HTTP_NOT_FOUND
@@ -838,21 +619,15 @@ async def test_organization_invitation_accept_creates_membership_and_consumes_to
         invited_email="invited.user@example.com",
         roles=["admin", "member"],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=invited_user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_invitations=True,
     )
     auth_token = await strategy.write_token(invited_user)
-    headers = {"Authorization": f"Bearer {auth_token}"}
+    headers = {"Cookie": f"litestar_auth={auth_token}"}
 
     async with AsyncTestClient(app) as client:
         accept_response = await client.post(
@@ -923,17 +698,11 @@ async def test_organization_invitation_routes_require_active_verified_invitees(
         invited_email=user.email,
         roles=["member"],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_invitations=True,
     )
     auth_token = await strategy.write_token(user)
@@ -942,7 +711,7 @@ async def test_organization_invitation_routes_require_active_verified_invitees(
         response = await client.post(
             route_path,
             json={"token": invitation_token},
-            headers={"Authorization": f"Bearer {auth_token}"},
+            headers={"Cookie": f"litestar_auth={auth_token}"},
         )
 
     assert response.status_code == (401 if account_state == "inactive" else HTTP_FORBIDDEN)
@@ -963,12 +732,7 @@ async def test_organization_invitation_accept_denies_mismatched_authenticated_em
         invited_email="invited@example.com",
         roles=["member"],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
+    strategy = _session_strategy()
     rate_limit_config = AuthRateLimitConfig(
         organization_invitation_accept=EndpointRateLimit(
             backend=InMemoryRateLimiter(max_attempts=1, window_seconds=60),
@@ -976,16 +740,15 @@ async def test_organization_invitation_accept_denies_mismatched_authenticated_em
             namespace="organization-invitation-accept",
         ),
     )
-    app = _switch_organization_app(
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_invitations=True,
         rate_limit_config=rate_limit_config,
     )
     auth_token = await strategy.write_token(user)
-    headers = {"Authorization": f"Bearer {auth_token}"}
+    headers = {"Cookie": f"litestar_auth={auth_token}"}
 
     async with AsyncTestClient(app) as client:
         mismatch_response = await client.post(
@@ -1028,21 +791,15 @@ async def test_organization_invitation_accept_denies_revoked_and_expired_tokens(
         roles=["member"],
         expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_invitations=True,
     )
     auth_token = await strategy.write_token(user)
-    headers = {"Authorization": f"Bearer {auth_token}"}
+    headers = {"Cookie": f"litestar_auth={auth_token}"}
 
     async with AsyncTestClient(app) as client:
         revoked_response = await client.post(
@@ -1077,21 +834,15 @@ async def test_organization_invitation_decline_revokes_without_membership_creati
         invited_email=user.email,
         roles=["member"],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_invitations=True,
     )
     auth_token = await strategy.write_token(user)
-    headers = {"Authorization": f"Bearer {auth_token}"}
+    headers = {"Cookie": f"litestar_auth={auth_token}"}
 
     async with AsyncTestClient(app) as client:
         decline_response = await client.post(
@@ -1187,21 +938,15 @@ async def test_organization_admin_crud_and_membership_routes_use_store_operation
     admin = ExampleUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
     member_id = uuid4()
     store = SwitchOrganizationStore(organizations=[], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=admin,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
     )
     token = await strategy.write_token(admin)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     async with AsyncTestClient(app) as client:
         create_response = await client.post("/organizations", json={"slug": " Acme ", "name": "Acme"}, headers=headers)
@@ -1271,21 +1016,15 @@ async def test_organization_admin_create_update_payload_bounds_and_strict_fields
     """Organization admin create/update payloads reject oversized or undeclared fields."""
     admin = ExampleUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
     store = SwitchOrganizationStore(organizations=[], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=admin,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
     )
     token = await strategy.write_token(admin)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
     slug_at_limit = "s" * ORGANIZATION_ADMIN_TEXT_FIELD_MAX_LENGTH
     name_at_limit = "N" * ORGANIZATION_ADMIN_TEXT_FIELD_MAX_LENGTH
     slug_too_long = "s" * (ORGANIZATION_ADMIN_TEXT_FIELD_MAX_LENGTH + 1)
@@ -1348,22 +1087,16 @@ async def test_organization_admin_invitation_routes_use_operations_without_echoi
     organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
     store = SwitchOrganizationStore(organizations=[organization], memberships=[])
     OrganizationInvitationCaptureManager.invitation_events = []
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=admin,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
         user_manager_class=OrganizationInvitationCaptureManager,
     )
     token = await strategy.write_token(admin)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     async with AsyncTestClient(app) as client:
         invite_response = await client.post(
@@ -1403,17 +1136,11 @@ async def test_organization_admin_denies_non_superuser_by_default() -> None:
     """The bundled controller default guard is fail-closed."""
     user = ExampleUser(id=uuid4(), email="user@example.com", is_verified=True)
     store = SwitchOrganizationStore(organizations=[], memberships=[])
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=user,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
     )
     token = await strategy.write_token(user)
@@ -1422,12 +1149,12 @@ async def test_organization_admin_denies_non_superuser_by_default() -> None:
         response = await client.post(
             "/organizations",
             json={"slug": "acme", "name": "Acme"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
         invite_response = await client.post(
             f"/organizations/{uuid4()}/invitations",
             json={"invited_email": "invited@example.com", "roles": ["member"]},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
         )
 
     assert response.status_code == HTTP_FORBIDDEN
@@ -1443,21 +1170,15 @@ async def test_organization_admin_failures_are_non_enumerating_and_stable() -> N
         organizations=[organization],
         memberships=[SwitchOrganizationMembership(organization_id=organization.id, user_id=member_id, roles=["owner"])],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=admin,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
     )
     token = await strategy.write_token(admin)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     async with AsyncTestClient(app) as client:
         unknown_response = await client.get(f"/organizations/{uuid4()}", headers=headers)
@@ -1493,21 +1214,15 @@ async def test_organization_admin_validation_and_lookup_error_branches() -> None
             SwitchOrganizationMembership(organization_id=organization.id, user_id=admin.id, roles=["owner"]),
         ],
     )
-    strategy = JWTStrategy[ExampleUser, UUID](
-        secret=TOKEN_HASH_SECRET,
-        algorithm="HS256",
-        subject_decoder=UUID,
-        allow_inmemory_denylist=True,
-    )
-    app = _switch_organization_app(
+    strategy = _session_strategy()
+    app = _organization_app(
         user=admin,
         strategy=strategy,
         organization_store=store,
-        include_switch_organization=False,
         include_organization_admin=True,
     )
     token = await strategy.write_token(admin)
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Cookie": f"litestar_auth={token}"}
 
     async with AsyncTestClient(app) as client:
         invalid_organization_id_response = await client.get("/organizations/not-a-uuid", headers=headers)
@@ -1601,7 +1316,7 @@ def test_organization_admin_factory_validation_and_lazy_exports() -> None:
         ),
     )
 
-    assert default_guarded_controller.guards == [is_superuser, requires_password_session]
+    assert default_guarded_controller.guards == [is_superuser, is_human_authenticated]
     assert custom_guarded_controller.guards == [custom_admin_guard]
     assert controller.path == "/tenant-admin"
     assert invitation_controller.path == "/auth"
@@ -1638,7 +1353,15 @@ def test_register_middleware_passes_enabled_organization_resolution_settings() -
         store_factory=store_factory,
         tenant_resolver=tenant_resolver,
     )
-    plugin = LitestarAuth(_minimal_config(organization_config=organization_config))
+    config = _minimal_config(organization_config=organization_config)
+    config.backends = [
+        AuthenticationBackend[ExampleUser, UUID](
+            name="redis-session",
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=_session_strategy(),
+        ),
+    ]
+    plugin = LitestarAuth(config)
     app_config = AppConfig()
 
     plugin._register_middleware(app_config)
@@ -1658,7 +1381,15 @@ def test_register_middleware_omits_disabled_organization_resolution_settings() -
         store_factory=store_factory,
         tenant_resolver=tenant_resolver,
     )
-    plugin = LitestarAuth(_minimal_config(organization_config=organization_config))
+    config = _minimal_config(organization_config=organization_config)
+    config.backends = [
+        AuthenticationBackend[ExampleUser, UUID](
+            name="redis-session",
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=_session_strategy(),
+        ),
+    ]
+    plugin = LitestarAuth(config)
     app_config = AppConfig()
 
     plugin._register_middleware(app_config)

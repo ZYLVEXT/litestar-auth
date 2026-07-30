@@ -28,7 +28,7 @@ from litestar_auth.controllers.totp_session_handlers import (
     _totp_handle_verify,
 )
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.payloads import (
     TotpConfirmEnableRequest,
     TotpConfirmEnableResponse,
@@ -76,7 +76,7 @@ def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/enable", guards=[is_authenticated, requires_password_session], security=security)
+    @post("/enable", guards=[is_authenticated, is_human_authenticated], security=security)
     async def enable(
         self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
@@ -103,7 +103,7 @@ def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/enable/confirm", guards=[is_authenticated, requires_password_session], security=security)
+    @post("/enable/confirm", guards=[is_authenticated, is_human_authenticated], security=security)
     async def confirm_enable(
         self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
@@ -159,7 +159,7 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
 
     @post(
         "/disable",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         security=security,
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
@@ -191,7 +191,7 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
 
     @post(
         "/recovery-codes/regenerate",
-        guards=[is_authenticated, requires_password_session],
+        guards=[is_authenticated, is_human_authenticated],
         security=security,
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )

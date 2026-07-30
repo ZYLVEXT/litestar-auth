@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fakeredis import FakeAsyncRedis
 from litestar.config.app import AppConfig
 from litestar.config.csrf import CSRFConfig
 from litestar.exceptions import ClientException
@@ -38,12 +39,11 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
 )
 from litestar_auth._plugin.exception_handlers import client_exception_handler
-from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
+from litestar_auth.authentication import LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
-from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
@@ -58,20 +58,18 @@ from litestar_auth.ratelimit import (
     RedisClientProtocol,
     RedisRateLimiter,
 )
-from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore, SecurityWarning
+from litestar_auth.totp import SecurityWarning
 from tests._helpers import cast_fakeredis
 from tests.integration.test_orchestrator import (
     DummySession,
     DummySessionMaker,
     ExampleUser,
-    InMemoryRefreshTokenStrategy,
-    InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
+    build_test_redis_strategy,
 )
 
 FernetKeyringConfig = plugin_module.FernetKeyringConfig
-ApiKeyConfig = plugin_module.ApiKeyConfig
 LitestarAuth = plugin_module.LitestarAuth
 LitestarAuthConfig = plugin_module.LitestarAuthConfig
 OAuthConfig = plugin_module.OAuthConfig
@@ -90,7 +88,6 @@ TOKEN_HASH_SECRET = "0123456789abcdef" * 4
 VERIFICATION_SECRET = "89abcdef01234567" * 4
 RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
 ORGANIZATION_INVITATION_SECRET = "c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2
-API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
 TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 CSRF_SECRET = "456789abcdef0123" * 4
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
@@ -135,17 +132,19 @@ def _current_authentication_backend_type() -> type[Any]:
 
 
 def _current_inmemory_jwt_denylist_store() -> object:
-    """Return a JWT denylist store instance from the current strategy module."""
-    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
-    store_type = cast("type[Any]", jwt_module.InMemoryJWTDenylistStore)
+    """Return a pending-token replay store from the current internal module."""
+    replay_module = importlib.import_module("litestar_auth.authentication.strategy._jwt_denylist")
+    store_type = cast("type[Any]", replay_module.InMemoryJWTDenylistStore)
     return store_type()
 
 
-def _current_jwt_strategy() -> object:
-    """Return a JWT strategy instance from the current strategy module."""
-    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
-    strategy_type = cast("type[Any]", jwt_module.JWTStrategy)
-    return strategy_type(secret=TOKEN_HASH_SECRET, algorithm="HS256", allow_inmemory_denylist=True)
+def _current_redis_strategy() -> RedisTokenStrategy[ExampleUser, UUID]:
+    """Return a supported server-side session strategy."""
+    return RedisTokenStrategy(
+        redis=cast("Any", FakeAsyncRedis(decode_responses=True)),
+        token_hash_secret=TOKEN_HASH_SECRET,
+        subject_decoder=UUID,
+    )
 
 
 def _response_error_code(payload: dict[str, Any]) -> str:
@@ -229,8 +228,8 @@ def _minimal_config(  # ruff: ignore[too-many-arguments]
     configured_backends = backends or [
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
-            transport=BearerTransport(),
-            strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-orchestrator")),
+            transport=CookieTransport(allow_insecure_cookie_auth=True),
+            strategy=_current_redis_strategy(),
         ),
     ]
     return LitestarAuthConfig[ExampleUser, UUID](
@@ -432,6 +431,8 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
                 "backends",
                 "user_model",
                 "resolved_permissions",
+                "current_principal",
+                "authentication_context",
                 "current_organization",
                 "organization_store",
                 "db_session",
@@ -567,7 +568,7 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="cookie",
         transport=CookieTransport(cookie_name="authcookie", path="/auth", secure=False, samesite="strict"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-plugin")),
+        strategy=build_test_redis_strategy(key_prefix="cookie-plugin"),
     )
     config = _minimal_config(backends=[backend], include_users=True)
     config.csrf_secret = CSRF_SECRET
@@ -598,8 +599,8 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     assert isinstance(middleware, DefineMiddleware)
     assert getattr(middleware.middleware, "__name__", "") == LitestarAuthMiddleware.__name__
     middleware_config = middleware.kwargs["config"]
-    assert middleware_config.authenticator_factory == plugin._build_authenticator
-    assert middleware_config.auth_cookie_names == frozenset({b"authcookie", b"authcookie_refresh"})
+    assert middleware_config.provider_bindings_factory == plugin._build_provider_bindings
+    assert middleware_config.default_policy.providers == ("cookie",)
     assert middleware_config.superuser_role_name == "superuser"
     assert middleware_config.permission_resolver.resolve(ExampleUser(id=uuid4(), roles=[])) == frozenset()
 
@@ -624,6 +625,7 @@ def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
+        unsafe_testing=True,
     )
     plugin = LitestarAuth(config)
     bootstrap_calls: list[object] = []
@@ -697,32 +699,17 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
     )
     custom_backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", custom_strategy),
     )
     other_backend = AuthenticationBackend[ExampleUser, UUID](
         name="other",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="other")),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=build_test_redis_strategy(key_prefix="other"),
     )
     config = _minimal_config(backends=[custom_backend, other_backend])
 
     assert database_token_module._uses_bundled_database_token_models(config) is False
-
-
-def test_on_app_init_warns_for_explicit_inmemory_jwt_strategy() -> None:
-    """Lifecycle startup surfaces the JWT durability warning after explicit opt-in."""
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="jwt-backend",
-        transport=CookieTransport(),
-        strategy=cast("Any", _current_jwt_strategy()),
-    )
-    config = _minimal_config(backends=[backend])
-    config.csrf_secret = CSRF_SECRET
-    plugin = LitestarAuth(config)
-
-    with pytest.warns(SecurityWarning, match="process-local in-memory denylist"):
-        plugin.on_app_init(AppConfig())
 
 
 def test_on_app_init_warns_security_warning_for_inmemory_rate_limiter_in_production() -> None:
@@ -756,42 +743,6 @@ def test_on_app_init_rejects_multiworker_inmemory_rate_limiter() -> None:
 
     with pytest.raises(ConfigurationError, match="login"):
         plugin.on_app_init(AppConfig())
-
-
-def test_on_app_init_rejects_enable_refresh_with_non_refreshable_strategy() -> None:
-    """Refresh-enabled app init fails closed when any backend cannot rotate refresh tokens."""
-    config = _minimal_config()
-    config.enable_refresh = True
-    plugin = LitestarAuth(config)
-
-    with pytest.raises(ConfigurationError) as exc_info:
-        plugin.on_app_init(AppConfig())
-
-    message = str(exc_info.value)
-    assert "primary" in message
-    assert "InMemoryTokenStrategy" in message
-    assert "does not implement RefreshableStrategy" in message
-
-
-def test_on_app_init_allows_enable_refresh_with_api_key_backend() -> None:
-    """API-key startup backends do not participate in refresh-token capability checks."""
-    refreshable_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="refreshable",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
-    )
-    config = _minimal_config(backends=[refreshable_backend])
-    config.enable_refresh = True
-    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
-    config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret=VERIFICATION_SECRET,
-        reset_password_token_secret=RESET_PASSWORD_SECRET,
-        api_key_hash_secret=API_KEY_HASH_SECRET,
-        id_parser=UUID,
-    )
-    plugin = LitestarAuth(config)
-
-    plugin.on_app_init(AppConfig())
 
 
 def test_on_app_init_multiworker_rate_limit_error_names_unsafe_endpoint_slots() -> None:
@@ -901,47 +852,6 @@ def test_on_app_init_does_not_warn_for_inmemory_rate_limiter_in_testing(
         plugin.on_app_init(AppConfig())
 
     assert not any(issubclass(record.category, SecurityWarning) for record in records)
-
-
-def test_on_app_init_rejects_mismatched_cookie_transport_settings() -> None:
-    """Lifecycle middleware registration still rejects incompatible cookie transport shapes."""
-    first_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="cookie-primary",
-        transport=CookieTransport(path="/auth"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-primary")),
-    )
-    second_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="cookie-secondary",
-        transport=CookieTransport(path="/other-auth"),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-secondary")),
-    )
-    config = _minimal_config(backends=[first_backend, second_backend])
-    config.csrf_secret = CSRF_SECRET
-    plugin = LitestarAuth(config)
-
-    with pytest.raises(ValueError, match="must share path, domain, secure, and samesite"):
-        plugin.on_app_init(AppConfig())
-
-
-def test_on_app_init_accepts_multiple_matching_cookie_transports() -> None:
-    """Matching cookie transports share one orchestrator-managed CSRF config."""
-    backends = [
-        AuthenticationBackend[ExampleUser, UUID](
-            name=f"cookie-{index}",
-            transport=CookieTransport(path="/auth", secure=False, samesite="strict"),
-            strategy=cast("Any", InMemoryTokenStrategy(token_prefix=f"cookie-{index}")),
-        )
-        for index in range(3)
-    ]
-    config = _minimal_config(backends=backends)
-    config.csrf_secret = CSRF_SECRET
-    plugin = LitestarAuth(config)
-
-    result = plugin.on_app_init(AppConfig())
-
-    assert result.csrf_config is not None
-    assert result.csrf_config.cookie_path == "/auth"
-    assert result.csrf_config.cookie_samesite == "strict"
 
 
 def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -> None:
@@ -1098,7 +1008,7 @@ def test_warn_insecure_plugin_startup_defaults_ignores_reload_stale_inmemory_tot
     stale_pending_jti_store = type(
         "InMemoryJWTDenylistStore",
         (),
-        {"__module__": "litestar_auth.authentication.strategy.jwt"},
+        {"__module__": "litestar_auth.authentication.strategy._jwt_denylist"},
     )()
     config = _minimal_config()
     config.include_verify = False
@@ -1127,61 +1037,6 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-    )
-    plugin = LitestarAuth(config)
-
-    with warnings.catch_warnings(record=True) as records:
-        warnings.simplefilter("always")
-        result = plugin.on_app_init(AppConfig())
-
-    assert result is not None
-    assert not any(issubclass(record.category, SecurityWarning) for record in records)
-
-
-def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Explicit unsafe testing keeps the documented single-process recipe warning-free."""
-    config = _minimal_config(
-        backends=[
-            AuthenticationBackend[ExampleUser, UUID](
-                name="cookie",
-                transport=CookieTransport(secure=False),
-                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-testing")),
-            ),
-            AuthenticationBackend[ExampleUser, UUID](
-                name="jwt",
-                transport=BearerTransport(),
-                strategy=cast("Any", _current_jwt_strategy()),
-            ),
-        ],
-    )
-    config.unsafe_testing = True
-    config.csrf_secret = CSRF_SECRET
-    config.oauth_config = OAuthConfig(
-        oauth_providers=[_oauth_provider(name="github", client=object())],
-        oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-    )
-    config.rate_limit_config = AuthRateLimitConfig(
-        login=EndpointRateLimit(
-            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
-            scope="ip",
-            namespace="login",
-        ),
-    )
-    config.totp_config = TotpConfig(
-        totp_pending_secret=TOTP_PENDING_SECRET,
-        totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
-        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
-        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-    )
-    config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret=VERIFICATION_SECRET,
-        reset_password_token_secret=RESET_PASSWORD_SECRET,
-        totp_secret_key=Fernet.generate_key().decode(),
-        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
-        id_parser=UUID,
     )
     plugin = LitestarAuth(config)
 
@@ -1406,23 +1261,6 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     assert captured["backends"] == (f"backend-for-{id(session)}",)
 
 
-def test_build_user_manager_attaches_session_bound_backends() -> None:
-    """Built managers receive request-local backends bound to the active session."""
-    config = _minimal_config(
-        backends=[
-            cast("AuthenticationBackend[ExampleUser, UUID]", _FakeSessionBoundBackend(strategy=object())),
-            cast("AuthenticationBackend[ExampleUser, UUID]", _FakeSessionBoundBackend(strategy=object())),
-        ],
-    )
-    plugin = LitestarAuth(config)
-
-    session = object()
-    manager = plugin._build_user_manager(cast("Any", session))
-
-    assert len(manager.backends) == EXPECTED_BOUND_BACKEND_COUNT
-    assert all(getattr(backend, "bound_session", None) is session for backend in manager.backends)
-
-
 def test_build_user_manager_passes_login_identifier_from_config() -> None:
     """Session-bound manager construction forwards login_identifier from plugin config."""
     plugin = LitestarAuth(_minimal_config(login_identifier="username"))
@@ -1439,65 +1277,6 @@ def test_build_user_manager_passes_superuser_role_name_from_config() -> None:
     manager = plugin._build_user_manager(cast("Any", object()))
 
     assert manager.superuser_role_name == "admin"
-
-
-def test_build_user_manager_passes_typed_security_to_security_only_manager() -> None:
-    """Plugin-owned construction forwards the typed security bundle end-to-end when supported."""
-
-    class _SecurityOnlyManager(PluginUserManager):
-        def __init__(  # ruff: ignore[too-many-arguments]
-            self,
-            user_db: object,
-            *,
-            password_helper: PasswordHelper | None = None,
-            security: UserManagerSecurity[UUID],
-            password_validator: object | None = None,
-            backends: tuple[object, ...] = (),
-            login_identifier: Literal["email", "username"] = "email",
-            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-            unsafe_testing: bool = False,
-        ) -> None:
-            self.received_security = security
-            super().__init__(
-                cast("Any", user_db),
-                password_helper=password_helper,
-                security=security,
-                password_validator=cast("Any", password_validator),
-                backends=backends,
-                login_identifier=login_identifier,
-                superuser_role_name=superuser_role_name,
-                unsafe_testing=unsafe_testing,
-            )
-
-    backend = _FakeSessionBoundBackend(strategy=object())
-    config = LitestarAuthConfig[ExampleUser, UUID](
-        backends=[cast("AuthenticationBackend[ExampleUser, UUID]", backend)],
-        session_maker=cast("Any", DummySessionMaker()),
-        user_model=ExampleUser,
-        user_manager_class=_SecurityOnlyManager,
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-            password_helper=PasswordHelper(),
-        ),
-        id_parser=UUID,
-        login_identifier="username",
-    )
-    plugin = LitestarAuth(config)
-    session = object()
-
-    manager = plugin._build_user_manager(cast("Any", session))
-    typed_manager = cast("Any", manager)
-
-    assert typed_manager.received_security.verification_token_secret == VERIFICATION_SECRET
-    assert typed_manager.received_security.reset_password_token_secret == RESET_PASSWORD_SECRET
-    assert typed_manager.received_security.id_parser is UUID
-    assert manager.id_parser is UUID
-    assert manager.login_identifier == "username"
-    assert len(manager.backends) == 1
-    assert manager.backends[0] is cast("Any", backend)
-    assert backend.bound_session is session
 
 
 def test_build_user_manager_uses_explicit_password_validator_factory() -> None:
@@ -1573,36 +1352,6 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
         manager.password_validator("short")
 
 
-@pytest.mark.asyncio
-async def test_session_bound_user_manager_update_triggers_strategy_invalidation_on_email_change() -> None:
-    """Session-bound managers revoke backend sessions after sensitive updates."""
-    user = ExampleUser(
-        id=uuid4(),
-        email="user@example.com",
-        hashed_password=PasswordHelper().hash("correct-password"),
-    )
-    user_db = InMemoryUserDatabase([user])
-    invalidate_mock = AsyncMock()
-    backend = _FakeSessionBoundBackend(strategy=_InvalidationStrategy(invalidate_all_tokens=invalidate_mock))
-    config = LitestarAuthConfig[ExampleUser, UUID](
-        backends=[cast("AuthenticationBackend[ExampleUser, UUID]", backend)],
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
-        user_db_factory=lambda _session: user_db,
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=VERIFICATION_SECRET,
-            reset_password_token_secret=RESET_PASSWORD_SECRET,
-        ),
-    )
-    plugin = LitestarAuth(config)
-
-    manager = plugin._build_user_manager(cast("Any", DummySession()))
-    await manager.update({"email": "updated@example.com"}, user)
-
-    invalidate_mock.assert_awaited_once()
-
-
 def test_session_bound_user_manager_uses_explicit_account_state_validator_contract() -> None:
     """Session-bound managers preserve the configured account-state validator contract."""
     calls: list[tuple[ExampleUser, bool]] = []
@@ -1624,75 +1373,6 @@ def test_session_bound_user_manager_uses_explicit_account_state_validator_contra
     assert calls == [(user, True)]
 
 
-def test_session_bound_backends_rebinds_each_backend_to_current_session() -> None:
-    """Configured backends are rebound against the request-local session."""
-
-    @dataclass(slots=True)
-    class _BackendRecorder:
-        name: str
-        seen_sessions: list[object]
-        transport: object | None = None
-        strategy: object | None = None
-
-        def with_session(self, session: object) -> str:
-            self.seen_sessions.append(session)
-            return f"{self.name}-{id(session)}"
-
-    first_backend = _BackendRecorder(name="first", seen_sessions=[])
-    second_backend = _BackendRecorder(name="second", seen_sessions=[])
-    plugin = LitestarAuth(_minimal_config(backends=cast("Any", [first_backend, second_backend])))
-    session = object()
-
-    rebound_backends = plugin._session_bound_backends(cast("Any", session))
-
-    assert rebound_backends == [f"first-{id(session)}", f"second-{id(session)}"]
-    assert first_backend.seen_sessions == [session]
-    assert second_backend.seen_sessions == [session]
-
-
-def test_session_bound_backends_rebinds_database_token_backends_in_order_and_preserves_names() -> None:
-    """Canonical DB bearer backends keep public names/order while rebinding strategies per request."""
-    database_token_strategy_type = _current_database_token_strategy_type()
-    authentication_backend_type = _current_authentication_backend_type()
-    first_backend = authentication_backend_type(
-        name="primary",
-        transport=BearerTransport(),
-        strategy=database_token_strategy_type(
-            session=cast("Any", object()),
-            token_hash_secret=TOKEN_HASH_SECRET,
-            max_age=timedelta(minutes=10),
-        ),
-    )
-    second_strategy = database_token_strategy_type(
-        session=cast("Any", object()),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        refresh_max_age=timedelta(days=14),
-    )
-    second_backend = authentication_backend_type(
-        name="secondary",
-        transport=BearerTransport(),
-        strategy=second_strategy,
-    )
-    config = _minimal_config(backends=[first_backend, second_backend])
-    plugin = LitestarAuth(config)
-    active_session = object()
-
-    rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
-
-    assert [backend.name for backend in rebound_backends] == ["primary", "secondary"]
-    assert isinstance(rebound_backends[0], authentication_backend_type)
-    assert isinstance(rebound_backends[1], authentication_backend_type)
-    assert rebound_backends[0] is not first_backend
-    assert rebound_backends[1] is not second_backend
-    assert rebound_backends[0].transport is first_backend.transport
-    assert rebound_backends[1].transport is second_backend.transport
-    assert isinstance(rebound_backends[0].strategy, database_token_strategy_type)
-    assert isinstance(rebound_backends[1].strategy, database_token_strategy_type)
-    assert rebound_backends[0].strategy.session is active_session
-    assert rebound_backends[1].strategy.session is active_session
-    assert rebound_backends[1].strategy.refresh_max_age == second_strategy.refresh_max_age
-
-
 def test_session_bound_backends_realizes_database_token_preset_from_request_session() -> None:
     """The DB bearer preset resolves request-scoped backends without a startup session template."""
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -1710,6 +1390,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
+        unsafe_testing=True,
     )
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
@@ -1733,49 +1414,6 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     assert rebound_strategy.refresh_max_age == timedelta(days=14)
 
 
-def test_build_authenticator_uses_session_bound_backends_and_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Authenticator construction reuses the session-bound backends and manager instance."""
-    plugin = LitestarAuth(_minimal_config())
-    session = object()
-    expected_backends = ["backend"]
-    manager = object()
-
-    monkeypatch.setattr(
-        plugin,
-        "_session_bound_backends",
-        lambda configured_session: expected_backends if configured_session is session else [],
-    )
-    monkeypatch.setattr(
-        plugin,
-        "_build_user_manager",
-        lambda configured_session, *, backends=None: (
-            manager if configured_session is session and backends == expected_backends else None
-        ),
-    )
-
-    authenticator = plugin._build_authenticator(cast("Any", session))
-
-    assert isinstance(authenticator, Authenticator)
-    assert authenticator.backends is expected_backends
-    assert authenticator.user_manager is manager
-
-
-def test_register_middleware_without_cookie_transports_skips_csrf_registration() -> None:
-    """Bearer-only setups still register middleware without creating CSRF config."""
-    plugin = LitestarAuth(_minimal_config())
-    app_config = AppConfig()
-
-    plugin._register_middleware(app_config)
-
-    assert app_config.csrf_config is None
-    middleware = app_config.middleware[0]
-    assert isinstance(middleware, DefineMiddleware)
-    middleware_config = middleware.kwargs["config"]
-    assert middleware_config.auth_cookie_names == frozenset()
-    assert middleware_config.api_key_backend_present is False
-    assert middleware_config.superuser_role_name == "superuser"
-
-
 def test_register_middleware_passes_configured_permission_resolver() -> None:
     """Plugin middleware config carries the config-resolved permission resolver."""
     plugin = LitestarAuth(_minimal_config(role_permissions={"admin": ("posts:read",)}))
@@ -1787,24 +1425,6 @@ def test_register_middleware_passes_configured_permission_resolver() -> None:
     middleware_config = middleware.kwargs["config"]
     resolved_permissions = middleware_config.permission_resolver.resolve(ExampleUser(id=uuid4(), roles=["admin"]))
     assert permissions_grant(resolved_permissions, "posts:read")
-
-
-def test_register_middleware_detects_api_key_transport_for_signed_body_buffering() -> None:
-    """API-key backends opt signed request buffering into the auth middleware."""
-    api_key_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="api_key",
-        transport=ApiKeyTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-orchestrator-api-key")),
-    )
-    plugin = LitestarAuth(_minimal_config(backends=[api_key_backend]))
-    app_config = AppConfig()
-
-    plugin._register_middleware(app_config)
-
-    middleware = app_config.middleware[0]
-    assert isinstance(middleware, DefineMiddleware)
-    middleware_config = middleware.kwargs["config"]
-    assert middleware_config.api_key_backend_present is True
 
 
 def test_resolve_account_state_validator_delegates_to_shared_validation_helper(
@@ -1911,6 +1531,7 @@ def test_provider_helpers_return_startup_templates_for_database_token_preset() -
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
+        unsafe_testing=True,
     )
     plugin = LitestarAuth(config)
     startup_backend_template_type = _current_startup_backend_template_type()
@@ -1936,56 +1557,6 @@ async def test_provide_user_manager_respects_custom_db_session_key() -> None:
         assert manager is not None
     finally:
         await gen.aclose()
-
-
-def test_provide_request_backends_respects_custom_db_session_key() -> None:
-    """Backends DI resolves request-scoped backends through the configured session key."""
-
-    @dataclass(slots=True)
-    class _BackendRecorder:
-        seen_sessions: list[object]
-        name: str = "recorder"
-        transport: object | None = None
-        strategy: object | None = None
-
-        def with_session(self, session: object) -> str:
-            self.seen_sessions.append(session)
-            return f"bound-{id(session)}"
-
-    recorder = _BackendRecorder(seen_sessions=[])
-    config = _minimal_config(backends=cast("Any", [recorder]))
-    config.db_session_dependency_key = "custom_db"
-    plugin = LitestarAuth(config)
-    session = object()
-
-    rebound_backends = cast("Any", plugin._provide_request_backends)(custom_db=session)
-
-    assert rebound_backends == [f"bound-{id(session)}"]
-    assert recorder.seen_sessions == [session]
-
-
-def test_provide_request_backends_accepts_positional_session_argument() -> None:
-    """Backends DI also supports the direct positional session-provider path."""
-
-    @dataclass(slots=True)
-    class _BackendRecorder:
-        seen_sessions: list[object]
-        name: str = "recorder"
-        transport: object | None = None
-        strategy: object | None = None
-
-        def with_session(self, session: object) -> str:
-            self.seen_sessions.append(session)
-            return f"bound-{id(session)}"
-
-    recorder = _BackendRecorder(seen_sessions=[])
-    plugin = LitestarAuth(_minimal_config(backends=cast("Any", [recorder])))
-    session = object()
-
-    rebound_backends = cast("Any", plugin._provide_request_backends)(session)
-
-    assert rebound_backends == [f"bound-{id(session)}"]
-    assert recorder.seen_sessions == [session]
 
 
 def test_provide_request_backends_rejects_positional_and_keyword_session() -> None:
@@ -2025,6 +1596,7 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
+        unsafe_testing=True,
     )
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
@@ -2071,39 +1643,6 @@ async def test_provide_oauth_associate_user_manager_yields_manager() -> None:
         assert manager is not None
     finally:
         await gen.aclose()
-
-
-def test_totp_backend_returns_configured_named_backend() -> None:
-    """The plugin exposes the same TOTP backend selected by the configured helper rules."""
-    primary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="primary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="primary")),
-    )
-    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="secondary",
-        transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="secondary")),
-    )
-    plugin = LitestarAuth(
-        _minimal_config(
-            backends=[primary_backend, secondary_backend],
-        ),
-    )
-    plugin.config.totp_config = TotpConfig(
-        totp_pending_secret=TOTP_PENDING_SECRET,
-        totp_backend_name="secondary",
-        totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
-        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-    )
-
-    startup_backend = plugin._totp_backend()
-    startup_backend_template_type = _current_startup_backend_template_type()
-
-    assert isinstance(startup_backend, startup_backend_template_type)
-    assert startup_backend.name == secondary_backend.name
-    assert startup_backend.transport is secondary_backend.transport
-    assert startup_backend.strategy is secondary_backend.strategy
 
 
 def test_public_aliases_reexport_nested_config_types() -> None:

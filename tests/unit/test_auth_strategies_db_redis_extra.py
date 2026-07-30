@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import Invalid
 
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -142,10 +143,10 @@ async def test_database_token_strategy_execute_delete_defaults_missing_rowcount_
     assert await strategy._execute_delete(cast("Any", object())) == 0
 
 
-async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
+async def test_redis_token_strategy_rejects_invalidated_token_without_index(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """RedisTokenStrategy.read_token(None) and missing-index invalidation should cover remaining branches."""
+    """Typed Redis authentication rejects an invalidated token without an index."""
     strategy = RedisTokenStrategy(
         config=RedisTokenStrategyConfig(
             redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
@@ -153,9 +154,6 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
         ),
     )
     user_manager = _DummyUserManager()
-
-    # read_token(None, ...) early-return branch.
-    assert await strategy.read_token(None, user_manager) is None
 
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
@@ -165,7 +163,7 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
     await strategy.invalidate_all_tokens(user)
 
     assert await async_fakeredis.get(strategy._key(token)) == f"v1:0:{user.id}".encode()
-    assert await strategy.read_token(token, user_manager) is None
+    assert isinstance(await strategy.authenticate_token(token, user_manager), Invalid)
 
 
 async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present(

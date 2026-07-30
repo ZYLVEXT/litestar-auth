@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import RouteProviderPolicy
 from litestar import Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
@@ -17,11 +18,10 @@ from litestar.testing import AsyncTestClient
 import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -29,7 +29,11 @@ from litestar_auth.totp import (
     InMemoryTotpEnrollmentStore,
     InMemoryUsedTotpCodeStore,
 )
-from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests._helpers import (
+    auth_middleware_get_request_session,
+    human_session_bindings_factory,
+    litestar_app_with_user_manager,
+)
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 
 if TYPE_CHECKING:
@@ -154,7 +158,7 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
     )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
     auth_controller = create_auth_controller(
@@ -175,7 +179,13 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -293,9 +303,9 @@ async def test_totp_controllers_use_decrypted_secret(monkeypatch: pytest.MonkeyP
             "/auth/login",
             json={"identifier": "user@example.com", "password": "correct-password"},
         )
-        access_token = login_response.json()["access_token"]
+        access_token = login_response.cookies.get("litestar_auth")
 
-        enable_response = await client.post("/auth/2fa/enable", headers={"Authorization": f"Bearer {access_token}"})
+        enable_response = await client.post("/auth/2fa/enable", headers={"Cookie": f"litestar_auth={access_token}"})
         assert enable_response.status_code == HTTP_CREATED
         enable_body = enable_response.json()
         secret = enable_body["secret"]
@@ -309,7 +319,7 @@ async def test_totp_controllers_use_decrypted_secret(monkeypatch: pytest.MonkeyP
         confirm_response = await client.post(
             "/auth/2fa/enable/confirm",
             json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Cookie": f"litestar_auth={access_token}"},
         )
         assert confirm_response.status_code == HTTP_CREATED
 
@@ -330,4 +340,4 @@ async def test_totp_controllers_use_decrypted_secret(monkeypatch: pytest.MonkeyP
             json={"pending_token": pending_token, "code": _generate_totp_code(secret, _current_counter())},
         )
         assert verify_response.status_code == HTTP_CREATED
-        assert "access_token" in verify_response.json()
+        assert verify_response.cookies.get("litestar_auth") is not None

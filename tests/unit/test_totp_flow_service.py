@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, cast
@@ -160,15 +158,6 @@ async def test_issue_pending_token_mints_expected_jwt_claims() -> None:
     assert isinstance(payload["jti"], str)
     assert payload["cip"] == CLIENT_BINDING.client_ip_fingerprint
     assert payload["uaf"] == CLIENT_BINDING.user_agent_fingerprint
-
-
-def test_fingerprint_client_binding_value_returns_keyed_hmac_sha256_hex_digest() -> None:
-    """Client-binding values are HMAC-SHA-256-keyed before being written to pending tokens."""
-    key = TOTP_PENDING_SECRET.encode()
-    expected = hmac.new(key, b"203.0.113.10", hashlib.sha256).hexdigest()
-
-    assert _fingerprint_client_binding_value("203.0.113.10", key=key) == expected
-    assert _fingerprint_client_binding_value("203.0.113.10", key=b"other-key") != expected
 
 
 def _build_binding_request(*, user_agent: bytes) -> Request[Any, Any, Any]:

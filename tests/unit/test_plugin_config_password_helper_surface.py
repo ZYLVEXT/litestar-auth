@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuthConfig
@@ -44,7 +44,7 @@ def _make_config(
     )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=_as_any(InMemoryTokenStrategy(token_prefix="plugin-config-password-helper")),
     )
     return LitestarAuthConfig[ExampleUser, UUID](

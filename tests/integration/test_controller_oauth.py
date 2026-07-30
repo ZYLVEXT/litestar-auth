@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import FailureCode, Invalid, RouteProviderPolicy
 from litestar import Litestar
 from litestar.config.csrf import CSRFConfig
 from litestar.di import Provide
@@ -17,10 +18,10 @@ from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.controllers._oauth_helpers as oauth_helpers_module
-from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.base import HumanSessionAuthenticated
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import (
     create_oauth_associate_controller,
     create_oauth_controller,
@@ -41,7 +42,7 @@ from litestar_auth.oauth import create_provider_oauth_controller
 from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie, _OAuthFlowCookieCipher
 from litestar_auth.oauth._pkce import _build_pkce_code_challenge
 from litestar_auth.password import PasswordHelper
-from tests._helpers import ExampleUser, auth_middleware_get_request_session
+from tests._helpers import ExampleUser, auth_middleware_get_request_session, human_session_bindings_factory
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -203,20 +204,19 @@ class InMemoryTokenStrategy:
         self.tokens: dict[str, UUID] = {}
         self.counter = 0
 
-    async def read_token(
+    async def authenticate_token(
         self,
-        token: str | None,
+        token: str,
         user_manager: BaseUserManager[ExampleUser, UUID],
-    ) -> ExampleUser | None:
-        """Resolve a stored token back to a user.
+    ) -> HumanSessionAuthenticated[ExampleUser] | Invalid:
+        """Resolve a typed in-memory session attempt.
 
         Returns:
-            Matching user when the token exists, otherwise `None`.
+            Authenticated user or a typed invalid decision.
         """
-        if token is None:
-            return None
         user_id = self.tokens.get(token)
-        return await user_manager.get(user_id) if user_id is not None else None
+        user = await user_manager.get(user_id) if user_id is not None else None
+        return HumanSessionAuthenticated(user) if user is not None else Invalid(FailureCode.INVALID)
 
     async def write_token(self, user: ExampleUser) -> str:
         """Persist and return a deterministic local token.
@@ -468,7 +468,7 @@ def build_app(  # ruff: ignore[too-many-arguments]
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     client = oauth_client or FakeOAuthClient()
@@ -519,7 +519,7 @@ def build_app_with_associate(
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     client = oauth_client or FakeOAuthClient()
@@ -545,7 +545,13 @@ def build_app_with_associate(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", _DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = Litestar(
         route_handlers=[login_controller, associate_controller],
@@ -572,7 +578,7 @@ def build_app_with_dependency_key_associate(
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     client = oauth_client or FakeOAuthClient()
@@ -588,7 +594,13 @@ def build_app_with_dependency_key_associate(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", _DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = Litestar(
         route_handlers=[associate_controller],
@@ -730,7 +742,7 @@ async def test_callback_does_not_auto_verify_new_user_by_default(
     )
 
     assert callback_response.status_code == HTTP_OK
-    assert callback_response.json() == {"access_token": "oauth-token-1", "token_type": "bearer"}
+    assert callback_response.cookies.get("litestar_auth") == "oauth-token-1"
     created_user = await user_db.get_by_email("oauth@example.com")
     assert created_user is not None
     assert created_user.is_verified is False
@@ -802,7 +814,7 @@ async def test_callback_links_existing_user_by_email_without_creating_duplicate(
         )
 
     assert callback_response.status_code == HTTP_OK
-    assert callback_response.json() == {"access_token": "oauth-token-1", "token_type": "bearer"}
+    assert callback_response.cookies.get("litestar_auth") == "oauth-token-1"
     assert user_manager.created_users == []
     assert user_manager.logged_in_users == [existing_user]
     assert len(user_db.users_by_id) == 1
@@ -992,7 +1004,7 @@ async def test_callback_returns_existing_user_when_provider_identity_already_lin
         )
 
     assert callback_response.status_code == HTTP_OK
-    token = callback_response.json()["access_token"]
+    token = callback_response.cookies.get("litestar_auth")
     assert strategy.tokens.get(token) == user_a.id
     oauth_account = user_db.oauth_accounts.get(("github", "shared-provider-id"))
     assert oauth_account is not None
@@ -1426,9 +1438,13 @@ async def test_oauth_state_cookie_secure_flag_can_be_disabled() -> None:
         )
 
     authorize_set_cookie = authorize_response.headers["set-cookie"].lower()
-    callback_set_cookie = callback_response.headers["set-cookie"].lower()
+    callback_state_cookie = next(
+        value.lower()
+        for value in callback_response.headers.get_list("set-cookie")
+        if value.startswith('__oauth_state_github=""')
+    )
     assert "secure" not in authorize_set_cookie
-    assert "secure" not in callback_set_cookie
+    assert "secure" not in callback_state_cookie
 
 
 async def test_provider_helper_forwards_cookie_secure_flag() -> None:
@@ -1487,7 +1503,7 @@ def test_manual_oauth_factories_reject_insecure_redirect_origins(
     user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
 
@@ -1540,7 +1556,7 @@ def test_manual_oauth_factories_forward_strict_redirect_dns_flag(
     user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
 
@@ -1598,7 +1614,7 @@ def test_manual_oauth_factories_opt_out_restores_redirect_dns_fail_open(
     user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
 
@@ -1667,7 +1683,7 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
     strategy2 = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy2),
     )
     controller = create_provider_oauth_controller(
@@ -1691,7 +1707,7 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
         )
 
     assert callback_resp.status_code == HTTP_OK
-    assert callback_resp.json() == {"access_token": "oauth-token-1", "token_type": "bearer"}
+    assert callback_resp.cookies.get("litestar_auth") == "oauth-token-1"
     assert factory_calls == [1]
     created = await user_db2.get_by_email("factory@example.com")
     assert created is not None
@@ -1714,7 +1730,7 @@ async def test_associate_authenticated_user_links_oauth() -> None:
             params={"code": "provider-code", "state": state},
         )
         assert callback_resp.status_code == HTTP_OK
-        token = callback_resp.json()["access_token"]
+        token = callback_resp.cookies.get("litestar_auth")
         created_user = await user_db.get_by_email("oauth@example.com")
         assert created_user is not None
         assert strategy.tokens == {token: created_user.id}
@@ -1725,7 +1741,7 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         # Authorization header is the cross-origin gate).
         associate_authorize = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
             follow_redirects=False,
         )
         assert associate_authorize.status_code == HTTP_FOUND
@@ -1749,7 +1765,9 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         associate_callback = await client.get(
             "/auth/associate/github/callback",
             params={"code": "associate-code", "state": ass_state},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Cookie": f"litestar_auth={token}; __oauth_associate_state_github={ass_state_cookie}",
+            },
         )
         assert associate_callback.status_code == HTTP_OK
         assert associate_callback.json() == {"linked": True}
@@ -1781,14 +1799,14 @@ async def test_associate_rejects_flow_cookie_with_mismatched_code_verifier() -> 
             params={"code": "provider-code", "state": state},
         )
         assert callback_resp.status_code == HTTP_OK
-        token = callback_resp.json()["access_token"]
+        token = callback_resp.cookies.get("litestar_auth")
         created_user = await user_db.get_by_email("oauth@example.com")
         assert created_user is not None
         user_db.oauth_accounts.clear()
 
         associate_authorize = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Cookie": f"litestar_auth={token}"},
             follow_redirects=False,
         )
         assert associate_authorize.status_code == HTTP_FOUND
@@ -1808,7 +1826,9 @@ async def test_associate_rejects_flow_cookie_with_mismatched_code_verifier() -> 
         associate_callback = await client.get(
             "/auth/associate/github/callback",
             params={"code": "associate-code", "state": ass_state},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Cookie": f"litestar_auth={token}; __oauth_associate_state_github={forged_cookie}",
+            },
         )
 
     assert associate_callback.status_code == HTTP_BAD_REQUEST
@@ -1836,12 +1856,12 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
         is_active=False,
     )
     app, user_db, _, strategy, _ = build_app_with_associate(users=[user])
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
+        client.cookies.set("litestar_auth", "session-token")
         authorize_response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": "Bearer bearer-token"},
             follow_redirects=False,
         )
     assert authorize_response.status_code == HTTP_UNAUTHORIZED
@@ -1872,7 +1892,7 @@ async def test_associate_authorize_rejects_get_after_csrf_hardening() -> None:
     async with AsyncTestClient(app=app) as client:
         response = await client.get(
             "/auth/associate/github/authorize",
-            headers={"Authorization": "Bearer any-token"},
+            headers={"Cookie": "litestar_auth=any-token"},
             follow_redirects=False,
         )
         assert response.status_code == HTTP_METHOD_NOT_ALLOWED
@@ -1914,13 +1934,12 @@ async def test_associate_re_link_updates_tokens() -> None:
         expires_at=111,
         refresh_token="old-refresh",
     )
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
-        auth_headers = {"Authorization": "Bearer bearer-token"}
+        client.cookies.set("litestar_auth", "session-token")
         auth_resp = await client.post(
             "/auth/associate/github/authorize",
-            headers=auth_headers,
             follow_redirects=False,
         )
         assert auth_resp.status_code == HTTP_FOUND
@@ -1935,7 +1954,6 @@ async def test_associate_re_link_updates_tokens() -> None:
         callback_resp = await client.get(
             "/auth/associate/github/callback",
             params={"code": "new-code", "state": ass_state},
-            headers=auth_headers,
         )
     assert callback_resp.status_code == HTTP_OK
     assert callback_resp.json() == {"linked": True}
@@ -1971,13 +1989,12 @@ async def test_associate_rejects_when_provider_identity_already_linked_to_anothe
         expires_at=1,
         refresh_token="refresh-a",
     )
-    strategy.tokens["bearer-for-b"] = user_b.id
+    strategy.tokens["session-for-b"] = user_b.id
 
     async with AsyncTestClient(app=app) as client:
-        auth_headers = {"Authorization": "Bearer bearer-for-b"}
+        client.cookies.set("litestar_auth", "session-for-b")
         auth_resp = await client.post(
             "/auth/associate/github/authorize",
-            headers=auth_headers,
             follow_redirects=False,
         )
         assert auth_resp.status_code == HTTP_FOUND
@@ -1992,7 +2009,6 @@ async def test_associate_rejects_when_provider_identity_already_linked_to_anothe
         callback_resp = await client.get(
             "/auth/associate/github/callback",
             params={"code": "associate-code", "state": ass_state},
-            headers=auth_headers,
         )
 
     assert callback_resp.status_code == HTTP_BAD_REQUEST
@@ -2030,13 +2046,12 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
         )
 
     user_db.upsert_oauth_account = fail_upsert  # ty: ignore[invalid-assignment]
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
-        auth_headers = {"Authorization": "Bearer bearer-token"}
+        client.cookies.set("litestar_auth", "session-token")
         auth_resp = await client.post(
             "/auth/associate/github/authorize",
-            headers=auth_headers,
             follow_redirects=False,
         )
         ass_state_cookie = auth_resp.cookies["__oauth_associate_state_github"]
@@ -2050,7 +2065,6 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
         callback_resp = await client.get(
             "/auth/associate/github/callback",
             params={"code": "associate-code", "state": ass_state},
-            headers=auth_headers,
         )
 
     assert callback_resp.status_code == HTTP_BAD_REQUEST
@@ -2123,7 +2137,7 @@ async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> N
     oauth_client = FakeOAuthClient()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     controller = create_provider_oauth_controller(
@@ -2164,13 +2178,12 @@ async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_inje
         oauth_client=oauth_client,
         user_manager_dependency_key=dependency_parameter_name,
     )
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
-        auth_headers = {"Authorization": "Bearer bearer-token"}
+        client.cookies.set("litestar_auth", "session-token")
         authorize_response = await client.post(
             "/auth/associate/github/authorize",
-            headers=auth_headers,
             follow_redirects=False,
         )
 
@@ -2186,7 +2199,6 @@ async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_inje
         callback_response = await client.get(
             "/auth/associate/github/callback",
             params={"code": "associate-code", "state": state},
-            headers=auth_headers,
         )
 
     assert callback_response.status_code == HTTP_OK
@@ -2228,7 +2240,7 @@ def _build_app_with_associate_and_csrf(
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="oauth-bearer",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=cast("Any", strategy),
     )
     oauth_client = FakeOAuthClient()
@@ -2254,7 +2266,13 @@ def _build_app_with_associate_and_csrf(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", _DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        provider_bindings_factory=human_session_bindings_factory(
+            name=backend.name,
+            cookie_name=backend.transport.cookie_name,
+            strategy=backend.strategy,
+            user_manager=user_manager,
+        ),
+        default_policy=RouteProviderPolicy((backend.name,)),
     )
     app = Litestar(
         route_handlers=[login_controller, associate_controller],
@@ -2285,16 +2303,16 @@ async def test_associate_authorize_under_csrf_middleware_rejects_request_without
         hashed_password=PasswordHelper().hash("pw"),
     )
     app, strategy = _build_app_with_associate_and_csrf(users=[user])
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
+        client.cookies.set("litestar_auth", "session-token")
         # Seed the CSRF cookie so the middleware has a value to compare
         # against, then deliberately omit the matching header on the POST.
         await client.get("/auth/oauth/github/authorize")
 
         response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": "Bearer bearer-token"},
             follow_redirects=False,
         )
 
@@ -2315,16 +2333,17 @@ async def test_associate_authorize_under_csrf_middleware_accepts_request_with_ma
         hashed_password=PasswordHelper().hash("pw"),
     )
     app, strategy = _build_app_with_associate_and_csrf(users=[user])
-    strategy.tokens["bearer-token"] = user.id
+    strategy.tokens["session-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
+        client.cookies.set("litestar_auth", "session-token")
         seed_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
         csrf_token = seed_response.cookies.get(_CSRF_COOKIE_NAME)
         assert csrf_token is not None
 
         response = await client.post(
             "/auth/associate/github/authorize",
-            headers={"Authorization": "Bearer bearer-token", _CSRF_HEADER_NAME: csrf_token},
+            headers={_CSRF_HEADER_NAME: csrf_token},
             follow_redirects=False,
         )
 

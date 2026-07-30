@@ -8,7 +8,7 @@ import math
 import time
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from litestar_auth._optional_deps import _require_redis_asyncio
 
@@ -35,20 +35,6 @@ def denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
 
 
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisJWTDenylistStore")
-
-_MISSING_JWT_DENYLIST_STORE_ERROR = (
-    "JWTStrategy requires explicit JWT revocation storage. "
-    "Configure denylist_store=RedisJWTDenylistStore(...) or another shared JWTDenylistStore for production. "
-    "For single-process tests, development, or consciously single-process apps only, set "
-    "allow_inmemory_denylist=True to construct InMemoryJWTDenylistStore explicitly."
-)
-_INMEMORY_JWT_DENYLIST_STARTUP_WARNING = (
-    "JWTStrategy is configured with an explicit process-local in-memory denylist. "
-    "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or another shared "
-    "JWTDenylistStore for production deployments that rely on revocation."
-)
-
-type JWTRevocationPostureKey = Literal["in_memory", "shared_store"]
 
 
 class JWTDenylistStore(Protocol):
@@ -102,8 +88,6 @@ class InMemoryJWTDenylistStore:
     shared, unbounded-by-process-memory semantics in production.
     """
 
-    # Used by JWTRevocationPosture.from_denylist_store to derive durability without
-    # an isinstance() check, which is fragile under module-reload-style test fixtures.
     revocation_is_durable: ClassVar[bool] = False
 
     def __init__(self, *, max_entries: int = 10_000) -> None:
@@ -233,79 +217,3 @@ class RedisJWTDenylistStore:
         if stored is True:
             return JWTReplayStoreResult(stored=True)
         return JWTReplayStoreResult(stored=False, rejected_as_replay=True)
-
-
-@dataclass(slots=True, frozen=True)
-class JWTRevocationPosture:
-    """Explicit contract describing the durability semantics of JWT revocation."""
-
-    key: JWTRevocationPostureKey
-    denylist_store_type: str
-    revocation_is_durable: bool
-    requires_explicit_production_opt_in: bool
-
-    @classmethod
-    def from_denylist_store(cls, denylist_store: JWTDenylistStore) -> Self:
-        """Build the posture contract for a concrete denylist backend.
-
-        Durability is read from the store's ``revocation_is_durable`` class
-        attribute (default ``True`` for unknown custom stores, matching the
-        prior behavior where any non-``InMemoryJWTDenylistStore`` was treated
-        as durable). Reading an attribute instead of branching on
-        ``isinstance(...)`` keeps the posture stable when test fixtures reload
-        modules and the in-memory store class identity drifts.
-
-        Returns:
-            The explicit revocation posture for ``denylist_store``.
-        """
-        store_type = type(denylist_store).__name__
-        is_durable = bool(getattr(denylist_store, "revocation_is_durable", True))
-        return cls(
-            key="shared_store" if is_durable else "in_memory",
-            denylist_store_type=store_type,
-            revocation_is_durable=is_durable,
-            requires_explicit_production_opt_in=False,
-        )
-
-    @property
-    def production_validation_error(self) -> str | None:
-        """The plugin validation error for this posture, if any.
-
-        JWT revocation storage is validated at strategy construction time, so
-        constructed postures do not require a second plugin-level compatibility
-        override.
-        """
-        return None
-
-    @property
-    def startup_warning(self) -> str | None:
-        """The startup warning for this posture, if any."""
-        if self.revocation_is_durable:
-            return None
-        return _INMEMORY_JWT_DENYLIST_STARTUP_WARNING
-
-
-def _resolve_jwt_revocation(
-    denylist_store: JWTDenylistStore | None,
-    *,
-    allow_inmemory_denylist: bool,
-) -> tuple[JWTDenylistStore, JWTRevocationPosture]:
-    """Resolve the effective denylist backend and its explicit posture contract.
-
-    Returns:
-        Tuple of the denylist backend used at runtime and the posture it reports.
-
-    Raises:
-        ValueError: If no denylist store is configured or both configuration paths are supplied.
-    """
-    if denylist_store is not None:
-        if allow_inmemory_denylist:
-            msg = "allow_inmemory_denylist=True cannot be combined with denylist_store."
-            raise ValueError(msg)
-        return denylist_store, JWTRevocationPosture.from_denylist_store(denylist_store)
-
-    if not allow_inmemory_denylist:
-        raise ValueError(_MISSING_JWT_DENYLIST_STORE_ERROR)
-
-    resolved_denylist_store = InMemoryJWTDenylistStore()
-    return resolved_denylist_store, JWTRevocationPosture.from_denylist_store(resolved_denylist_store)

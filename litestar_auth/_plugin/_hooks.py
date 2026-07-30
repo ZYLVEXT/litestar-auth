@@ -117,6 +117,8 @@ FEATURE_WIRING: tuple[FeatureWiring, ...] = (
             "backends",
             "user_model",
             "resolved_permissions",
+            "current_principal",
+            "authentication_context",
             "current_organization",
             "organization_store",
             "db_session",

@@ -16,7 +16,6 @@ from litestar.exceptions import ClientException
 from sqlalchemy.exc import IntegrityError
 
 import litestar_auth.contrib.redis as redis_module
-import litestar_auth.contrib.redis._surface as redis_surface_module
 import litestar_auth.contrib.role_admin as role_admin_module
 import litestar_auth.contrib.role_admin._controller as role_admin_controller_module
 import litestar_auth.contrib.role_admin._controller_handler_utils as role_admin_controller_handler_utils_module
@@ -28,11 +27,11 @@ from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdm
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy as BaseRedisTokenStrategy
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategyConfig as BaseRedisTokenStrategyConfig
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.models import Role, User, UserRole
 from litestar_auth.oauth import create_provider_oauth_controller
 from litestar_auth.totp import RedisTotpEnrollmentStore as BaseRedisTotpEnrollmentStore
@@ -140,23 +139,6 @@ def test_contrib_packages_reexport_public_symbols() -> None:
     assert RoleAdminExtension is role_admin_module.RoleAdminExtension
 
 
-def test_contrib_packages_define_all() -> None:
-    """Contrib packages publish only their intended public symbols."""
-    assert redis_all == (
-        "RedisApiKeyNonceStore",
-        "RedisApiKeyNonceStoreClient",
-        "RedisAuthClientProtocol",
-        "RedisAuthPreset",
-        "RedisAuthRateLimitConfigOptions",
-        "RedisAuthRateLimitTier",
-        "RedisTokenStrategy",
-        "RedisTokenStrategyConfig",
-        "RedisTotpEnrollmentStore",
-        "RedisUsedTotpCodeStore",
-    )
-    assert role_admin_all == ("RoleAdminControllerConfig", "RoleAdminExtension", "create_role_admin_controller")
-
-
 def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> None:
     """The opt-in role-admin factory returns a controller scaffold with explicit model wiring."""
     controller = create_role_admin_controller(
@@ -169,7 +151,7 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
-    assert controller.guards == [is_superuser, requires_password_session]
+    assert controller.guards == [is_superuser, is_human_authenticated]
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
@@ -1155,22 +1137,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
     assert missing_unassign_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
 
-@pytest.mark.imports
-def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
-    """The public Redis contrib package re-exports the dedicated internal surface."""
-    assert redis_module.RedisApiKeyNonceStore is redis_surface_module.RedisApiKeyNonceStore
-    assert redis_module.RedisApiKeyNonceStoreClient is redis_surface_module.RedisApiKeyNonceStoreClient
-    assert redis_module.RedisAuthClientProtocol is redis_surface_module.RedisAuthClientProtocol
-    assert redis_module.RedisAuthPreset is redis_surface_module.RedisAuthPreset
-    assert redis_module.RedisAuthRateLimitConfigOptions is redis_surface_module.RedisAuthRateLimitConfigOptions
-    assert redis_module.RedisAuthRateLimitTier is redis_surface_module.RedisAuthRateLimitTier
-    assert redis_module.RedisTotpEnrollmentStore is redis_surface_module.RedisTotpEnrollmentStore
-    assert redis_module.RedisTokenStrategy is redis_surface_module.RedisTokenStrategy
-    assert redis_module.RedisTokenStrategyConfig is redis_surface_module.RedisTokenStrategyConfig
-    assert redis_module.RedisUsedTotpCodeStore is redis_surface_module.RedisUsedTotpCodeStore
-    assert redis_module.__all__ == redis_surface_module.__all__
-
-
 def test_contrib_redis_preset_exposes_public_shared_client_protocol(async_fakeredis: AsyncFakeRedis) -> None:
     """The preset's public client annotation points at the stable contrib protocol."""
     preset_hints = get_type_hints(RedisAuthPreset, include_extras=True)
@@ -1419,7 +1385,7 @@ def test_oauth_package_preserves_lazy_dependency_error(monkeypatch: pytest.Monke
     monkeypatch.setattr("litestar_auth.oauth.router.import_module", fail_import)
     backend = AuthenticationBackend[ExampleUser, str](
         name="oauth",
-        transport=BearerTransport(),
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=ExampleStrategy(),
     )
     user_manager = ExampleUserManager()

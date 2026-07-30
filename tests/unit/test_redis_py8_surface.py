@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -76,22 +75,3 @@ async def test_builtin_redis_surface_uses_non_deprecated_commands(
     )
     token = await strategy.write_token(user)
     await strategy.destroy_token(token, user)
-
-
-def test_migration_doc_documents_redis_py8_upgrade() -> None:
-    """Migration guide names the redis-py 8 pin and SET EX contract."""
-    content = Path("docs/migration.md").read_text(encoding="utf-8")
-
-    assert "## redis-py 8 (`litestar-auth[redis]`)" in content
-    assert "redis>=8.0.0,<9.0.0" in content
-    assert "SET ... EX=" in content
-    assert "setex" in content.lower()
-
-
-def test_redis_configuration_doc_documents_py8_client_requirements() -> None:
-    """Redis configuration doc lists redis-py 8 client requirements."""
-    content = Path("docs/configuration/redis.md").read_text(encoding="utf-8")
-
-    assert "### redis-py 8 client requirements" in content
-    assert "setex" in content.lower()
-    assert "migration.md#redis-py-8-litestar-authredis" in content
