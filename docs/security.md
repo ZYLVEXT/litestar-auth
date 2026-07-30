@@ -46,7 +46,8 @@ authentication downgrade by construction.
 
 ## Reference boundary
 
-[`docker/reference/compose.yml`](../docker/reference/compose.yml) demonstrates TLS 1.3 client
+[`docker/reference/compose.yml`](https://github.com/ZYLVEXT/litestar-auth/blob/main/docker/reference/compose.yml)
+demonstrates TLS 1.3 client
 authentication and CRL enforcement at Envoy, a Unix-domain-socket hop, sanitized projected
 headers consumed by the real Litestar middleware/provider pipeline, PostgreSQL persistence, Redis
 human sessions, and a controlled JWKS service. The application derives revocation freshness from

@@ -1,3 +1,61 @@
+## Unreleased
+
+### Breaking
+
+- **Version 7 replaces the mixed credential surface with explicit human and workload trust
+  paths.** Human request authentication supports one opaque server-side session carried by a
+  secure cookie. `JWTStrategy`, `BearerTransport`, user-owned API keys, `LSA1-HMAC-SHA256`
+  signing, ordered authenticator fallback, deprecated aliases, and their compatibility modules
+  are removed.
+- **The repository is now a coordinated three-distribution workspace.** `authweave-core`,
+  `litestar-auth`, and `authweave-workload` must stay on the same `7.x` release line.
+  `authweave-core` owns neutral contracts, `litestar-auth` owns human Litestar flows, and
+  `authweave-workload` owns machine identity and X.509 credential lifecycle.
+- **Litestar extensions now target Extension SDK v2.** Extensions must declare a compatible
+  `requires_api` value and contribute providers to the existing authentication middleware rather
+  than installing a second middleware.
+
+### Added
+
+- Added `authweave-core` with typed principals, authentication evidence, request projections,
+  provider ownership, route policies, decisions, and deadline-aware fail-closed coordination.
+- Added `authweave-workload` with service-application and machine-principal lifecycle, validated
+  public X.509 credential metadata, direct mTLS, external RFC 9068/RFC 8705 certificate-bound JWT
+  verification, SQLAlchemy persistence, and optional Litestar integration.
+- Added an Envoy, PostgreSQL, Redis, local CA/CRL, and controlled JWKS reference stack with
+  positive and negative verification paths.
+- Added `scripts/audit_v7_removals.py` for read-only inventory of removed imports, configuration,
+  request-signing markers, and exported credential records.
+
+### Security
+
+- Human access and refresh tokens are opaque, keyed-digest indexed, server-side, and transported
+  only through secure cookies. Refresh rotation and replay-chain revocation remain supported.
+- Credential ownership is resolved before verification. Ambiguous, invalid, unavailable, and
+  invariant-failure results are terminal and never fall through to another provider.
+- Workload registration accepts only validator-produced public certificate metadata. Private-key
+  and passphrase material is rejected at the package boundary and never persisted or emitted in
+  security events.
+- Workload lifecycle mutations require a verified actor, correlation ID, and same-transaction
+  event recorder. Subject, actor, delegation, tenant mapping, and business authorization remain
+  separate contracts.
+
+### Packaging
+
+- Added independent wheels and source distributions for `authweave-core` and
+  `authweave-workload`, including typed package markers and optional `sqlalchemy`, `mtls`, `jwt`,
+  and `litestar` extras.
+- Release automation reproducibly builds all three distributions, attaches every artifact to one
+  GitHub release, and publishes each package through its own protected PyPI environment.
+- All distributions require Python `>=3.12,<3.15`.
+
+### Documentation
+
+- Reworked the repository homepage around the three-package topology, human/machine trust
+  boundary, runnable first use, explicit non-goals, and current project artwork.
+- Replaced the migration guide with an operational 6.x-to-7.0 inventory, cutover, verification,
+  and rollback procedure.
+
 ## 6.0.0 (2026-07-28)
 
 ### Security

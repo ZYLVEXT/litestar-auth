@@ -1,4 +1,4 @@
-"""Minimal Litestar auth quickstart app mirrored in docs/quickstart.md."""
+"""Executable Litestar auth quickstart app."""
 
 from __future__ import annotations
 

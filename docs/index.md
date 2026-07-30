@@ -11,5 +11,13 @@ implementations:
   direct mTLS and external certificate-bound access-token profiles.
 
 Start with the [quickstart](quickstart.md), review the [architecture](architecture.md) and
-[security posture](security.md), and use the [6.x migration guide](migration.md) before upgrading
-an existing deployment.
+[security posture](security.md), and use the [6.x → 7.0 migration guide](migration.md) before
+upgrading an existing deployment.
+
+| Need | Distribution |
+| --- | --- |
+| Human registration, login, OAuth + PKCE, TOTP, roles, organizations, and opaque sessions in Litestar | `litestar-auth` |
+| Framework-neutral authentication contracts and coordination | `authweave-core` |
+| X.509 workload lifecycle, direct mTLS, or externally issued certificate-bound JWTs | `authweave-workload` |
+
+All distributions require Python 3.12–3.14 and use coordinated `7.x` versions.

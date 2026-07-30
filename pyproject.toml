@@ -1,7 +1,7 @@
 [project]
 name = "litestar-auth"
 version = "7.0.0"
-description = "Litestar Auth"
+description = "Opaque human sessions for Litestar on the AuthWeave authentication stack"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

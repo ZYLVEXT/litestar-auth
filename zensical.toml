@@ -26,3 +26,5 @@ edit_uri = "edit/main/docs/"
 [project.theme]
 variant = "classic"
 language = "en"
+logo = "assets/litestar-auth-mark.svg"
+favicon = "assets/litestar-auth-mark.svg"
