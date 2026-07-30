@@ -114,6 +114,7 @@ introspection, or production rollout automation.
 - [Installation and extras](docs/install.md)
 - [Architecture contract](docs/architecture.md)
 - [Security posture](docs/security.md)
+- [Vulnerability reporting](SECURITY.md)
 - [Version 7 migration](docs/migration.md)
 - [Changelog](CHANGELOG.md)
 - [Deployment reference](docs/deployment.md)
