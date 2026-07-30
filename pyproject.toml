@@ -360,6 +360,10 @@ pre_bump_hooks = ["uv lock"]
 version_files = [
     "pyproject.toml:version",
     "litestar_auth/__init__.py:__version__",
+    "packages/authweave-core/pyproject.toml:version",
+    "packages/authweave-core/authweave_core/__init__.py:__version__",
+    "packages/authweave-workload/pyproject.toml:version",
+    "packages/authweave-workload/authweave_workload/__init__.py:__version__",
 ]
 
 [build-system]

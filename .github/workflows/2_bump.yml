@@ -109,7 +109,15 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md pyproject.toml litestar_auth/__init__.py uv.lock
+          git add \
+            CHANGELOG.md \
+            pyproject.toml \
+            litestar_auth/__init__.py \
+            packages/authweave-core/pyproject.toml \
+            packages/authweave-core/authweave_core/__init__.py \
+            packages/authweave-workload/pyproject.toml \
+            packages/authweave-workload/authweave_workload/__init__.py \
+            uv.lock
           git commit -m "bump: version ${{ steps.bump.outputs.previous_version }} → ${{ steps.bump.outputs.version }}"
           git tag "${{ steps.bump.outputs.version }}"
           git push origin HEAD --tags

@@ -40,9 +40,11 @@ audit:
     uv run pip-audit
     uv run deptry .
 
-# Build source and wheel distributions.
+# Build source and wheel distributions for the lockstep workspace release.
 build:
-    uv build
+    uv build --package authweave-core --no-sources
+    uv build --package litestar-auth --no-sources
+    uv build --package authweave-workload --no-sources
 
 # Serve documentation locally (Zensical, config in zensical.toml).
 docs-serve:
