@@ -4,13 +4,12 @@ from datetime import UTC, datetime
 
 from authweave_core import AuthenticationRuntime, PrincipalRef, RequestView, TlsPeerEvidence
 from authweave_workload import (
-    CertificateValidationPolicy,
     DirectMTLSPolicy,
     DirectMTLSProvider,
     WorkloadLifecycleService,
-    validate_public_certificate,
 )
 from authweave_workload.lifecycle import EventRecorder
+from authweave_workload.mtls import CertificateValidationPolicy, validate_public_certificate
 from authweave_workload.stores import WorkloadStore
 
 
