@@ -36,10 +36,10 @@ async def await_minimum_response_seconds[T](
     Returns:
         The wrapped work result.
     """
-    started_at = time.perf_counter()
+    deadline = time.perf_counter() + minimum_seconds
     try:
         return await work()
     finally:
-        remaining_seconds = minimum_seconds - (time.perf_counter() - started_at)
-        if remaining_seconds > 0:
+        # asyncio.sleep() may return early; loop to enforce the security timing floor.
+        while (remaining_seconds := deadline - time.perf_counter()) > 0:  # ruff: ignore[async-busy-wait]
             await asyncio.sleep(remaining_seconds)
