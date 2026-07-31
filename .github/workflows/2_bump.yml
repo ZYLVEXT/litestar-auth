@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       increment:
-        description: "Version increment type"
-        required: false
-        default: ""
+        description: "Release the prepared version or increment it first"
+        required: true
+        default: "CURRENT"
         type: choice
         options:
-          - ""
+          - "CURRENT"
           - "PATCH"
           - "MINOR"
           - "MAJOR"
@@ -51,10 +51,14 @@ jobs:
       - name: Get next version
         id: get_version
         run: |
-          if [ -n "${{ inputs.increment }}" ]; then
-            NEXT=$(uv run cz bump --get-next --yes --increment "${{ inputs.increment }}")
+          if [ "${{ inputs.increment }}" = "CURRENT" ]; then
+            NEXT=$(uv run cz version --project)
           else
-            NEXT=$(uv run cz bump --get-next --yes)
+            NEXT=$(uv run cz bump --get-next --yes --increment "${{ inputs.increment }}")
+          fi
+          if git rev-parse "refs/tags/$NEXT" >/dev/null 2>&1; then
+            echo "::error::Version $NEXT is already tagged."
+            exit 1
           fi
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
 
@@ -83,18 +87,23 @@ jobs:
           previous_version=$(uv run cz version --project)
           echo "previous_version=${previous_version}" >> "$GITHUB_OUTPUT"
 
-          cz_args=(uv run cz --no-raise 21 bump --yes)
-          if [ -n "${{ inputs.increment }}" ]; then
-            cz_args+=(--increment "${{ inputs.increment }}")
-          fi
-          if [ "${{ steps.unreleased.outputs.replaced }}" = "true" ]; then
-            cz_args+=(--files-only)
+          if [ "${{ inputs.increment }}" = "CURRENT" ]; then
+            if [ "${{ steps.unreleased.outputs.replaced }}" != "true" ]; then
+              echo "::error::CHANGELOG.md has no Unreleased section to release."
+              exit 1
+            fi
+            version="${previous_version}"
           else
-            cz_args+=(--changelog)
+            cz_args=(uv run cz --no-raise 21 bump --yes --increment "${{ inputs.increment }}")
+            if [ "${{ steps.unreleased.outputs.replaced }}" = "true" ]; then
+              cz_args+=(--files-only)
+            else
+              cz_args+=(--changelog)
+            fi
+            "${cz_args[@]}"
+            version=$(uv run cz version --project)
           fi
-          "${cz_args[@]}"
 
-          version=$(uv run cz version --project)
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
           if [ "${{ steps.unreleased.outputs.replaced }}" != "true" ] && [ "${version}" != "${previous_version}" ]; then

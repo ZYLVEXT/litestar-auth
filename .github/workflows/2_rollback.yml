@@ -1,18 +1,14 @@
-# Rollback: delete the GitHub release (if any) and tag, then force-push the default
-# branch to the commit before the tag. Handles edge case where tag exists but
+# Rollback: delete the GitHub release (if any) and tag, then revert the tagged
+# commit on the default branch. Handles edge case where tag exists but
 # release was never created (e.g. bump failed after push, before Create release).
 # Prompts to yank on PyPI manually.
-#
-# PAT requirement: force-push may change .github/workflows/*; GitHub requires the
-# token to have Workflows permission (Fine-grained: Workflows = Read and write;
-# Classic: scope "workflow").
 name: Rollback release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to rollback (e.g. 1.0.0); branch will be reset to commit before this tag"
+        description: "Tag to rollback (e.g. 1.0.0); its commit will be reverted"
         required: true
         type: string
 
@@ -36,7 +32,7 @@ jobs:
           token: "${{ secrets.PERSONAL_ACCESS_TOKEN }}"
           fetch-depth: 0
 
-      - name: Validate tag and get parent commit
+      - name: Validate tag
         id: validate
         run: |
           set -e
@@ -46,8 +42,7 @@ jobs:
             exit 1
           fi
           TAG_SHA=$(git rev-parse "refs/tags/$TAG")
-          PARENT_SHA=$(git rev-parse "$TAG_SHA^")
-          echo "parent_sha=$PARENT_SHA" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Yank on PyPI (manual)
         run: |
@@ -63,12 +58,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Reset branch and force-push
+      - name: Revert bump commit and push
         run: |
           set -e
           BRANCH="${{ github.event.repository.default_branch }}"
-          PARENT_SHA="${{ steps.validate.outputs.parent_sha }}"
+          TAG_SHA="${{ steps.validate.outputs.tag_sha }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git reset --hard "$PARENT_SHA"
-          git push --force origin "HEAD:$BRANCH"
+          git revert --no-edit "$TAG_SHA"
+          git push origin "HEAD:$BRANCH"
