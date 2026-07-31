@@ -56,42 +56,47 @@ jobs:
 
       - name: First build (from lockfile)
         env:
+          DIST1: ${{ runner.temp }}/dist1
           SOURCE_DATE_EPOCH: "0"
         run: |
           uv sync --frozen --group dev --all-extras
-          uv build --package authweave-core --no-sources --out-dir dist1/authweave-core
-          uv build --package litestar-auth --no-sources --out-dir dist1/litestar-auth
-          uv build --package authweave-workload --no-sources --out-dir dist1/authweave-workload
+          uv build --package authweave-core --no-sources --out-dir "$DIST1/authweave-core"
+          uv build --package litestar-auth --no-sources --out-dir "$DIST1/litestar-auth"
+          uv build --package authweave-workload --no-sources --out-dir "$DIST1/authweave-workload"
 
       - name: Second build (same environment)
         env:
+          DIST2: ${{ runner.temp }}/dist2
           SOURCE_DATE_EPOCH: "0"
         run: |
           rm -rf dist build src/*.egg-info *.egg-info 2>/dev/null || true
           uv sync --frozen --group dev --all-extras
-          uv build --package authweave-core --no-sources --out-dir dist2/authweave-core
-          uv build --package litestar-auth --no-sources --out-dir dist2/litestar-auth
-          uv build --package authweave-workload --no-sources --out-dir dist2/authweave-workload
+          uv build --package authweave-core --no-sources --out-dir "$DIST2/authweave-core"
+          uv build --package litestar-auth --no-sources --out-dir "$DIST2/litestar-auth"
+          uv build --package authweave-workload --no-sources --out-dir "$DIST2/authweave-workload"
 
       - name: Compare distribution hashes
+        env:
+          DIST1: ${{ runner.temp }}/dist1
+          DIST2: ${{ runner.temp }}/dist2
         run: |
           while IFS= read -r -d '' f; do
-            name=${f#dist1/}
-            h1=$(sha256sum "dist1/$name" | cut -d' ' -f1)
-            h2=$(sha256sum "dist2/$name" | cut -d' ' -f1)
+            name=${f#"$DIST1/"}
+            h1=$(sha256sum "$DIST1/$name" | cut -d' ' -f1)
+            h2=$(sha256sum "$DIST2/$name" | cut -d' ' -f1)
             if [ "$h1" != "$h2" ]; then
               echo "Hash mismatch for $name"
               exit 1
             fi
             echo "OK $name"
-          done < <(find dist1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print0)
+          done < <(find "$DIST1" -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print0)
           echo "Reproducible: distribution hashes match."
 
       - name: Upload dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
-          path: dist1/
+          path: ${{ runner.temp }}/dist1/
 
   release-assets:
     name: Attach dist to GitHub Release
