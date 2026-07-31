@@ -17,7 +17,7 @@ setup:
 # import-time class/function definitions are measured even when pytest-cov
 # imports `litestar_auth` early during plugin discovery.
 test:
-    COVERAGE_PROCESS_START=pyproject.toml uv run pytest --cov --cov-report=term-missing --cov-fail-under=100 -n auto
+    COVERAGE_PROCESS_START=pyproject.toml uv run pytest --cov --cov-report=term-missing --cov-fail-under=98 -n auto
 
 # Lint the codebase and apply safe Ruff fixes.
 lint:

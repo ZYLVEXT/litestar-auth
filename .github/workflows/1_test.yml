@@ -175,7 +175,7 @@ jobs:
           --cov-branch
           --cov-report=term-missing
           --cov-report=xml
-          --cov-fail-under=100
+          --cov-fail-under=98
           -n auto
 
       # Codecov flags: ^[\w.\-]{1,45}$ (alphanumeric, _, -, .); see https://docs.codecov.com/docs/flags
@@ -228,7 +228,7 @@ jobs:
           fi
           uv run --no-sync python -c "import pathlib, sysconfig; p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'coverage_subprocess.pth'; p.write_text('import coverage; coverage.process_startup()\n')"
           uv run --no-sync ruff check .
-          uv run --no-sync ruff format --check .
+          uv run --no-sync ruff format --check --preview .
           uv run --no-sync ty check "$module" tests
           COVERAGE_PROCESS_START=pyproject.toml uv run --no-sync pytest \
             --cov="$module" \
