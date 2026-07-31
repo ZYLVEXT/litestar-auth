@@ -18,7 +18,6 @@ from litestar.plugins import InitPlugin
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.totp as _totp_mod
-from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
@@ -34,8 +33,6 @@ from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
 
 InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
 InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
-_current_counter = _totp_primitive._current_counter
-_generate_totp_code = _totp_primitive._generate_totp_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable

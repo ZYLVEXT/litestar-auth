@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 
     from litestar_auth.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
 
-_THUMBPRINT = "A" * 43
 _ENVOY_THUMBPRINT = "ab" * 32
 _REVOCATION_CHECKED_AT = datetime(2026, 7, 30, tzinfo=UTC)
 

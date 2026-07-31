@@ -45,7 +45,7 @@ pytestmark = pytest.mark.unit
 
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
-STATUS_UNPROCESSABLE_ENTITY = 422
+HTTP_UNPROCESSABLE_ENTITY = 422
 
 
 def test_get_refresh_strategy_raises_when_strategy_not_refreshable() -> None:
@@ -834,7 +834,7 @@ async def test_login_rejects_invalid_identifier_before_authentication() -> None:
             user_manager=user_manager,
         )
 
-    assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
     user_manager.authenticate.assert_not_awaited()
 
@@ -1109,7 +1109,7 @@ def test_resolve_login_identifier_email_mode_invalid_format_raises() -> None:
     with pytest.raises(ClientException) as exc_info:
         _resolve_login_identifier("not-an-email", "email")
 
-    assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 
@@ -1122,7 +1122,7 @@ def test_resolve_login_identifier_email_mode_exceeds_max_length_raises() -> None
     with pytest.raises(ClientException) as exc_info:
         _resolve_login_identifier(too_long, "email")
 
-    assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 
@@ -1150,7 +1150,7 @@ def test_resolve_login_identifier_username_mode_empty_after_strip_raises() -> No
     with pytest.raises(ClientException) as exc_info:
         _resolve_login_identifier("   \t  ", "username")
 
-    assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 
@@ -1160,7 +1160,7 @@ def test_resolve_login_identifier_username_mode_too_long_raises() -> None:
     with pytest.raises(ClientException) as exc_info:
         _resolve_login_identifier(too_long, "username")
 
-    assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 

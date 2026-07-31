@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 
 STATUS_BAD_REQUEST = 400
 STATUS_TOO_MANY_REQUESTS = 429
-STATUS_UNPROCESSABLE_ENTITY = 422
+HTTP_UNPROCESSABLE_ENTITY = 422
 STATUS_UNAUTHORIZED = 401
 
 pytestmark = pytest.mark.unit
@@ -388,7 +388,7 @@ async def test_decode_request_body_schema_mismatch() -> None:
         await _decode_request_body(request, schema=_MinimalStruct)
 
     exc = exc_info.value
-    assert exc.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc.detail == "Invalid request payload."
 
 
@@ -408,7 +408,7 @@ async def test_decode_request_body_uses_custom_validation_metadata() -> None:
         )
 
     exc = exc_info.value
-    assert exc.status_code == STATUS_UNPROCESSABLE_ENTITY
+    assert exc.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc.detail == "Invalid login payload."
     assert exc.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
