@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pytest
 from litestar import Litestar
+from litestar.exceptions import ClientException
 from litestar.openapi.config import OpenAPIConfig
 from litestar.testing import AsyncTestClient
 from sqlalchemy import MetaData, select
@@ -23,6 +24,11 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import RefreshSession, Strategy, UserManagerProtocol
 from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 from litestar_auth.controllers import create_session_devices_controller
+from litestar_auth.controllers.session_devices import (
+    _require_session_management_strategy,
+    _resolve_current_refresh_session_id,
+    _SessionDevicesControllerContext,
+)
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -138,6 +144,28 @@ class _UnsafeMetadataSessionManagementStrategy(_SessionManagementStrategy):
                 ),
             ),
         ]
+
+
+class _IdentifyingSessionManagementStrategy(_SessionManagementStrategy):
+    """Management strategy that can resolve the current refresh session."""
+
+    async def identify_refresh_session(self, user: ExampleUser, refresh_token: str) -> str | None:
+        """Return the test strategy's stable session id."""
+        return f"session-{user.id}" if refresh_token else None
+
+
+def test_session_management_strategy_narrowing_rejects_unsupported_strategy() -> None:
+    """Session/device routes fail closed when a backend lacks management support."""
+    with pytest.raises(ClientException, match="does not support refresh-session management"):
+        _require_session_management_strategy(object())
+
+
+async def test_current_session_resolution_skips_backends_without_refresh_cookie() -> None:
+    """A management strategy without cookie refresh credentials has no current session."""
+    user = ExampleUser(id=UUID(int=1))
+    context = _SessionDevicesControllerContext(_IdentifyingSessionManagementStrategy(), cookie_transport=None)
+
+    assert await _resolve_current_refresh_session_id(cast("Any", object()), user, ctx=context) is None
 
 
 def test_session_device_routes_require_password_session() -> None:

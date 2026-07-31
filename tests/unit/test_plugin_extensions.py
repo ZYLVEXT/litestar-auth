@@ -1298,6 +1298,52 @@ def test_extension_registration_helpers_accumulate_contributions_without_mutatin
     assert context.contributions.exception_handlers[0].handler is exception_handler
 
 
+@pytest.mark.parametrize(
+    ("extension_name", "name", "profile"),
+    [("", "provider", "human"), ("alpha", "", "human"), ("alpha", "provider", "")],
+)
+def test_extension_registration_rejects_invalid_authentication_provider_identifiers(
+    extension_name: str,
+    name: str,
+    profile: str,
+) -> None:
+    """Authentication provider identifiers must be non-empty."""
+    context = build_extension_registration_context(app_config=AppConfig(), config=_minimal_config())
+
+    with pytest.raises(ValueError, match="must be non-empty"):
+        context.add_authentication_provider(
+            extension_name,
+            name=name,
+            profile=profile,
+            factory=lambda _request: object(),
+        )
+
+
+def test_extension_registration_rejects_invalid_and_duplicate_security_contributions() -> None:
+    """Typed authentication and TLS evidence contributions reject ambiguous registrations."""
+    context = build_extension_registration_context(app_config=AppConfig(), config=_minimal_config())
+
+    def factory(_request: object) -> object:
+        return object()
+
+    with pytest.raises(TypeError, match="Authentication provider factory must be callable"):
+        context.add_authentication_provider("alpha", name="provider", profile="human", factory=cast("Any", object()))
+
+    context.add_authentication_provider("alpha", name="provider", profile="human", factory=factory)
+    context.add_authentication_provider("beta", name="other", profile="service", factory=factory)
+    with pytest.raises(ValueError, match="Duplicate authentication provider name"):
+        context.add_authentication_provider("gamma", name="provider", profile="machine", factory=factory)
+    with pytest.raises(ValueError, match="Duplicate authentication provider profile"):
+        context.add_authentication_provider("gamma", name="third", profile="human", factory=factory)
+
+    with pytest.raises(TypeError, match="TLS peer evidence factory must be callable"):
+        context.add_tls_peer_evidence_factory("alpha", cast("Any", object()))
+
+    context.add_tls_peer_evidence_factory("alpha", factory)
+    with pytest.raises(ValueError, match="conflicts with extension 'alpha'"):
+        context.add_tls_peer_evidence_factory("beta", factory)
+
+
 def test_extension_openapi_security_registration_appends_to_component_lists() -> None:
     """Extension OpenAPI scheme wiring preserves existing component-list configs."""
     context = build_extension_registration_context(app_config=AppConfig(), config=_minimal_config())

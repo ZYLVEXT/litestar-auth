@@ -75,6 +75,7 @@ _validate_backend_strategy_security = validation_module._validate_backend_strate
 _validate_totp_encryption_key = validation_module._validate_totp_encryption_key
 _validate_totp_pending_secret_config = validation_module._validate_totp_pending_secret_config
 validate_config = validation_module.validate_config
+validate_core_session_config = validation_module.validate_core_session_config
 validate_cookie_auth_config = validation_module.validate_cookie_auth_config
 validate_password_validator_config = validation_module.validate_password_validator_config
 validate_rate_limit_config = validation_module.validate_rate_limit_config
@@ -1858,6 +1859,37 @@ def test_validate_cookie_auth_config_allows_explicit_insecure_cookie_override(
     validate_cookie_auth_config(config)
 
 
+def test_validate_cookie_auth_config_ignores_non_cookie_backends() -> None:
+    """CSRF validation is irrelevant when no cookie transport is configured."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="header",
+        transport=cast("Any", object()),
+        strategy=build_test_redis_strategy(key_prefix="header"),
+    )
+
+    validate_cookie_auth_config(_minimal_config(backends=[backend]))
+
+
+def test_validate_core_session_config_rejects_multiple_human_backends() -> None:
+    """The v7 runtime accepts exactly one human session provider."""
+    config = _minimal_config(backends=[_cookie_backend(), _redis_backend()])
+
+    with pytest.raises(ValueError, match="exactly one human session provider"):
+        validate_core_session_config(config)
+
+
+def test_validate_core_session_config_rejects_unsupported_transport() -> None:
+    """Human sessions require the typed cookie transport contract."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="header",
+        transport=cast("Any", object()),
+        strategy=build_test_redis_strategy(key_prefix="header"),
+    )
+
+    with pytest.raises(TypeError, match="requires CookieTransport"):
+        validate_core_session_config(_minimal_config(backends=[backend]))
+
+
 def test_build_csrf_config_rejects_heterogeneous_cookie_transports() -> None:
     """Plugin-managed CSRF setup requires homogeneous cookie transport settings."""
     config = _minimal_config(backends=[_cookie_backend()])
@@ -2294,6 +2326,18 @@ def test_validate_config_rejects_unknown_totp_stepup_policy_key() -> None:
     config.totp_stepup_policy = {"unknown.endpoint": "required_when_enrolled"}
 
     with pytest.raises(ConfigurationError, match="Unknown totp_stepup_policy endpoint"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_unknown_totp_stepup_policy_mode() -> None:
+    """Startup validation rejects unsupported policy modes on known endpoints."""
+    config = _minimal_config(totp_config=_configured_totp_config())
+    config.totp_stepup_policy = {
+        "totp.disable": "off",
+        "totp.enable": cast("Any", "sometimes"),
+    }
+
+    with pytest.raises(ConfigurationError, match="Invalid totp_stepup_policy mode"):
         validate_config(config)
 
 

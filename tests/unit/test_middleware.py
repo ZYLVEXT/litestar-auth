@@ -298,6 +298,23 @@ async def test_unavailable_provider_maps_to_safe_503() -> None:
     assert exc_info.value.extra == {"code": "provider_unavailable"}
 
 
+async def test_provider_returning_unknown_decision_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider decisions outside the typed contract are configuration failures."""
+    middleware = _middleware(_Provider(object()), loader=lambda _context: object())
+
+    async def return_invalid_decision(*_args: object, **_kwargs: object) -> object:
+        await anyio.lowlevel.checkpoint()
+        return object()
+
+    monkeypatch.setattr(
+        "litestar_auth.authentication.middleware.AuthenticationCoordinator.authenticate",
+        return_invalid_decision,
+    )
+
+    with pytest.raises(InternalServerException, match="invalid decision"):
+        await middleware.authenticate_request(_connection())
+
+
 async def test_unknown_provider_in_policy_maps_to_invariant_failure() -> None:
     """Unknown route provider cannot silently become anonymous."""
     middleware = _middleware(_Provider(NotApplicable()), loader=lambda _context: object())

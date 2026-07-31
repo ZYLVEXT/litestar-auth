@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID, uuid4
 
 import pytest
+from authweave_core import AuthenticationContext, AuthenticationEvidence, PrincipalRef
 from fakeredis import FakeAsyncRedis
 from litestar import Controller, Litestar, Request, get
 from litestar.config.app import AppConfig
@@ -1086,6 +1087,39 @@ def test_provide_current_organization_returns_scope_context_or_none() -> None:
     set_scope_current_organization_context(scope, context)
 
     assert dependencies_module.provide_current_organization(request) is context
+
+
+def test_neutral_authentication_dependencies_expose_verified_scope_values() -> None:
+    """Principal and neutral context providers read only middleware-projected scope state."""
+    principal = PrincipalRef(issuer="https://issuer.example", subject="subject", kind="human")
+    auth = AuthenticationContext(
+        subject=principal,
+        actor=principal,
+        evidence=AuthenticationEvidence(
+            provider="human",
+            profile="session",
+            method="cookie",
+            issuer=principal.issuer,
+        ),
+    )
+    request = Request(
+        scope=cast(
+            "Any",
+            {
+                "type": "http",
+                "path": "/auth-context",
+                "headers": [],
+                "state": {},
+                "user": principal,
+                "auth": auth,
+            },
+        ),
+    )
+
+    assert dependencies_module.provide_current_principal(request) is principal
+    assert dependencies_module.provide_authentication_context(request) is auth
+    request.scope["auth"] = object()
+    assert dependencies_module.provide_authentication_context(request) is None
 
 
 async def test_register_dependencies_registers_core_providers_and_autocommit_handler(

@@ -9,8 +9,14 @@ from uuid import UUID, uuid4
 
 import pytest
 from litestar.connection import ASGIConnection
+from litestar.exceptions import PermissionDeniedException
 
-from litestar_auth._current_organization import CurrentOrganizationContext, set_scope_current_organization_context
+from litestar_auth._current_organization import (
+    CurrentOrganizationContext,
+    clear_scope_current_organization_context,
+    read_scope_current_organization_context,
+    set_scope_current_organization_context,
+)
 from litestar_auth._permissions import (
     GLOBAL_PERMISSION_GRANT,
     StaticRolePermissionResolver,
@@ -18,7 +24,9 @@ from litestar_auth._permissions import (
     normalize_permissions,
     permission_grants,
     permission_grants_fixed_work,
+    permissions_cover_delegated_grant,
     permissions_grant,
+    read_scope_permission_resolver,
     resolve_connection_permissions,
     set_scope_permission_resolver,
 )
@@ -111,6 +119,45 @@ def test_normalize_permissions_deduplicates_and_sorts_tokens() -> None:
         "posts:read",
         "users:write",
     ]
+
+
+def test_scope_context_helpers_fail_closed_for_missing_or_invalid_state() -> None:
+    """Scope readers return safe defaults and reject malformed resolver state."""
+    connection = _build_connection()
+
+    assert read_scope_current_organization_context(connection) is None
+    assert read_scope_permission_resolver(cast("Any", SimpleNamespace(scope={}))) is not None
+    assert read_scope_permission_resolver(connection) is not None
+    clear_scope_current_organization_context(connection.scope)
+
+    cast("dict[str, Any]", connection.scope)["state"] = object()
+    assert read_scope_current_organization_context(connection) is None
+    clear_scope_current_organization_context(connection.scope)
+
+    connection.scope["state"] = {}
+    set_scope_permission_resolver(connection.scope, cast("PermissionResolver", object()))
+    with pytest.raises(PermissionDeniedException, match="permission resolver is invalid"):
+        read_scope_permission_resolver(connection)
+
+
+@pytest.mark.parametrize(
+    ("granted", "delegated", "expected"),
+    [
+        (("posts:read",), "posts:read", True),
+        (("*",), "posts:*", True),
+        (("posts:*",), "*", False),
+        (("posts:*",), "posts:*", True),
+        (("users:*",), "posts:*", False),
+    ],
+)
+def test_permissions_cover_only_delegable_grants(
+    granted: tuple[str, ...],
+    delegated: str,
+    *,
+    expected: bool,
+) -> None:
+    """Delegation accepts only grants at least as broad as the requested token."""
+    assert permissions_cover_delegated_grant(granted, delegated) is expected
 
 
 @pytest.mark.parametrize(

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import TYPE_CHECKING, cast
+import json
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from authweave_core import Invalid
+from authweave_core import Invalid, Unavailable
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from litestar_auth.authentication.strategy import _opaque_tokens as opaque_tokens_module
 from litestar_auth.authentication.strategy import redis as redis_strategy_module
@@ -149,6 +152,23 @@ def _token_key(token: str) -> str:
     )
 
 
+def _mock_strategy(
+    redis: object,
+    *,
+    subject_decoder: object = UUID,
+) -> RedisTokenStrategy[ExampleUser, UUID]:
+    """Build a strategy around a method-level Redis mock.
+
+    Returns:
+        Strategy using the supplied Redis client.
+    """
+    return RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast("RedisClientProtocol", redis),
+        token_hash_secret=TOKEN_HASH_SECRET,
+        subject_decoder=cast("Any", subject_decoder),
+    )
+
+
 def test_redis_strategy_rejects_short_token_hash_secret(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
@@ -232,6 +252,22 @@ def test_redis_strategy_initializes_custom_configuration(
     assert strategy._decode_token_payload("v1:3") is None
     assert strategy._decode_token_payload("v1:-1:user-123") is None
     assert strategy._decode_token_payload("v1:not-int:user-123") is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"v": 0, "u": "user", "s": "session", "c": 1, "l": None, "m": None},
+        {"v": 1, "u": "user", "s": "session", "c": 1, "l": "later", "m": None},
+        {"v": 1, "u": "user", "s": "session", "c": 1, "l": None, "m": []},
+        {"v": 1, "u": "user", "s": "session", "c": 1, "l": None, "m": {"safe": 1}},
+    ],
+)
+def test_redis_strategy_rejects_malformed_refresh_payloads(payload: object) -> None:
+    """Stored refresh metadata must match the versioned bounded schema."""
+    assert RedisTokenStrategy._decode_refresh_payload(json.dumps(payload)) is None
+    assert RedisTokenStrategy._decode_refresh_payload("{") is None
 
 
 def test_redis_strategy_fractional_lifetime_never_expires_early(
@@ -714,3 +750,130 @@ async def test_redis_refresh_session_management_is_user_scoped(
     assert await strategy.revoke_other_refresh_sessions(user, current_session_id=second_id) == 1
     assert [session.session_id for session in await strategy.list_refresh_sessions(user)] == [second_id]
     assert [session.session_id for session in await strategy.list_refresh_sessions(foreign_user)] == [foreign_id]
+
+
+async def test_redis_authentication_maps_epoch_outage_and_missing_user() -> None:
+    """Epoch storage outages and orphaned subjects fail with typed terminal decisions."""
+    user = ExampleUser(id=uuid4())
+    redis = AsyncMock()
+    strategy = _mock_strategy(redis)
+    redis.get.side_effect = [strategy._encode_token_payload(epoch=0, user_id=str(user.id)), RedisConnectionError()]
+
+    assert isinstance(await strategy.authenticate_token("token", ExampleUserManager(user)), Unavailable)
+
+    redis.reset_mock()
+    redis.get.side_effect = [strategy._encode_token_payload(epoch=0, user_id=str(user.id)), None]
+    assert isinstance(await strategy.authenticate_token("token", ExampleUserManager(ExampleUser(id=uuid4()))), Invalid)
+
+
+async def test_redis_session_access_issuance_rejects_stale_state() -> None:
+    """Session-bound access tokens require a live, atomic refresh-session record."""
+    user = ExampleUser(id=uuid4())
+    redis = AsyncMock()
+    strategy = _mock_strategy(redis)
+
+    redis.get.return_value = None
+    with pytest.raises(ValueError, match="inactive refresh session"):
+        await strategy.write_token_for_session(user, "session")
+
+    redis.reset_mock()
+    redis.get.side_effect = ["refresh-key", None]
+    with pytest.raises(ValueError, match="inactive refresh session"):
+        await strategy.write_token_for_session(user, "session")
+
+    payload = strategy._encode_refresh_payload(
+        user_id=str(user.id),
+        session_id="session",
+        created_at=datetime.now(tz=UTC),
+        last_used_at=None,
+        client_metadata=None,
+    )
+    redis.reset_mock()
+    redis.get.side_effect = ["refresh-key", payload, None]
+    redis.eval.return_value = 0
+    with pytest.raises(ValueError, match="inactive refresh session"):
+        await strategy.write_token_for_session(user, "session")
+
+
+async def test_redis_refresh_rotation_rejects_corrupt_and_racing_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Corrupt payloads, lost races, invalid subjects, and missing users revoke or reject safely."""
+    user = ExampleUser(id=uuid4())
+    redis = AsyncMock()
+    strategy = _mock_strategy(redis)
+    manager = ExampleUserManager(user)
+
+    redis.get.return_value = "invalid"
+    assert await strategy.rotate_refresh_token("refresh", manager) is None
+    redis.delete.assert_awaited_once()
+
+    payload = strategy._encode_refresh_payload(
+        user_id=str(user.id),
+        session_id="session",
+        created_at=datetime.now(tz=UTC),
+        last_used_at=None,
+        client_metadata=None,
+    )
+    redis.reset_mock()
+    redis.get.return_value = payload
+    redis.eval.return_value = 0
+    assert await strategy.rotate_refresh_token("refresh", manager) is None
+
+    def reject_subject(_value: str) -> UUID:
+        raise ValueError
+
+    invalid_subject_strategy = _mock_strategy(redis, subject_decoder=reject_subject)
+    revoke = AsyncMock(return_value=True)
+    monkeypatch.setattr(invalid_subject_strategy, "_revoke_refresh_session_by_id", revoke)
+    redis.reset_mock()
+    redis.get.return_value = payload
+    redis.eval.return_value = 1
+    assert await invalid_subject_strategy.rotate_refresh_token("refresh", manager) is None
+    revoke.assert_awaited_once_with(str(user.id), "session")
+
+    missing_user_strategy = _mock_strategy(redis)
+    revoke = AsyncMock(return_value=True)
+    monkeypatch.setattr(missing_user_strategy, "_revoke_refresh_session_by_id", revoke)
+    redis.reset_mock()
+    redis.get.return_value = payload
+    redis.eval.return_value = 1
+    assert (
+        await missing_user_strategy.rotate_refresh_token(
+            "refresh",
+            ExampleUserManager(ExampleUser(id=uuid4())),
+        )
+        is None
+    )
+    revoke.assert_awaited_once_with(str(user.id), "session")
+
+
+async def test_redis_refresh_helpers_cleanup_stale_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refresh-session readers remove stale index entries and stop on broken chains."""
+    user = ExampleUser(id=uuid4())
+    redis = AsyncMock()
+    strategy = _mock_strategy(redis)
+
+    redis.get.return_value = "invalid"
+    assert await strategy.identify_refresh_session(user, "refresh") is None
+
+    redis.reset_mock()
+    redis.smembers.return_value = {"session-key"}
+    redis.get.side_effect = ["refresh-key", "invalid"]
+    assert await strategy.list_refresh_sessions(user) == []
+    redis.srem.assert_awaited_once()
+
+    redis.reset_mock()
+    redis.get.side_effect = None
+    redis.get.return_value = None
+    assert not await strategy._revoke_refresh_session_by_id(str(user.id), "session")
+
+    revoke = AsyncMock(return_value=True)
+    monkeypatch.setattr(strategy, "_revoke_refresh_session_by_id", revoke)
+    redis.reset_mock()
+    redis.get.side_effect = ["session", None]
+    await strategy._revoke_consumed_refresh_chain("refresh")
+    revoke.assert_not_awaited()
+
+    redis.reset_mock()
+    redis.get.side_effect = ["session", "refresh-key", "invalid"]
+    await strategy._revoke_consumed_refresh_chain("refresh")
+    revoke.assert_not_awaited()

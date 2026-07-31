@@ -45,6 +45,7 @@ from litestar_auth.guards import (
     has_permission,
     is_active,
     is_authenticated,
+    is_human_authenticated,
     is_superuser,
     is_verified,
     requires_organization_membership,
@@ -67,6 +68,12 @@ pytestmark = pytest.mark.unit
 HTTP_401_UNAUTHORIZED = 401
 HTTP_403_FORBIDDEN = 403
 type Guard = Callable[[ASGIConnection[Any, Any, Any, Any], BaseRouteHandler], Awaitable[None] | None]
+
+
+def test_human_guard_rejects_non_human_authentication_context() -> None:
+    """A projected user without a verified human context is not a human session."""
+    with pytest.raises(NotAuthorizedException, match="human authentication session"):
+        is_human_authenticated(_build_connection(object()), _build_handler())
 
 
 def _build_connection(

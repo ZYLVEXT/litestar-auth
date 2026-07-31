@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, get_args
 import pytest
 
 import litestar_auth as litestar_auth_module
+import litestar_auth._plugin.totp_controller as totp_controller_module
 import litestar_auth.controllers as controllers_module
+import litestar_auth.models as models_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
@@ -57,6 +59,13 @@ def test_session_device_payloads_stay_on_explicit_payloads_surface() -> None:
     assert not hasattr(litestar_auth_module, "RefreshSessionListResponse")
     assert not hasattr(controllers_module, "RefreshSessionRead")
     assert not hasattr(controllers_module, "RefreshSessionListResponse")
+
+
+def test_lazy_public_modules_report_their_export_inventory() -> None:
+    """Lazy re-export modules expose stable names to interactive discovery."""
+    assert set(controllers_module.__all__) <= set(dir(controllers_module))
+    assert set(models_module.__all__) <= set(dir(models_module))
+    assert set(totp_controller_module.__all__) <= set(dir(totp_controller_module))
 
 
 def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:

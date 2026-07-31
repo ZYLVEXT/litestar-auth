@@ -450,6 +450,25 @@ def test_extract_login_session_id_reads_auth_cookie() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "cookies",
+    [
+        (),
+        (SimpleNamespace(key="other", value="session-token"),),
+        (SimpleNamespace(key="litestar_auth", value=""),),
+    ],
+)
+def test_extract_login_session_id_rejects_missing_or_empty_cookie(cookies: object) -> None:
+    """TOTP step-up bookkeeping ignores absent and empty session cookies."""
+    assert (
+        totp_session_handlers_module._extract_login_session_id(
+            SimpleNamespace(cookies=cookies),
+            cookie_name="litestar_auth",
+        )
+        is None
+    )
+
+
 async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_only_hashes(
     client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
 ) -> None:

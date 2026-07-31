@@ -8,6 +8,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
@@ -39,7 +40,11 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
 )
 from litestar_auth._plugin.exception_handlers import client_exception_handler
-from litestar_auth.authentication import LitestarAuthMiddleware
+from litestar_auth._plugin.extensions import (
+    ExtensionAuthenticationProviderContribution,
+    ExtensionRegistrationContributions,
+)
+from litestar_auth.authentication import LitestarAuthMiddleware, LitestarProviderBinding
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
@@ -607,6 +612,91 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     session_getter = middleware_config.get_request_session
     assert isinstance(session_getter, partial)
     assert session_getter.func.__name__ == "get_or_create_scoped_session"
+
+
+def test_provider_binding_builder_rejects_unsupported_core_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ambient authentication accepts only typed cookie session backends."""
+    plugin = LitestarAuth(_minimal_config())
+    backend = AuthenticationBackend(
+        name="unsupported",
+        transport=cast("Any", object()),
+        strategy=cast("Any", object()),
+    )
+    monkeypatch.setattr(plugin, "_session_bound_backends", lambda _session: [backend])
+    monkeypatch.setattr(plugin, "_build_user_manager", lambda _session, **_kwargs: object())
+
+    with pytest.raises(ConfigurationError, match="not supported by litestar-auth 7"):
+        plugin._build_provider_bindings(cast("Any", object()))
+
+
+def test_provider_binding_builder_rejects_invalid_extension_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Extension descriptors and runtime bindings must agree exactly."""
+    plugin = LitestarAuth(_minimal_config())
+    monkeypatch.setattr(plugin, "_session_bound_backends", lambda _session: [])
+    monkeypatch.setattr(plugin, "_build_user_manager", lambda _session, **_kwargs: object())
+
+    contributions = ExtensionRegistrationContributions(
+        authentication_providers=[
+            ExtensionAuthenticationProviderContribution(
+                extension_name="alpha",
+                name="alpha",
+                profile="service",
+                factory=lambda _session: object(),
+            ),
+        ],
+    )
+    monkeypatch.setattr(plugin, "_extension_contributions", lambda: contributions)
+    with pytest.raises(ConfigurationError, match="must return LitestarProviderBinding"):
+        plugin._build_provider_bindings(cast("Any", object()))
+
+    contributions.authentication_providers[0] = ExtensionAuthenticationProviderContribution(
+        extension_name="alpha",
+        name="alpha",
+        profile="service",
+        factory=lambda _session: LitestarProviderBinding(
+            provider=cast("Any", SimpleNamespace(name="other", profile="service")),
+            load_principal=lambda _context: object(),
+        ),
+    )
+    with pytest.raises(ConfigurationError, match="name/profile does not match"):
+        plugin._build_provider_bindings(cast("Any", object()))
+
+
+def test_provider_binding_builder_rejects_duplicate_extension_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider names and profiles remain unique across runtime bindings."""
+    plugin = LitestarAuth(_minimal_config())
+    monkeypatch.setattr(plugin, "_session_bound_backends", lambda _session: [])
+    monkeypatch.setattr(plugin, "_build_user_manager", lambda _session, **_kwargs: object())
+
+    def contribution(profile: str) -> ExtensionAuthenticationProviderContribution:
+        provider = SimpleNamespace(name="duplicate", profile=profile)
+        return ExtensionAuthenticationProviderContribution(
+            extension_name=profile,
+            name="duplicate",
+            profile=profile,
+            factory=lambda _session: LitestarProviderBinding(
+                provider=cast("Any", provider),
+                load_principal=lambda _context: object(),
+            ),
+        )
+
+    monkeypatch.setattr(
+        plugin,
+        "_extension_contributions",
+        lambda: ExtensionRegistrationContributions(
+            authentication_providers=[contribution("one"), contribution("two")],
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match="must be unique"):
+        plugin._build_provider_bindings(cast("Any", object()))
+
+
+def test_plugin_totp_backend_resolves_primary_backend() -> None:
+    """The plugin TOTP controller uses the configured primary backend."""
+    plugin = LitestarAuth(_minimal_config())
+
+    assert plugin._totp_backend().name == "primary"
 
 
 def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(

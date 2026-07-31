@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
@@ -195,3 +196,14 @@ async def test_authenticate_publishes_human_principal_and_safe_evidence() -> Non
     assert provider.authenticated_user is user
     assert provider.load_principal(result.context) is user
     assert "opaque-token" not in repr(result)
+
+    with pytest.raises(RuntimeError, match="principal is unavailable"):
+        provider.load_principal(replace(result.context, evidence=replace(result.context.evidence, provider="other")))
+
+
+def test_load_principal_rejects_calls_before_authentication() -> None:
+    """Principal projection is unavailable until the provider authenticates a request."""
+    provider = _provider(Invalid(FailureCode.INVALID))
+
+    with pytest.raises(RuntimeError, match="principal is unavailable"):
+        provider.load_principal(cast("Any", object()))

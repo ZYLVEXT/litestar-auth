@@ -21,6 +21,7 @@ import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth._plugin.startup as startup_module
+import litestar_auth.config as config_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME, AuthExtension
 from litestar_auth._permissions import StaticRolePermissionResolver, permissions_grant
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
@@ -78,6 +79,13 @@ DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
 OrganizationConfig = plugin_config_module.OrganizationConfig
 StartupBackendTemplate = plugin_config_module.StartupBackendTemplate
+
+
+def test_unset_config_sentinel_is_false() -> None:
+    """The omitted-value sentinel remains false in legacy truth checks."""
+    assert not config_module.UNSET
+
+
 TotpConfig = plugin_config_module.TotpConfig
 require_session_maker = plugin_config_module.require_session_maker
 

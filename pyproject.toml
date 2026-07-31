@@ -316,7 +316,7 @@ sigterm = true
 
 [tool.coverage.report]
 precision = 1
-fail_under = 98
+fail_under = 100
 include = ["litestar_auth/*"]
 omit = [
     "tests/*",

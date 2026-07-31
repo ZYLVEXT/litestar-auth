@@ -19,6 +19,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth._manager._protocols as manager_protocols_module
 import litestar_auth._plugin._protocols as plugin_protocols_module
+import litestar_auth._plugin.security_policy as security_policy_module
 import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
@@ -138,6 +139,38 @@ def _load_reloaded_alias(
             monkeypatch=monkeypatch,
             after_exec=_remove_declared_tables,
         )
+
+
+@pytest.mark.parametrize(
+    ("module_name", "export_name"),
+    [
+        ("_totp_primitive", "verify_totp"),
+        ("_totp_recovery", "generate_totp_recovery_codes"),
+        ("_totp_stores", "InMemoryTotpEnrollmentStore"),
+        ("_totp_verify", "verify_totp_with_store"),
+    ],
+)
+def test_totp_definition_modules_load_under_coverage(
+    module_name: str,
+    export_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOTP modules remain importable when coverage starts after plugin discovery."""
+    module = load_reloaded_test_alias(
+        alias_name=f"litestar_auth._coverage_{module_name.removeprefix('_')}",
+        source_path=REPO_ROOT / "litestar_auth" / f"{module_name}.py",
+        monkeypatch=monkeypatch,
+    )
+
+    assert hasattr(module, export_name)
+
+
+def test_plugin_security_policy_inventory_is_stable() -> None:
+    """The plugin exposes its single managed TOTP storage policy."""
+    policies = security_policy_module._iter_plugin_security_policies()
+
+    assert len(policies) == 1
+    assert policies[0].key == "totp_secret_storage"
 
 
 def test_types_module_preserves_protocol_exports() -> None:

@@ -2560,6 +2560,26 @@ async def test_endpoint_rate_limit_omits_oversize_identifier_before_hashing(
     assert hashed_values == ["10.0.0.1"]
 
 
+async def test_endpoint_rate_limit_omits_oversize_trusted_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The final bounded-key guard rejects oversize identities from any extractor."""
+    monkeypatch.setattr(
+        ratelimit_endpoint_module,
+        "_extract_email",
+        AsyncMock(return_value="a" * (EMAIL_MAX_LENGTH + 1)),
+    )
+    limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="ip_email",
+        namespace="login",
+    )
+
+    key = await limiter.build_key(_build_request())
+
+    assert key == f"login:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
+
+
 async def test_endpoint_rate_limit_reset_uses_key_without_email_when_body_has_no_identifier() -> None:
     """Reset delegates to the backend using only the host hash when identity is absent."""
     backend = AsyncMock()

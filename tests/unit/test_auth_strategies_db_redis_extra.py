@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from authweave_core import Invalid
+from authweave_core import Invalid, Unavailable
+from sqlalchemy.exc import SQLAlchemyError
 
 from litestar_auth.authentication.strategy.base import SessionBindable
-from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy, DatabaseTokenStrategyConfig
 from litestar_auth.authentication.strategy.redis import (
     RedisClientProtocol,
     RedisTokenStrategy,
@@ -75,6 +77,31 @@ def test_database_token_strategy_with_session_clones_configuration() -> None:
     assert cloned.max_age == strategy.max_age
     assert cloned.refresh_max_age == strategy.refresh_max_age
     assert cloned.token_bytes == strategy.token_bytes
+
+
+def test_database_token_strategy_rejects_config_mixed_with_options() -> None:
+    """Construction accepts either the config object or keyword options."""
+    config = DatabaseTokenStrategyConfig(
+        session=cast("Any", _FakeSession()),
+        token_hash_secret="test-token-hash-secret-1234567890-1234567890",
+    )
+
+    with pytest.raises(ValueError, match="either DatabaseTokenStrategyConfig"):
+        DatabaseTokenStrategy(  # ty: ignore[no-matching-overload]
+            config=config,
+            session=cast("Any", _FakeSession()),
+        )
+
+
+async def test_database_token_strategy_maps_database_failures_to_unavailable() -> None:
+    """Database lookup failures become a typed provider outage."""
+    strategy = DatabaseTokenStrategy(
+        session=cast("Any", _FakeSession()),
+        token_hash_secret="test-token-hash-secret-1234567890-1234567890",
+    )
+    strategy._resolve_access_token = AsyncMock(side_effect=SQLAlchemyError())
+
+    assert isinstance(await strategy.authenticate_token("token", _DummyUserManager()), Unavailable)
 
 
 def test_database_token_strategy_is_session_bindable() -> None:

@@ -23,6 +23,7 @@ from litestar_auth.controllers._auth_helpers import (
     _LOGIN_EMAIL_MAX_LENGTH,
     _LOGIN_USERNAME_MAX_LENGTH,
     _resolve_access_token_session_id,
+    _validate_manual_cookie_auth_contract,
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
@@ -144,6 +145,33 @@ def test_resolve_cookie_transport_returns_cookie_transport() -> None:
     )
 
     assert _resolve_cookie_transport(backend) is transport
+
+
+def test_resolve_cookie_transport_rejects_non_cookie_transport() -> None:
+    """Manual controller assembly fails closed on unsupported transports."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=cast("Any", object()),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.raises(ConfigurationError, match="requires CookieTransport"):
+        _resolve_cookie_transport(backend)
+
+
+def test_manual_cookie_auth_contract_ignores_non_cookie_transport() -> None:
+    """The manual CSRF contract applies only to cookie authentication."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=cast("Any", object()),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    _validate_manual_cookie_auth_contract(
+        backend,
+        csrf_protection_managed_externally=False,
+        unsafe_testing=False,
+    )
 
 
 def test_logout_guard_raises_not_authorized_when_no_credentials() -> None:
