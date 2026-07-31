@@ -49,12 +49,21 @@
   GitHub release, and publishes each package through its own protected PyPI environment.
 - All distributions require Python `>=3.12,<3.15`.
 
+### CI
+
+- Enforced 100% statement and branch coverage across the 3,156-test `litestar-auth` suite.
+- Added Codecov coverage flags and components for all three distributions plus per-runtime Test
+  Analytics uploads.
+- Replaced the deprecated Node 20 Codecov test-results action with the unified Node 24
+  `codecov-action` v7 upload path.
+
 ### Documentation
 
 - Reworked the repository homepage around the three-package topology, human/machine trust
   boundary, runnable first use, explicit non-goals, and current project artwork.
 - Replaced the migration guide with an operational 6.x-to-7.0 inventory, cutover, verification,
   and rollback procedure.
+- Refined the shared project mark for clear rendering in the documentation header and favicon.
 
 ## 6.0.0 (2026-07-28)
 
