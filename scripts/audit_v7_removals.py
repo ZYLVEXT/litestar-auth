@@ -7,9 +7,20 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-TEXT_SUFFIXES = frozenset(
-    {".cfg", ".conf", ".csv", ".env", ".ini", ".json", ".md", ".py", ".sql", ".toml", ".yaml", ".yml"}
-)
+TEXT_SUFFIXES = frozenset({
+    ".cfg",
+    ".conf",
+    ".csv",
+    ".env",
+    ".ini",
+    ".json",
+    ".md",
+    ".py",
+    ".sql",
+    ".toml",
+    ".yaml",
+    ".yml",
+})
 PATTERNS = (
     ("removed import", re.compile(r"\b(?:JWTStrategy|BearerTransport|ApiKeyConfig|ApiKeyTransport)\b")),
     (

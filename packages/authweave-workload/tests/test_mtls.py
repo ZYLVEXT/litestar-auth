@@ -27,7 +27,8 @@ def test_valid_client_certificate_is_canonicalized_without_private_material() ->
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Root")])
     ca = (
-        x509.CertificateBuilder()
+        x509
+        .CertificateBuilder()
         .subject_name(ca_name)
         .issuer_name(ca_name)
         .public_key(ca_key.public_key())
@@ -55,7 +56,8 @@ def test_valid_client_certificate_is_canonicalized_without_private_material() ->
     leaf_key = ec.generate_private_key(ec.SECP256R1())
     leaf_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "workload")])
     leaf = (
-        x509.CertificateBuilder()
+        x509
+        .CertificateBuilder()
         .subject_name(leaf_name)
         .issuer_name(ca_name)
         .public_key(leaf_key.public_key())
@@ -127,7 +129,8 @@ def test_valid_client_certificate_is_canonicalized_without_private_material() ->
     other_key = ec.generate_private_key(ec.SECP256R1())
     other_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Other Root")])
     other_ca = (
-        x509.CertificateBuilder()
+        x509
+        .CertificateBuilder()
         .subject_name(other_name)
         .issuer_name(other_name)
         .public_key(other_key.public_key())
@@ -179,7 +182,8 @@ def test_certificate_validation_rejects_encoding_time_and_stale_revocation() -> 
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Root")])
     ca = (
-        x509.CertificateBuilder()
+        x509
+        .CertificateBuilder()
         .subject_name(ca_name)
         .issuer_name(ca_name)
         .public_key(ca_key.public_key())
