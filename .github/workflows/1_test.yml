@@ -185,6 +185,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
+          disable_search: true
           fail_ci_if_error: true
           files: coverage.xml
           flags: litestar-auth
@@ -193,12 +194,14 @@ jobs:
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
+          disable_search: true
           fail_ci_if_error: true
-          file: test-results.junit.xml
+          files: test-results.junit.xml
           flags: py-${{ matrix.python-version }}-${{ matrix.os }}
           name: py-${{ matrix.python-version }}-${{ matrix.os }}
+          report_type: test_results
           use_oidc: true
 
   workspace-packages:
@@ -257,6 +260,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
+          disable_search: true
           fail_ci_if_error: true
           files: packages/${{ matrix.package }}/coverage.xml
           flags: ${{ matrix.package }}
@@ -265,10 +269,12 @@ jobs:
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
+          disable_search: true
           fail_ci_if_error: true
-          file: packages/${{ matrix.package }}/test-results.junit.xml
+          files: packages/${{ matrix.package }}/test-results.junit.xml
           flags: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
           name: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
+          report_type: test_results
           use_oidc: true
