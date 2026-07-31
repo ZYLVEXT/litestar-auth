@@ -1,0 +1,45 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 100%
+        threshold: 0%
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+
+comment:
+  layout: "header, diff, flags, components, files"
+  require_base: true
+  require_head: true
+
+flag_management:
+  individual_flags:
+    - name: litestar-auth
+      paths:
+        - litestar_auth/**
+      carryforward: false
+    - name: authweave-core
+      paths:
+        - packages/authweave-core/authweave_core/**
+      carryforward: false
+    - name: authweave-workload
+      paths:
+        - packages/authweave-workload/authweave_workload/**
+      carryforward: false
+
+component_management:
+  individual_components:
+    - component_id: litestar_auth
+      name: litestar-auth
+      paths:
+        - litestar_auth/**
+    - component_id: authweave_core
+      name: authweave-core
+      paths:
+        - packages/authweave-core/authweave_core/**
+    - component_id: authweave_workload
+      name: authweave-workload
+      paths:
+        - packages/authweave-workload/authweave_workload/**

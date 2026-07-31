@@ -13,6 +13,7 @@ on:
       - "README.md"
       - "tests/**"
       - ".pre-commit-config.yaml"
+      - "codecov.yml"
       - "pyproject.toml"
       - "uv.lock"
       - "justfile"
@@ -25,6 +26,7 @@ on:
       - "README.md"
       - "tests/**"
       - ".pre-commit-config.yaml"
+      - "codecov.yml"
       - "pyproject.toml"
       - "uv.lock"
       - "justfile"
@@ -175,18 +177,17 @@ jobs:
           --cov-branch
           --cov-report=term-missing
           --cov-report=xml
-          --cov-fail-under=98
+          --cov-fail-under=100
           --junitxml=test-results.junit.xml
           -o junit_family=legacy
           -n auto
 
-      # Codecov flags: ^[\w.\-]{1,45}$ (alphanumeric, _, -, .); see https://docs.codecov.com/docs/flags
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           fail_ci_if_error: true
           files: coverage.xml
-          flags: ${{ matrix.os }}
+          flags: litestar-auth
           name: py-${{ matrix.python-version }}-${{ matrix.os }}
           use_oidc: true
 
@@ -248,9 +249,19 @@ jobs:
           COVERAGE_PROCESS_START=pyproject.toml uv run --no-sync pytest \
             --cov="$module" \
             --cov-branch \
+            --cov-report=xml \
             --cov-fail-under=100 \
             --junitxml=test-results.junit.xml \
             -o junit_family=legacy
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          fail_ci_if_error: true
+          files: packages/${{ matrix.package }}/coverage.xml
+          flags: ${{ matrix.package }}
+          name: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
+          use_oidc: true
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
