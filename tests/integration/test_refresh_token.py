@@ -296,7 +296,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
 
 async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
     """Expired refresh tokens are rejected according to the configured TTL."""
-    app = build_app(session, refresh_max_age=timedelta(seconds=1))
+    app = build_app(session, refresh_max_age=timedelta(minutes=1))
     async with AsyncTestClient(app=app) as test_client:
         login_response = await test_client.post(
             "/auth/login",
@@ -311,7 +311,7 @@ async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
             ),
         )
         assert persisted_refresh_token is not None
-        persisted_refresh_token.created_at = datetime.now(tz=UTC) - timedelta(seconds=5)
+        persisted_refresh_token.created_at = datetime.now(tz=UTC) - timedelta(minutes=5)
         session.commit()
 
         refresh_response = await test_client.post("/auth/refresh", headers=_refresh_headers(refresh_token))
