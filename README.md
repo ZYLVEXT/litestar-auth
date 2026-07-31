@@ -10,6 +10,9 @@
   <a href="https://github.com/ZYLVEXT/litestar-auth/actions/workflows/1_test.yml">
     <img src="https://github.com/ZYLVEXT/litestar-auth/actions/workflows/1_test.yml/badge.svg?branch=main" alt="Tests">
   </a>
+  <a href="https://app.codecov.io/gh/ZYLVEXT/litestar-auth">
+    <img src="https://codecov.io/gh/ZYLVEXT/litestar-auth/branch/main/graph/badge.svg" alt="Codecov coverage">
+  </a>
   <a href="https://pypi.org/project/litestar-auth/">
     <img src="https://img.shields.io/pypi/v/litestar-auth.svg?label=PyPI%20stable" alt="Latest stable release on PyPI">
   </a>

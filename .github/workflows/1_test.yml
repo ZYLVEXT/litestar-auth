@@ -176,6 +176,8 @@ jobs:
           --cov-report=term-missing
           --cov-report=xml
           --cov-fail-under=98
+          --junitxml=test-results.junit.xml
+          -o junit_family=legacy
           -n auto
 
       # Codecov flags: ^[\w.\-]{1,45}$ (alphanumeric, _, -, .); see https://docs.codecov.com/docs/flags
@@ -188,11 +190,24 @@ jobs:
           name: py-${{ matrix.python-version }}-${{ matrix.os }}
           use_oidc: true
 
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        with:
+          fail_ci_if_error: true
+          file: test-results.junit.xml
+          flags: py-${{ matrix.python-version }}-${{ matrix.os }}
+          name: py-${{ matrix.python-version }}-${{ matrix.os }}
+          use_oidc: true
+
   workspace-packages:
     name: ${{ matrix.package }} (${{ matrix.python-version }})
     needs: [prek]
     runs-on: ubuntu-latest
     if: github.event.repository.fork == false
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -233,4 +248,16 @@ jobs:
           COVERAGE_PROCESS_START=pyproject.toml uv run --no-sync pytest \
             --cov="$module" \
             --cov-branch \
-            --cov-fail-under=100
+            --cov-fail-under=100 \
+            --junitxml=test-results.junit.xml \
+            -o junit_family=legacy
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        with:
+          fail_ci_if_error: true
+          file: packages/${{ matrix.package }}/test-results.junit.xml
+          flags: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
+          name: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
+          use_oidc: true
