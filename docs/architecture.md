@@ -22,8 +22,8 @@ public X.509 credential lifecycle, and sender-constrained Resource Server integr
 `authweave-otel` implements the optional observer seam. `authweave-webhooks` and
 `authweave-http-signatures` are message-integrity packages, not authentication providers.
 
-All distributions use coordinated `7.x` versions, require Python
-`>=3.12,<3.15`, and reject cross-major integration. Optional workload
+All distributions use one exact lockstep version, require Python
+`>=3.12,<3.15`, and reject mixed workspace versions. Optional workload
 implementations remain behind `sqlalchemy`, `mtls`, `jwt`, `dpop`, `spiffe`,
 `introspection`, `token-exchange`, `redis`, and `litestar` extras; a base import does not load
 them.

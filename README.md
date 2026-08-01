@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="litestar-auth 7 separates opaque human sessions from sender-constrained workload identity on a shared AuthWeave core">
+  <img src="https://raw.githubusercontent.com/ZYLVEXT/litestar-auth/main/assets/readme/hero.svg" width="100%" alt="litestar-auth 7 separates opaque human sessions from sender-constrained workload identity on a shared AuthWeave core">
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
   <a href="https://pypi.org/project/litestar-auth/">
     <img src="https://img.shields.io/pypi/pyversions/litestar-auth.svg" alt="Supported Python versions">
   </a>
-  <a href="./LICENSE">
+  <a href="https://github.com/ZYLVEXT/litestar-auth/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/ZYLVEXT/litestar-auth.svg" alt="MIT license">
   </a>
 </p>
@@ -40,7 +40,7 @@ of one credential parser.
 | `authweave-webhooks` | Ed25519 Standard Webhooks signing, verification, replay control, and bounded delivery | `uv add 'authweave-webhooks[httpx]'` |
 | `authweave-http-signatures` | RFC 9530/RFC 9421 payment-message integrity after machine authentication | `uv add authweave-http-signatures` |
 
-All six distributions use coordinated `7.x` versions. The dependency direction stays one-way:
+All six distributions use one exact lockstep version. The dependency direction stays one-way:
 
 ```text
 authweave-core
@@ -79,7 +79,7 @@ config = LitestarAuthConfig(
 app = Litestar(plugins=[LitestarAuth(config)])
 ```
 
-The [quickstart](docs/quickstart.md) covers schema requirements and links the runnable
+The [quickstart](https://zylvext.github.io/litestar-auth/quickstart/) covers schema requirements and links the runnable
 registration/login flow. Use `RedisTokenStrategy` with `litestar-auth[redis]` when sessions belong
 in Redis. Both implementations issue opaque server-side access tokens. With
 `LitestarAuthConfig.enable_refresh=True`, they also rotate refresh tokens, revoke replayed chains,
@@ -128,16 +128,16 @@ STS; it does not operate one.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart.md)
-- [Installation and extras](docs/install.md)
-- [Architecture contract](docs/architecture.md)
-- [Security posture](docs/security.md)
-- [Vulnerability reporting](SECURITY.md)
-- [Version 7 migration](docs/migration.md)
-- [Changelog](CHANGELOG.md)
-- [Deployment reference](docs/deployment.md)
-- [Contributing](docs/contributing.md)
+- [Quickstart](https://zylvext.github.io/litestar-auth/quickstart/)
+- [Installation and extras](https://zylvext.github.io/litestar-auth/install/)
+- [Architecture contract](https://zylvext.github.io/litestar-auth/architecture/)
+- [Security posture](https://zylvext.github.io/litestar-auth/security/)
+- [Vulnerability reporting](https://github.com/ZYLVEXT/litestar-auth/blob/main/SECURITY.md)
+- [Version 7 migration](https://zylvext.github.io/litestar-auth/migration/)
+- [Changelog](https://github.com/ZYLVEXT/litestar-auth/blob/main/CHANGELOG.md)
+- [Deployment reference](https://zylvext.github.io/litestar-auth/deployment/)
+- [Contributing](https://zylvext.github.io/litestar-auth/contributing/)
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/ZYLVEXT/litestar-auth/blob/main/LICENSE)

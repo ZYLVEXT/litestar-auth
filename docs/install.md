@@ -32,6 +32,6 @@ application.
 `authweave-http-signatures` exposes `redis` and `litestar` extras. `authweave-otel` deliberately
 depends on the OpenTelemetry API only; applications install and configure their chosen SDK/exporter.
 
-The six distributions release in lockstep. Keep integrations on the same `7.x` major line and do
-not combine a v7 extension with a v6 host. Optional-feature imports fail with an actionable extra
-name rather than silently degrading.
+The six distributions release in lockstep. Install the same exact version for every AuthWeave
+distribution in one environment; cross-workspace package metadata enforces this invariant.
+Optional-feature imports fail with an actionable extra name rather than silently degrading.

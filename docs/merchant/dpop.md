@@ -36,7 +36,7 @@ conformance remains an external readiness requirement.
 
 ## Language-neutral vectors
 
-See [`../vectors/dpop/rfc9449/`](../vectors/dpop/rfc9449/). Run:
+See the [RFC 9449 vector manifest](../vectors/dpop/rfc9449/manifest.json). Run:
 
 ```bash
 uv run --package authweave-workload --extra dpop python docs/vectors/dpop/rfc9449/verify_vectors.py

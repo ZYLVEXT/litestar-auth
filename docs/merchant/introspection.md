@@ -22,6 +22,6 @@ separate trust planes.
 
 ## Vectors
 
-See [`../vectors/introspection/rfc7662/`](../vectors/introspection/rfc7662/).
+See the [RFC 7662 vector manifest](../vectors/introspection/rfc7662/manifest.json).
 The live HTTPS AS/RS/Redis matrix is
-[`../../docker/reference/introspection/`](../../docker/reference/introspection/).
+[available in the Docker reference](https://github.com/ZYLVEXT/litestar-auth/tree/main/docker/reference/introspection).

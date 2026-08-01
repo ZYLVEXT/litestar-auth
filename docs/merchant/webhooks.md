@@ -61,7 +61,7 @@ and negative checks.
 
 ## Language-neutral vectors
 
-See [`../vectors/webhooks/v1a/`](../vectors/webhooks/v1a/). Run:
+See the [Standard Webhooks vector manifest](../vectors/webhooks/v1a/manifest.json). Run:
 
 ```bash
 uv run --package authweave-webhooks python docs/vectors/webhooks/v1a/verify_vectors.py

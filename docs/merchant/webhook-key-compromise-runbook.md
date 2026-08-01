@@ -1,9 +1,10 @@
 # Standard Webhooks key-compromise runbook
 
-This runbook covers compromise or suspected compromise of a AuthWeave `v1a`
-Ed25519 private signing key. AuthWeave owns private keys and signing; merchants
-own their trusted public-key documents, refresh path, replay store, and business
-inbox. The security incident commander owns the decision to revoke.
+This runbook covers compromise or suspected compromise of an AuthWeave `v1a`
+Ed25519 private signing key. The producer application owns private-key custody and
+signing behind the AuthWeave signer protocol; merchants own their trusted public-key
+documents, refresh path, replay store, and business inbox. The security incident
+commander owns the decision to revoke.
 
 ## Preconditions
 

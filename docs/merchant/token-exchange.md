@@ -33,4 +33,4 @@ server nonce for the next exchange; a repeated challenge fails instead of
 looping. mTLS and transport failures are never retried.
 
 See [ADR 0010](../adr/0010-outbound-token-exchange.md) and the
-[live HTTPS STS reference](../../docker/reference/token-exchange/).
+[live HTTPS STS reference](https://github.com/ZYLVEXT/litestar-auth/tree/main/docker/reference/token-exchange).

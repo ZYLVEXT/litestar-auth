@@ -34,4 +34,4 @@ Signatures, SPIFFE, and introspection live under [merchant/webhooks](merchant/we
 | Standard Webhooks signing and verification | `authweave-webhooks` |
 | Payment HTTP Message Signatures | `authweave-http-signatures` |
 
-All distributions require Python 3.12–3.14 and use coordinated `7.x` versions.
+All distributions require Python 3.12–3.14 and use one exact lockstep version.

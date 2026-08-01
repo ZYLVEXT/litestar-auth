@@ -1,4 +1,4 @@
-# ADR 0002: Webhook signing keys are per endpoint (or merchant), never shared
+# ADR 0002: Webhook signing keys are isolated per endpoint, owner, and environment
 
 - **Status:** accepted
 - **Date:** 2026-07-31
@@ -18,8 +18,8 @@ merchants must not share signing keys. Sandbox and live never share keys.
 
 ## Consequences
 
-- Library behavior: verifiers require expected environment and endpoint; key documents
-  carry owner/endpoint/environment identity.
+- Library behavior: verifiers require expected environment, owner, and endpoint; key documents
+  carry the same three identity bindings.
 - Application ownership: key ceremony, distribution URL bootstrap, and emergency
   rotation runbooks.
 - Test / vector obligations: environment/endpoint mismatch fail closed; rotation

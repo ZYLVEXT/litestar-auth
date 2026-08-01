@@ -7,8 +7,7 @@ conversion of removed credentials.
 
 ## Upgrade invariants
 
-- Keep every installed AuthWeave distribution on the same `7.x` major line; published workspace
-  releases use one lockstep version.
+- Keep every installed AuthWeave distribution on the same exact published workspace version.
 - Do not run a v7 Litestar extension inside a v6 host or mix Extension SDK major versions.
 - Do not accept an old credential and reinterpret it as a v7 session or certificate identity.
 - Keep human and machine routes on separate provider profiles.

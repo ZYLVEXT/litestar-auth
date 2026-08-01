@@ -59,5 +59,5 @@ domain and termination-boundary allowlists, and resolves
 
 ## Vectors and smoke
 
-See [`../vectors/spiffe/x509-svid/`](../vectors/spiffe/x509-svid/) and
+See the [X.509-SVID vector manifest](../vectors/spiffe/x509-svid/manifest.json) and
 `sh docker/reference/spiffe/verify.sh`.
