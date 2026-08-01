@@ -13,7 +13,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "${REPO_ROOT}"
-$COMPOSE up -d --wait
+$COMPOSE up -d --wait --build
 $COMPOSE cp token-exchange-mtls:/certs/ca.crt "${CERT_DIR}/ca.crt"
 $COMPOSE cp token-exchange-mtls:/certs/client.crt "${CERT_DIR}/client.crt"
 $COMPOSE cp token-exchange-mtls:/certs/client.key "${CERT_DIR}/client.key"

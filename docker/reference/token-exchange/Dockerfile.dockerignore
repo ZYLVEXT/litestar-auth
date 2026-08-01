@@ -1,0 +1,9 @@
+*
+!LICENSE
+!README.md
+!pyproject.toml
+!uv.lock
+!litestar_auth/
+!litestar_auth/**
+!packages/
+!packages/**
