@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 #
 # Run the same checks locally; CI uses prek after `uv sync` (see .github/workflows/1_test.yml):
-#   uv sync --frozen --all-extras --group dev
+#   uv sync --frozen --all-packages --all-extras --group dev
 #   prek run --show-diff-on-failure --color=always --all-files
 #
 exclude: ^(uv.lock|.vscode/)

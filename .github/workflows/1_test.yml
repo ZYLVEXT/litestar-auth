@@ -10,6 +10,7 @@ on:
       - "examples/**"
       - "litestar_auth/**"
       - "packages/**"
+      - "docker/**"
       - "README.md"
       - "tests/**"
       - ".pre-commit-config.yaml"
@@ -23,6 +24,7 @@ on:
       - "examples/**"
       - "litestar_auth/**"
       - "packages/**"
+      - "docker/**"
       - "README.md"
       - "tests/**"
       - ".pre-commit-config.yaml"
@@ -89,7 +91,7 @@ jobs:
             venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-
 
       - name: Install the project
-        run: uv sync --frozen --all-extras --group dev
+        run: uv sync --frozen --all-packages --all-extras --group dev
 
       - name: Save .venv cache (prek / uv run hooks)
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -152,7 +154,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       - name: Install the project
-        run: uv sync --frozen --all-extras --group dev
+        run: uv sync --frozen --all-packages --all-extras --group dev
 
       # Install the coverage subprocess startup hook so pytest-cov measures
       # import-time class/function definitions in modules that pytest-cov
@@ -206,6 +208,36 @@ jobs:
           report_type: test_results
           use_oidc: true
 
+  release-dry-run:
+    name: Workspace release dry-run
+    needs: [prek]
+    runs-on: ubuntu-latest
+    if: github.event.repository.fork == false
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.0"
+          python-version: "3.12"
+          enable-cache: true
+          prune-cache: true
+          cache-python: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and smoke-test every release distribution
+        env:
+          RELEASE_DIST: ${{ runner.temp }}/release-dist
+          SOURCE_DATE_EPOCH: "0"
+        run: |
+          uv sync --frozen --all-packages --all-extras --group dev
+          uv run --no-sync python scripts/release_artifacts.py build --dist-dir "$RELEASE_DIST"
+          uv run --no-sync python scripts/release_artifacts.py smoke --dist-dir "$RELEASE_DIST"
+
   workspace-packages:
     name: ${{ matrix.package }} (${{ matrix.python-version }})
     needs: [prek]
@@ -220,6 +252,9 @@ jobs:
         package:
           - authweave-core
           - authweave-workload
+          - authweave-otel
+          - authweave-webhooks
+          - authweave-http-signatures
         python-version:
           - "3.12"
           - "3.13"
@@ -242,12 +277,9 @@ jobs:
         shell: bash
         run: |
           uv sync --frozen --all-packages --all-extras --group dev
-          cd "packages/${{ matrix.package }}"
-          if [ "${{ matrix.package }}" = "authweave-core" ]; then
-            module=authweave_core
-          else
-            module=authweave_workload
-          fi
+          package="${{ matrix.package }}"
+          cd "packages/${package}"
+          module="${package//-/_}"
           uv run --no-sync python -c "import pathlib, sysconfig; p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'coverage_subprocess.pth'; p.write_text('import coverage; coverage.process_startup()\n')"
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check --preview .
@@ -281,3 +313,50 @@ jobs:
           name: py-${{ matrix.python-version }}-ubuntu-${{ matrix.package }}
           report_type: test_results
           use_oidc: true
+
+  docker-reference:
+    name: Docker reference (Linux)
+    needs: [prek]
+    runs-on: ubuntu-latest
+    if: github.event.repository.fork == false
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.0"
+          python-version: "3.14"
+          enable-cache: true
+          prune-cache: true
+          cache-python: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Machine Docker reference smoke
+        run: sh docker/reference/verify.sh
+
+      - name: SPIRE Workload API reference smoke
+        run: sh docker/reference/spiffe/verify.sh
+
+      - name: Observability Docker reference smoke
+        run: sh docker/reference/observability/verify.sh
+
+      - name: DPoP Redis Docker reference smoke
+        run: sh docker/reference/dpop/verify.sh
+
+      - name: Sender-constrained introspection Docker reference smoke
+        run: sh docker/reference/introspection/verify.sh
+
+      - name: Sender-constrained token exchange Docker reference smoke
+        run: sh docker/reference/token-exchange/verify.sh
+
+      - name: FAPI Message Signing Docker reference smoke
+        run: sh docker/reference/fapi/verify.sh
+
+      - name: HTTP signatures Redis Docker reference smoke
+        run: sh docker/reference/http-signatures/verify.sh
+
+      - name: Standard Webhooks Redis and non-Python reference smoke
+        run: sh docker/reference/webhooks/verify.sh

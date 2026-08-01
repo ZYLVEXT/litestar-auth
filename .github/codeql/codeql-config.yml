@@ -12,7 +12,8 @@ query-filters:
 
 paths:
   - litestar_auth
+  - packages
 
 paths-ignore:
-  - tests/**
+  - "**/tests/**"
   - docs/**

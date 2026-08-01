@@ -127,6 +127,13 @@ jobs:
             packages/authweave-core/authweave_core/__init__.py \
             packages/authweave-workload/pyproject.toml \
             packages/authweave-workload/authweave_workload/__init__.py \
+            packages/authweave-otel/pyproject.toml \
+            packages/authweave-otel/authweave_otel/__init__.py \
+            packages/authweave-otel/authweave_otel/telemetry.py \
+            packages/authweave-webhooks/pyproject.toml \
+            packages/authweave-webhooks/authweave_webhooks/__init__.py \
+            packages/authweave-http-signatures/pyproject.toml \
+            packages/authweave-http-signatures/authweave_http_signatures/__init__.py \
             uv.lock
           git commit -m "bump: version ${{ steps.bump.outputs.previous_version }} → ${{ steps.bump.outputs.version }}"
           git tag "${{ steps.bump.outputs.version }}"

@@ -184,3 +184,6 @@ TECHSTACK.md
 .cursor/
 .codacy/
 .codegraph/
+
+# Docker reference ephemeral key material
+docker/reference/http-signatures/_runtime/

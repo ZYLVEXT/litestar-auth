@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "7.0.0"
+version = "7.1.0"
 description = "Opaque human sessions for Litestar on the AuthWeave authentication stack"
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,7 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
-    "authweave-core>=7.0.0,<8.0",
+    "authweave-core>=7.1.0,<8.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
     "idna>=3.18,<4.0",
@@ -42,7 +42,7 @@ tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
 redis = ["redis>=8.1.0,<9.0.0"]
-oauth = ["httpx-oauth>=0.17.0,<0.18.0", "cryptography>=49.0.0"]
+oauth = ["httpx>=0.28.1,<1.0", "httpx-oauth>=0.17.0,<0.18.0", "cryptography>=49.0.0"]
 totp = ["cryptography>=49.0.0"]
 jwt = ["cryptography>=49.0.0"]
 all = ["litestar-auth[redis,oauth,totp,jwt]"]
@@ -82,7 +82,7 @@ include = ["litestar_auth", "tests"]
 
 [tool.deptry]
 experimental_namespace_package = true
-exclude = [".uv-cache", ".venv", "dist", "docker", "examples", "packages", "site", "tests"]
+exclude = [".uv-cache", ".venv", "dist", "docker", "docs/vectors", "examples", "packages", "site", "tests"]
 
 [tool.deptry.per_rule_ignores]
 DEP001 = ["uvicorn"]
@@ -103,6 +103,7 @@ members = ["packages/*"]
 line-length = 120
 # Assume Python 3.12 to be compatible with typing.
 target-version = "py312"
+preview = true
 # Exclude a variety of commonly ignored directories.
 exclude = [
     ".git",
@@ -121,7 +122,6 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.ruff.lint]
-preview = true
 select = ["ALL"]
 ignore = [
     "line-too-long",  # handled by ruff-format
@@ -133,11 +133,28 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+"tests/unit/test_fapi.py" = ["unused-async"]
 "docker/reference/*.py" = [
     "assert",
     "builtin-argument-shadowing",
     "hardcoded-bind-all-interfaces",
     "hardcoded-password-func-arg",
+    "import-outside-top-level",
+    "no-self-use",
+    "pytest-composite-assertion",
+    "try-consider-else",
+    "undocumented-public-class",
+    "undocumented-public-function",
+    "undocumented-public-init",
+    "undocumented-public-method",
+    "unused-method-argument",
+]
+"docker/reference/**/*.py" = [
+    "assert",
+    "builtin-argument-shadowing",
+    "hardcoded-bind-all-interfaces",
+    "hardcoded-password-func-arg",
+    "implicit-namespace-package",
     "import-outside-top-level",
     "no-self-use",
     "pytest-composite-assertion",
@@ -209,6 +226,43 @@ convention = "google"
     "too-many-statements-in-try-clause",
     "multiple-with-statements",
 ]
+"packages/authweave-workload/authweave_workload/introspection.py" = [
+    "any-type",
+    "complex-structure",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "import-outside-top-level",
+    "multiple-with-statements",
+    "no-self-use",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+    "raise-within-try",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-return-statements",
+    "too-many-statements",
+    "too-many-statements-in-try-clause",
+    "typing-only-standard-library-import",
+]
+"packages/authweave-workload/authweave_workload/token_exchange.py" = [
+    "complex-structure",
+    "import-outside-top-level",
+    "raise-within-try",
+    "too-many-branches",
+    "too-many-statements",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-workload/authweave_workload/spiffe.py" = [
+    "any-type",
+    "import-outside-top-level",
+]
+"packages/authweave-workload/tests/test_spiffe.py" = [
+    "import-outside-top-level",
+    "pytest-raises-too-broad",
+    "too-many-arguments",
+    "too-many-statements",
+    "unused-async",
+]
 "packages/authweave-workload/authweave_workload/jwt.py" = [
     "any-type",
     "complex-structure",
@@ -223,12 +277,135 @@ convention = "google"
     "too-many-locals",
     "too-many-statements",
 ]
+"packages/authweave-workload/authweave_workload/dpop.py" = [
+    "any-type",
+    "complex-structure",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "no-self-use",
+    "too-many-return-statements",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-statements",
+    "typing-only-standard-library-import",
+]
+"packages/authweave-workload/authweave_workload/redis_store.py" = [
+    "docstring-missing-exception",
+]
+"packages/authweave-workload/tests/test_dpop.py" = [
+    "complex-structure",
+    "import-outside-top-level",
+    "pytest-raises-too-broad",
+    "raw-string-in-exception",
+    "raise-vanilla-args",
+    "too-many-arguments",
+    "too-many-statements",
+    "unused-async",
+]
+"packages/authweave-workload/tests/test_introspection.py" = [
+    "any-type",
+    "complex-structure",
+    "import-outside-top-level",
+    "magic-value-comparison",
+    "mutable-class-default",
+    "non-self-return-type",
+    "pytest-raises-too-broad",
+    "raw-string-in-exception",
+    "raise-vanilla-args",
+    "too-many-arguments",
+    "too-many-statements",
+    "unused-async",
+]
+"packages/authweave-workload/tests/test_token_exchange.py" = [
+    "any-type",
+    "async-function-with-timeout",
+    "pytest-raises-too-broad",
+    "too-many-arguments",
+    "unused-async",
+]
 "packages/authweave-workload/authweave_workload/delegation.py" = [
     "complex-structure",
     "docstring-missing-returns",
     "too-many-arguments",
     "too-many-return-statements",
 ]
+"packages/authweave-webhooks/authweave_webhooks/duplicate.py" = ["docstring-missing-exception"]
+"packages/authweave-webhooks/authweave_webhooks/headers.py" = [
+    "docstring-missing-exception",
+    "typing-only-standard-library-import",
+]
+"packages/authweave-webhooks/authweave_webhooks/keys.py" = ["typing-only-first-party-import"]
+"packages/authweave-webhooks/authweave_webhooks/models.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+]
+"packages/authweave-webhooks/authweave_webhooks/redis_store.py" = ["docstring-missing-exception"]
+"packages/authweave-webhooks/authweave_webhooks/sender.py" = [
+    "docstring-missing-exception",
+    "magic-value-comparison",
+]
+"packages/authweave-webhooks/authweave_webhooks/signer.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "typing-only-third-party-import",
+]
+"packages/authweave-webhooks/authweave_webhooks/verify.py" = [
+    "docstring-missing-exception",
+    "no-self-use",
+    "too-many-arguments",
+]
+"packages/authweave-webhooks/tests/**/*.py" = [
+    "any-type",
+    "async-function-with-timeout",
+    "docstring-extraneous-exception",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "magic-value-comparison",
+    "mutable-class-default",
+    "no-self-use",
+    "pytest-composite-assertion",
+    "pytest-raises-ambiguous-pattern",
+    "too-many-arguments",
+    "typing-only-first-party-import",
+    "typing-only-standard-library-import",
+    "typing-only-third-party-import",
+    "undocumented-public-package",
+]
+"packages/authweave-http-signatures/authweave_http_signatures/binding.py" = ["docstring-missing-exception"]
+"packages/authweave-http-signatures/authweave_http_signatures/errors.py" = ["docstring-missing-returns"]
+"packages/authweave-http-signatures/authweave_http_signatures/litestar_adapter.py" = ["docstring-missing-exception"]
+"packages/authweave-http-signatures/authweave_http_signatures/models.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+]
+"packages/authweave-http-signatures/authweave_http_signatures/nonce.py" = ["docstring-missing-exception"]
+"packages/authweave-http-signatures/authweave_http_signatures/proxy_target.py" = ["docstring-missing-exception"]
+"packages/authweave-http-signatures/authweave_http_signatures/signer.py" = [
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "too-many-arguments",
+    "typing-only-third-party-import",
+]
+"packages/authweave-http-signatures/authweave_http_signatures/verify.py" = [
+    "any-type",
+    "complex-structure",
+    "docstring-missing-exception",
+    "docstring-missing-returns",
+    "no-self-use",
+    "too-many-arguments",
+    "too-many-locals",
+    "too-many-statements",
+    "typing-only-standard-library-import",
+    "typing-only-third-party-import",
+]
+"packages/authweave-http-signatures/tests/test_http_signatures.py" = [
+    "import-outside-top-level",
+    "magic-value-comparison",
+    "pytest-raises-too-broad",
+    "too-many-statements",
+    "unused-async",
+]
+"docs/vectors/**/verify_vectors.py" = ["implicit-namespace-package"]
 # S105: JWT audience strings ("litestar-auth:verify", etc.) and secret-role
 # setting names are public protocol/catalog constants, not credentials.
 "litestar_auth/_secret_roles.py" = ["hardcoded-password-string"]
@@ -364,6 +541,13 @@ version_files = [
     "packages/authweave-core/authweave_core/__init__.py:__version__",
     "packages/authweave-workload/pyproject.toml:version",
     "packages/authweave-workload/authweave_workload/__init__.py:__version__",
+    "packages/authweave-otel/pyproject.toml:version",
+    "packages/authweave-otel/authweave_otel/__init__.py:__version__",
+    "packages/authweave-otel/authweave_otel/telemetry.py:__version__",
+    "packages/authweave-webhooks/pyproject.toml:version",
+    "packages/authweave-webhooks/authweave_webhooks/__init__.py:__version__",
+    "packages/authweave-http-signatures/pyproject.toml:version",
+    "packages/authweave-http-signatures/authweave_http_signatures/__init__.py:__version__",
 ]
 
 [build-system]
@@ -373,3 +557,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["litestar_auth"]
 artifacts = ["litestar_auth/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["litestar_auth", "tests"]

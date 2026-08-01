@@ -46,8 +46,19 @@ jobs:
 
       - name: Yank on PyPI (manual)
         run: |
-          echo "::notice title=PyPI Yank::Yank release ${{ inputs.tag }} manually: https://pypi.org/manage/project/litestar-auth/releases/"
-          echo "PyPI does not provide a public API for yanking; use the link above, find version ${{ inputs.tag }}, and click Yank."
+          set -euo pipefail
+          projects=(
+            authweave-core
+            litestar-auth
+            authweave-workload
+            authweave-otel
+            authweave-webhooks
+            authweave-http-signatures
+          )
+          for project in "${projects[@]}"; do
+            echo "::notice title=PyPI Yank ($project)::Yank ${{ inputs.tag }} manually: https://pypi.org/manage/project/$project/releases/"
+          done
+          echo "Yank the version from every project before deleting the GitHub release/tag; follow docs/releasing.md."
 
       - name: Delete GitHub release and tag
         run: |

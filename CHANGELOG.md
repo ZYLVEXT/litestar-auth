@@ -1,3 +1,31 @@
+## 7.1.0 (2026-08-01)
+
+### Added
+
+- Added framework-neutral machine-authentication contracts, workload DPoP, SPIFFE, introspection,
+  delegation, payment-authorization details, and strict outbound token exchange.
+- Added non-authoritative OpenTelemetry observation, Ed25519 Standard Webhooks integrity, and the
+  RFC 9421 payment HTTP Message Signatures profile as independently installable distributions.
+- Added strict FAPI message-signing client primitives for PAR, JAR, JARM, and signed user info.
+
+### Security
+
+- Required durable replay and shared authentication state for multi-worker production profiles.
+- Revalidated workload owners during lifecycle writes and serialized final-superuser demotion.
+- Required tag/version equality, publication of `authweave-core` before dependent distributions,
+  and isolated installation smoke tests for every release wheel.
+
+### Packaging
+
+- Expanded the lockstep workspace and release inventory from three to six distributions.
+- Declared the HTTP-signature profile's runtime `typing-extensions` dependency and restricted the
+  `litestar-auth` source distribution to its package and tests.
+
+### CI
+
+- Installed and scanned all workspace packages in verification, narrowed CodeQL test exclusions,
+  and made test markers consistent across the workspace.
+
 ## 7.0.0 (2026-07-31)
 
 ### Breaking

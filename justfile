@@ -5,7 +5,7 @@
 # Idempotent: rewrites the .pth file each run because `uv sync --frozen` may
 # rebuild the venv from scratch.
 setup:
-    uv sync --frozen --all-extras --group dev
+    uv sync --frozen --all-packages --all-extras --group dev
     @uv run python -c "import sysconfig, pathlib; \
         p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'coverage_subprocess.pth'; \
         p.write_text('import coverage; coverage.process_startup()\n'); \
@@ -42,9 +42,8 @@ audit:
 
 # Build source and wheel distributions for the lockstep workspace release.
 build:
-    uv build --package authweave-core --no-sources
-    uv build --package litestar-auth --no-sources
-    uv build --package authweave-workload --no-sources
+    uv run --no-sync python scripts/release_artifacts.py build --dist-dir dist
+    uv run --no-sync python scripts/release_artifacts.py smoke --dist-dir dist
 
 # Serve documentation locally (Zensical, config in zensical.toml).
 docs-serve:
