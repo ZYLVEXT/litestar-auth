@@ -723,12 +723,12 @@ async def test_oauth_callback_returns_existing_user_when_provider_identity_alrea
     user_a = await create_local_user(
         state,
         email="first@example.com",
-        password="password-aaaa",
+        password="valid-password-aaaa",
     )
     await create_local_user(
         state,
         email="second@example.com",
-        password="password-bbbb",
+        password="valid-password-bbbb",
     )
     async with state.session_maker() as session:
         user_db = SQLAlchemyUserDatabase(

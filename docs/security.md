@@ -14,7 +14,8 @@ authentication downgrade by construction.
 
 ## Human controls
 
-- Argon2id is the supported password hashing baseline. Unsupported stored hashes fail closed and
+- Argon2id is the supported password hashing baseline. The default password policy accepts 15 to
+  128 characters and imposes no composition rules. Unsupported stored hashes fail closed and
   require reset.
 - Access tokens are opaque, keyed-digest indexed, bounded, and server-side. Optional refresh tokens
   use the same storage posture.
@@ -30,6 +31,37 @@ authentication downgrade by construction.
   multi-worker deployments must use a shared durable implementation such as Redis.
 - Public authentication and TOTP endpoints use bounded rate-limit presets by default. Deployments
   with more than one worker must use shared rate-limit and account-state stores.
+
+The 15-character default follows the single-factor password minimum in
+[NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b/authenticators/#passwords). Applications
+must also reject commonly used, expected, compromised, and deployment-specific passwords. The new
+floor applies when a password is chosen or replaced; current-password proof remains non-empty and
+bounded so accounts with a previously accepted credential can authenticate and rotate it.
+Custom `msgspec` payloads use `litestar_auth.schemas.UserPasswordField` for a newly chosen password
+and `CurrentPasswordField` for current-password proof.
+`LitestarAuthConfig.password_validator_factory` is the deployment hook: return a synchronous
+validator that raises `ValueError` for a blocked password, backed by an application-owned,
+locally available, versioned corpus. Refresh that corpus out of band; do not add a remote lookup to
+the authentication request path. The library intentionally ships neither a network dependency nor
+a static list that would become stale.
+
+Passwords and manually entered TOTP codes are not phishing-resistant. The native human stack makes
+no NIST AAL2 or AAL3 claim. Until native WebAuthn support is explicitly added, deployments that
+require phishing-resistant human authentication should require it at a reviewed external identity
+provider and federate through the OAuth Authorization Code + PKCE integration. OAuth federation
+does not establish an assurance level by itself; the deployment owns IdP policy and assurance
+validation.
+
+TOTP interoperability is deliberately narrow:
+
+| Enrollment algorithm | Support | Authenticator requirement |
+| --- | --- | --- |
+| `SHA256` | Supported and default | Must honor `algorithm=SHA256` in the `otpauth://` URI. |
+| `SHA512` | Supported | Must honor `algorithm=SHA512` in the `otpauth://` URI. |
+| `SHA1` | Unsupported | Re-enroll with a supported algorithm; no downgrade is available. |
+
+Authenticator clients that ignore the URI algorithm and silently generate SHA1 codes are
+unsupported. Verify the chosen client during deployment; do not enable SHA1 for compatibility.
 
 ## Workload controls
 

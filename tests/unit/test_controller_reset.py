@@ -127,7 +127,7 @@ async def test_reset_password_maps_invalid_reset_token_error_to_client_exception
     status_code, payload = await _invoke_reset_password(
         controller,
         token="invalid-token",
-        password="new-password",
+        password="new-valid-password",
         user_manager=manager,
     )
 
@@ -143,7 +143,7 @@ async def test_reset_password_maps_invalid_password_error_to_client_exception() 
     status_code, payload = await _invoke_reset_password(
         controller,
         token="valid-token",
-        password="weak",
+        password="schema-valid-but-rejected",
         user_manager=manager,
     )
 
@@ -159,7 +159,7 @@ async def test_reset_password_maps_replay_store_failure_to_service_unavailable()
     status_code, payload = await _invoke_reset_password(
         controller,
         token="valid-token",
-        password="new-password",
+        password="new-valid-password",
         user_manager=manager,
     )
 
@@ -304,7 +304,7 @@ async def test_reset_password_invalid_token_increments_rate_limit() -> None:
     status_code, payload = await _invoke_reset_password(
         controller,
         token="invalid-token",
-        password="new-password",
+        password="new-valid-password",
         user_manager=manager,
     )
 
@@ -334,7 +334,7 @@ async def test_reset_password_success_resets_rate_limit() -> None:
     status_code, payload = await _invoke_reset_password(
         controller,
         token="valid-token",
-        password="new-password",
+        password="new-valid-password",
         user_manager=manager,
     )
 

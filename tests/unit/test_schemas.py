@@ -479,7 +479,7 @@ def test_login_credentials_preserve_identifier_length_limits() -> None:
         (UserCreate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (CustomRegistrationSchema, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (LoginCredentials, "password", 1),
-        (ResetPassword, "password", 1),
+        (ResetPassword, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (TotpEnableRequest, "password", 1),
     ],
 )
@@ -499,7 +499,7 @@ def test_password_payload_metadata_tracks_runtime_password_policy(
     ("schema_type", "field_name", "other_fields", "max_length"),
     [
         (VerifyToken, "token", {}, 2048),
-        (ResetPassword, "token", {"password": "new-password"}, 2048),
+        (ResetPassword, "token", {"password": "new-valid-password"}, 2048),
         (TotpVerifyRequest, "pending_token", {"code": "123456"}, 2048),
         (TotpConfirmEnableRequest, "enrollment_token", {"code": "123456"}, 2048),
     ],

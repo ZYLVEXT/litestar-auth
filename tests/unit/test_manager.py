@@ -263,7 +263,7 @@ def _build_user(
         id=uuid4(),
         email=email,
         username=username,
-        hashed_password=password_helper.hash("test-password"),
+        hashed_password=password_helper.hash("valid-test-password"),
     )
 
 
@@ -279,7 +279,7 @@ async def test_create_hashes_password_and_calls_register_hook() -> None:
     user_db.get.return_value = created_user
     user_db.update.return_value = verified_user
 
-    result = await manager.create(UserCreate(email=created_user.email, password="test-password"))
+    result = await manager.create(UserCreate(email=created_user.email, password="valid-test-password"))
 
     assert result is created_user
     user_db.get_by_email.assert_awaited_once_with(created_user.email)
@@ -287,8 +287,8 @@ async def test_create_hashes_password_and_calls_register_hook() -> None:
     create_payload = user_db.create.await_args.args[0]
     assert create_payload["email"] == created_user.email
     assert "password" not in create_payload
-    assert create_payload["hashed_password"] != "test-password"
-    assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
+    assert create_payload["hashed_password"] != "valid-test-password"
+    assert password_helper.verify("valid-test-password", create_payload["hashed_password"]) is True
     assert manager.registered_users == [created_user]
     assert len(manager.registration_events) == 1
     event_user, token = manager.registration_events[0]
@@ -306,7 +306,7 @@ async def test_create_logs_register_event(caplog: pytest.LogCaptureFixture) -> N
     user_db.create.return_value = created_user
 
     with caplog.at_level(logging.INFO, logger=manager_logger.name):
-        result = await manager.create(UserCreate(email=created_user.email, password="test-password"))
+        result = await manager.create(UserCreate(email=created_user.email, password="valid-test-password"))
 
     assert result is created_user
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
@@ -338,7 +338,7 @@ async def test_hook_bus_subscriber_records_service_dispatched_events_without_sub
         events.append(event)
 
     unsubscribe = manager.hook_bus.subscribe(record)
-    result = await manager.create(UserCreate(email=created_user.email, password="test-password"))
+    result = await manager.create(UserCreate(email=created_user.email, password="valid-test-password"))
     unsubscribe()
 
     assert result is created_user
@@ -362,7 +362,7 @@ async def test_create_register_hook_token_is_valid_for_verify_flow() -> None:
     user_db.get.return_value = created_user
     user_db.update.return_value = verified_user
 
-    await manager.create(UserCreate(email=created_user.email, password="test-password"))
+    await manager.create(UserCreate(email=created_user.email, password="valid-test-password"))
 
     assert len(manager.registration_events) == 1
     _, token = manager.registration_events[0]
@@ -390,7 +390,7 @@ async def test_create_rejects_duplicate_email() -> None:
     user_db.get_by_email.return_value = _build_user(password_helper)
 
     with pytest.raises(UserAlreadyExistsError):
-        await manager.create(UserCreate(email="duplicate@example.com", password="test-password"))
+        await manager.create(UserCreate(email="duplicate@example.com", password="valid-test-password"))
 
 
 def test_normalize_email_strips_lowercases_and_validates() -> None:
@@ -1119,7 +1119,7 @@ def test_manager_init_without_explicit_password_helper_uses_current_default_help
     assert manager.password_helper is manager.policy.password_helper
     assert len(manager.password_helper.password_hash.hashers) == 1
     assert manager.password_helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-    assert manager.password_helper.verify("test-password", "not-a-password-hash") is False
+    assert manager.password_helper.verify("valid-test-password", "not-a-password-hash") is False
 
 
 def test_manager_init_without_explicit_password_helper_uses_named_default_factory(
@@ -1158,12 +1158,12 @@ async def test_create_password_validation_success_and_failure() -> None:
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
 
-    result = await manager.create(UserCreate(email=created_user.email, password="strong-pass-12"))
+    result = await manager.create(UserCreate(email=created_user.email, password="strong-password"))
 
     assert result is created_user
     user_db.create.assert_awaited_once()
 
-    with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
+    with pytest.raises(InvalidPasswordError, match="at least 15 characters"):
         await manager.create(UserCreate(email="user@example.com", password="short"))
 
 
@@ -1190,7 +1190,7 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
 
     payload: dict[str, object] = {
         "email": created_user.email,
-        "password": "test-password",
+        "password": "valid-test-password",
         "is_active": False,
         "roles": ["admin"],
     }
@@ -1215,7 +1215,7 @@ async def test_create_safe_false_rejects_undeclared_fields_by_default() -> None:
 
     payload: dict[str, object] = {
         "email": created_user.email,
-        "password": "test-password",
+        "password": "valid-test-password",
         "nickname": "visible",
         "is_active": False,
         "is_verified": True,
@@ -1242,7 +1242,7 @@ async def test_create_safe_false_accepts_declared_custom_fields() -> None:
 
     payload: dict[str, object] = {
         "email": created_user.email,
-        "password": "test-password",
+        "password": "valid-test-password",
         "nickname": "visible",
         "is_active": False,
         "is_verified": True,
@@ -1269,7 +1269,7 @@ async def test_create_allow_privileged_true_preserves_current_privilege_fields()
 
     payload: dict[str, object] = {
         "email": created_user.email,
-        "password": "test-password",
+        "password": "valid-test-password",
         "is_active": False,
         "is_verified": True,
         "roles": [" Billing ", "admin", "ADMIN"],
@@ -1294,10 +1294,10 @@ async def test_authenticate_returns_none_for_unknown_email_or_wrong_password() -
     existing_user = _build_user(password_helper)
     user_db.get_by_field.side_effect = [None, existing_user, existing_user]
 
-    assert await manager.authenticate("missing@example.com", "test-password") is None
+    assert await manager.authenticate("missing@example.com", "valid-test-password") is None
     assert await manager.authenticate(existing_user.email, "wrong-password") is None
 
-    result = await manager.authenticate(existing_user.email, "test-password")
+    result = await manager.authenticate(existing_user.email, "valid-test-password")
 
     assert result is existing_user
     assert manager.logged_in_users == []
@@ -1317,7 +1317,7 @@ async def test_authenticate_upgrades_password_hash_when_deprecated() -> None:
         return (True, "upgraded-hash")
 
     with patch.object(password_helper, "verify_and_update", side_effect=verify_and_update):
-        result = await manager.authenticate(user.email, "test-password")
+        result = await manager.authenticate(user.email, "valid-test-password")
 
     assert result is upgraded_user
     user_db.update.assert_awaited_once_with(user, {"hashed_password": "upgraded-hash"})
@@ -1341,7 +1341,7 @@ async def test_authenticate_logs_password_upgrade_skip_on_update_failure(
         caplog.at_level(logging.WARNING, logger=manager_logger.name),
         patch.object(password_helper, "verify_and_update", side_effect=verify_and_update),
     ):
-        assert await manager.authenticate(user.email, "test-password") is user
+        assert await manager.authenticate(user.email, "valid-test-password") is user
 
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
     assert "password_upgrade_skipped" in events
@@ -1361,10 +1361,10 @@ async def test_authenticate_verifies_dummy_hash_for_unknown_email() -> None:
         return (False, None)
 
     with patch.object(password_helper, "verify_and_update", side_effect=record_verify_and_update):
-        assert await manager.authenticate("missing@example.com", "test-password") is None
+        assert await manager.authenticate("missing@example.com", "valid-test-password") is None
 
     assert len(verify_calls) == 1
-    assert verify_calls[0][0] == "test-password"
+    assert verify_calls[0][0] == "valid-test-password"
     assert verify_calls[0][1] == await manager._get_dummy_hash()
 
 
@@ -1504,7 +1504,7 @@ async def test_authenticate_logs_success_and_failure(caplog: pytest.LogCaptureFi
     user_db.get_by_field.side_effect = [existing_user, existing_user]
 
     with caplog.at_level(logging.INFO, logger=manager_logger.name):
-        assert await manager.authenticate(existing_user.email, "test-password") is existing_user
+        assert await manager.authenticate(existing_user.email, "valid-test-password") is existing_user
         assert await manager.authenticate(existing_user.email, "wrong-password") is None
 
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
@@ -1726,13 +1726,13 @@ async def test_create_mixedcase_email_allows_lowercase_login() -> None:
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
 
-    await manager.create(UserCreate(email="MixedCase@Example.com", password="test-password"))
+    await manager.create(UserCreate(email="MixedCase@Example.com", password="valid-test-password"))
 
     user_db.get_by_email.assert_awaited_once_with("mixedcase@example.com")
 
     user_db.get_by_field.reset_mock()
     user_db.get_by_field.return_value = created_user
-    assert await manager.authenticate("mixedcase@example.com", "test-password") is created_user
+    assert await manager.authenticate("mixedcase@example.com", "valid-test-password") is created_user
     user_db.get_by_field.assert_awaited_once_with("email", "mixedcase@example.com")
 
 
@@ -1744,7 +1744,7 @@ async def test_authenticate_username_mode_uses_get_by_field() -> None:
     existing_user = _build_user(password_helper, username="alice")
     user_db.get_by_field.return_value = existing_user
 
-    result = await manager.authenticate("  Alice  ", "test-password")
+    result = await manager.authenticate("  Alice  ", "valid-test-password")
 
     assert result is existing_user
     user_db.get_by_field.assert_awaited_once_with("username", "alice")
@@ -1758,7 +1758,7 @@ async def test_authenticate_explicit_login_identifier_overrides_manager_default(
     existing_user = _build_user(password_helper)
     user_db.get_by_field.return_value = existing_user
 
-    result = await manager.authenticate(existing_user.email, "test-password", login_identifier="email")
+    result = await manager.authenticate(existing_user.email, "valid-test-password", login_identifier="email")
 
     assert result is existing_user
     user_db.get_by_field.assert_awaited_once_with("email", existing_user.email)
@@ -1783,12 +1783,14 @@ async def test_authenticate_delegates_to_lifecycle_service_with_effective_mode(
     user = _build_user(password_helper)
 
     with patch.object(manager.users, "authenticate", new=AsyncMock(return_value=user)) as authenticate:
-        result = await manager.authenticate("lookup-value", "test-password", login_identifier=call_login_identifier)
+        result = await manager.authenticate(
+            "lookup-value", "valid-test-password", login_identifier=call_login_identifier
+        )
 
     assert result is user
     authenticate.assert_awaited_once_with(
         "lookup-value",
-        "test-password",
+        "valid-test-password",
         login_identifier=expected_mode,
         dummy_hash=await manager._get_dummy_hash(),
         logger=manager_logger,
@@ -1814,7 +1816,7 @@ async def test_reset_password_hashes_new_password_and_calls_hook(monkeypatch: py
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
@@ -1822,14 +1824,14 @@ async def test_reset_password_hashes_new_password_and_calls_hook(monkeypatch: py
 
     monkeypatch.setattr("litestar_auth._manager.account_tokens._run_password_op", run_sync_spy)
 
-    result = await manager.reset_password(reset_token, "new-password")
+    result = await manager.reset_password(reset_token, "new-valid-password")
 
     assert result is updated_user
     assert offloaded == ["hash"]
     user_db.update.assert_awaited_once()
     update_payload = user_db.update.await_args.args[1]
-    assert update_payload["hashed_password"] != "new-password"
-    assert password_helper.verify("new-password", update_payload["hashed_password"]) is True
+    assert update_payload["hashed_password"] != "new-valid-password"
+    assert password_helper.verify("new-valid-password", update_payload["hashed_password"]) is True
     assert manager.reset_users == [updated_user]
 
 
@@ -1839,14 +1841,14 @@ async def test_reset_password_consumes_jti_and_rejects_replay() -> None:
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
     user = _build_user(password_helper)
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     # user_db.get returns the *unchanged* user on replay, so the password fingerprint still
     # matches: any rejection on the second call is the jti denylist, not fingerprint rotation.
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
-    assert await manager.reset_password(reset_token, "new-password") is updated_user
+    assert await manager.reset_password(reset_token, "new-valid-password") is updated_user
 
     with pytest.raises(InvalidResetPasswordTokenError):
         await manager.reset_password(reset_token, "another-password")
@@ -1858,13 +1860,13 @@ async def test_reset_password_replay_store_allows_only_one_concurrent_reset() ->
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
     user = _build_user(password_helper)
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
     results = await asyncio.gather(
-        manager.reset_password(reset_token, "new-password"),
+        manager.reset_password(reset_token, "new-valid-password"),
         manager.reset_password(reset_token, "another-password"),
         return_exceptions=True,
     )
@@ -1886,7 +1888,7 @@ async def test_reset_password_fails_before_update_when_replay_store_is_full() ->
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
     with pytest.raises(TokenError):
-        await manager.reset_password(reset_token, "new-password")
+        await manager.reset_password(reset_token, "new-valid-password")
 
     user_db.update.assert_not_awaited()
 
@@ -1936,7 +1938,7 @@ async def test_reset_password_rejects_invalid_token() -> None:
     manager = TrackingUserManager(user_db, password_helper)
 
     with pytest.raises(InvalidResetPasswordTokenError):
-        await manager.reset_password("not-a-valid-token", "new-password")
+        await manager.reset_password("not-a-valid-token", "new-valid-password")
 
 
 async def test_reset_password_rejects_token_with_wrong_audience() -> None:
@@ -1953,7 +1955,7 @@ async def test_reset_password_rejects_token_with_wrong_audience() -> None:
     )
 
     with pytest.raises(InvalidResetPasswordTokenError):
-        await manager.reset_password(token, "new-password")
+        await manager.reset_password(token, "new-valid-password")
 
 
 async def test_reset_password_rejects_weak_password_before_hashing() -> None:
@@ -1965,7 +1967,7 @@ async def test_reset_password_rejects_weak_password_before_hashing() -> None:
     user_db.get.return_value = user
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
-    with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
+    with pytest.raises(InvalidPasswordError, match="at least 15 characters"):
         await manager.reset_password(reset_token, "short")
 
     user_db.update.assert_not_awaited()
@@ -1988,7 +1990,7 @@ async def test_reset_password_validation_failure_does_not_consume_token() -> Non
     user_db.update.return_value = updated_user
     reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
-    with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
+    with pytest.raises(InvalidPasswordError, match="at least 15 characters"):
         await manager.reset_password(reset_token, "short")
 
     assert await manager.reset_password(reset_token, "strong-password") is updated_user
@@ -2015,12 +2017,12 @@ async def test_verify_and_account_token_flows_delegate_to_account_tokens_service
         assert await manager.verify("verify-token") is expected_user
         assert await manager.request_verify_token("user@example.com") is None
         assert await manager.forgot_password("user@example.com") is None
-        assert await manager.reset_password("reset-token", "new-password") is expected_user
+        assert await manager.reset_password("reset-token", "new-valid-password") is expected_user
 
     verify.assert_awaited_once_with("verify-token")
     request_verify_token.assert_awaited_once_with("user@example.com")
     forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=await manager._get_dummy_hash())
-    reset_password.assert_awaited_once_with("reset-token", "new-password")
+    reset_password.assert_awaited_once_with("reset-token", "new-valid-password")
 
 
 async def test_forgot_password_token_includes_password_fingerprint() -> None:
@@ -2055,7 +2057,7 @@ async def test_reset_password_token_valid_before_password_change() -> None:
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     user_db.get_by_email.return_value = user
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
@@ -2063,7 +2065,7 @@ async def test_reset_password_token_valid_before_password_change() -> None:
     await manager.forgot_password(user.email)
     _, token = manager.forgot_password_events[0]
     assert token is not None
-    result = await manager.reset_password(token, "new-password")
+    result = await manager.reset_password(token, "new-valid-password")
 
     assert result is updated_user
     user_db.update.assert_awaited_once()
@@ -2087,7 +2089,7 @@ async def test_reset_password_token_invalid_after_password_change() -> None:
     user_db.get.return_value = changed_user
 
     with pytest.raises(InvalidResetPasswordTokenError):
-        await manager.reset_password(token, "new-password")
+        await manager.reset_password(token, "new-valid-password")
 
     user_db.update.assert_not_awaited()
 
@@ -2110,7 +2112,7 @@ def test_on_after_register_duplicate_docstring_mentions_timing_oracle() -> None:
 
 def test_require_password_length_allows_minimum_length() -> None:
     """The built-in validator accepts passwords that meet the minimum length."""
-    require_password_length("123456789012")
+    require_password_length("123456789012345")
 
 
 def test_require_password_length_rejects_password_longer_than_maximum() -> None:
@@ -2121,7 +2123,7 @@ def test_require_password_length_rejects_password_longer_than_maximum() -> None:
 
 def test_require_password_length_rejects_password_shorter_than_minimum() -> None:
     """The built-in validator rejects passwords shorter than the minimum length."""
-    with pytest.raises(ValueError, match="at least 12 characters"):
+    with pytest.raises(ValueError, match="at least 15 characters"):
         require_password_length("short")
 
 
@@ -2148,7 +2150,7 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
     updated_user = ExampleUser(
         id=user.id,
         email="updated@example.com",
-        hashed_password=password_helper.hash("new-password"),
+        hashed_password=password_helper.hash("new-valid-password"),
         is_active=True,
         is_verified=False,
     )
@@ -2159,7 +2161,7 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
         await manager.update(UserUpdate(email="taken@example.com"), user)
 
     result = await manager.update(
-        AdminUserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-valid-password"),
         user,
     )
 
@@ -2168,9 +2170,9 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
     update_payload = user_db.update.await_args.args[1]
     assert update_payload["email"] == "updated@example.com"
     assert update_payload["is_verified"] is False
-    assert update_payload["hashed_password"] != "new-password"
+    assert update_payload["hashed_password"] != "new-valid-password"
     assert "password" not in update_payload
-    assert password_helper.verify("new-password", update_payload["hashed_password"]) is True
+    assert password_helper.verify("new-valid-password", update_payload["hashed_password"]) is True
     assert len(manager.request_verify_events) == 1
     event_user, token = manager.request_verify_events[0]
     assert event_user is updated_user
@@ -2311,7 +2313,7 @@ async def test_update_rejects_weak_password_before_hashing() -> None:
     manager = TrackingUserManager(user_db, password_helper, password_validator=require_password_length)
     user = _build_user(password_helper)
 
-    with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
+    with pytest.raises(InvalidPasswordError, match="at least 15 characters"):
         await manager.update(AdminUserUpdate(password="short"), user)
 
     user_db.update.assert_not_awaited()
@@ -2390,7 +2392,7 @@ async def test_reset_password_rejects_invalid_token_subject(
 
     monkeypatch.setattr(manager._account_token_security, "decode_token", lambda *_args, **_kwargs: decode_payload)
     with pytest.raises(InvalidResetPasswordTokenError):
-        await manager.reset_password("token", "new-password")
+        await manager.reset_password("token", "new-valid-password")
 
 
 async def test_reset_password_raises_invalid_token_when_subject_user_missing(
@@ -2409,7 +2411,7 @@ async def test_reset_password_raises_invalid_token_when_subject_user_missing(
         lambda *_args, **_kwargs: {"sub": str(user_id)},
     )
     with pytest.raises(InvalidResetPasswordTokenError):
-        await manager.reset_password("token", "new-password")
+        await manager.reset_password("token", "new-valid-password")
 
 
 async def test_get_user_and_payload_from_token_raises_user_not_exists_error() -> None:
@@ -2571,7 +2573,7 @@ def test_validate_password_propagates_invalid_password_error() -> None:
 
     manager = TrackingUserManager(user_db, password_helper, password_validator=raise_invalid)
     with pytest.raises(InvalidPasswordError, match="nope"):
-        manager.policy.validate_password("any-password")
+        manager.policy.validate_password("any-valid-password")
 
 
 async def test_invalidate_all_tokens_skips_when_no_backends() -> None:

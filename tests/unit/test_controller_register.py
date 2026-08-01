@@ -182,7 +182,7 @@ async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -
 
     status_code, payload = await _invoke_register(
         controller,
-        {"email": "existing@example.com", "password": "valid-password"},
+        {"email": "existing@example.com", "password": "valid-test-password"},
         user_manager=manager,
     )
 
@@ -201,7 +201,7 @@ async def test_register_invalid_password_returns_400_and_increments_rate_limit()
 
     status_code, payload = await _invoke_register(
         controller,
-        {"email": "u@example.com", "password": "valid-password"},
+        {"email": "u@example.com", "password": "valid-test-password"},
         user_manager=manager,
     )
 
@@ -220,7 +220,7 @@ async def test_register_authorization_error_returns_generic_400_and_increments_r
 
     status_code, payload = await _invoke_register(
         controller,
-        {"email": "blocked@example.com", "password": "valid-password"},
+        {"email": "blocked@example.com", "password": "valid-test-password"},
         user_manager=manager,
     )
 
@@ -261,7 +261,7 @@ async def test_register_success_without_rate_limit_no_increment() -> None:
 
     status_code, payload = await _invoke_register(
         controller,
-        {"email": "norate@example.com", "password": "valid-password"},
+        {"email": "norate@example.com", "password": "valid-test-password"},
         user_manager=manager,
     )
 
@@ -301,7 +301,7 @@ async def test_register_invalid_password_without_rate_limit_keeps_generic_error_
 
     status_code, payload = await _invoke_register(
         controller,
-        {"email": "u@example.com", "password": "valid-password"},
+        {"email": "u@example.com", "password": "valid-test-password"},
         user_manager=manager,
     )
 

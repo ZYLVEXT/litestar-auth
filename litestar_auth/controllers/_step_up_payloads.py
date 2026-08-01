@@ -5,7 +5,6 @@ from __future__ import annotations
 import msgspec
 
 import litestar_auth._schema_fields as schema_fields
-from litestar_auth.schemas import UserPasswordField  # ruff: ignore[typing-only-first-party-import]
 
 
 class _AdminCurrentPasswordStepUpRequest(
@@ -16,7 +15,7 @@ class _AdminCurrentPasswordStepUpRequest(
 ):
     """Reusable current-password field contract for privileged admin step-up bodies."""
 
-    current_password: UserPasswordField | None = None
+    current_password: schema_fields.PasswordField | None = None
 
 
 class AdminUserDeleteStepUpRequest(_AdminCurrentPasswordStepUpRequest):

@@ -142,7 +142,7 @@ def _build_user(
     password_helper: PasswordHelper,
     *,
     email: str = "user@example.com",
-    password: str = "test-password",
+    password: str = "valid-test-password",
 ) -> ExampleUser:
     """Create a test user with a hashed password.
 
@@ -161,7 +161,7 @@ async def test_manager_crud_facade_characterization() -> None:
     updated_user = replace(
         created_user,
         email="updated@example.com",
-        hashed_password=password_helper.hash("new-password"),
+        hashed_password=password_helper.hash("new-valid-password"),
         is_verified=False,
     )
     listed_users = [created_user, _build_user(password_helper, email="second@example.com")]
@@ -171,11 +171,11 @@ async def test_manager_crud_facade_characterization() -> None:
     user_db.list_users.return_value = (listed_users, len(listed_users))
     user_db.update.return_value = updated_user
 
-    created = await manager.create(UserCreate(email="USER@example.com", password="test-password"))
+    created = await manager.create(UserCreate(email="USER@example.com", password="valid-test-password"))
     fetched = await manager.get(updated_user.id)
     listed, total = await manager.list_users(offset=1, limit=2)
     updated = await manager.update(
-        AdminUserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-valid-password"),
         created_user,
     )
     await manager.delete(created_user.id)
@@ -188,13 +188,13 @@ async def test_manager_crud_facade_characterization() -> None:
     create_payload = user_db.create.await_args.args[0]
     assert create_payload["email"] == "user@example.com"
     assert "password" not in create_payload
-    assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
+    assert password_helper.verify("valid-test-password", create_payload["hashed_password"]) is True
     user_db.list_users.assert_awaited_once_with(offset=1, limit=2)
     update_payload = user_db.update.await_args_list[0].args[1]
     assert update_payload["email"] == "updated@example.com"
     assert update_payload["is_verified"] is False
     assert "password" not in update_payload
-    assert password_helper.verify("new-password", update_payload["hashed_password"]) is True
+    assert password_helper.verify("new-valid-password", update_payload["hashed_password"]) is True
     user_db.delete.assert_awaited_once_with(created_user.id)
     assert manager.events == [
         ("register", created_user.id),
@@ -264,7 +264,7 @@ async def test_security_sensitive_updates_invalidate_attached_auth_backends() ->
     updated_user = replace(
         user,
         email="updated@example.com",
-        hashed_password=manager.password_helper.hash("new-password"),
+        hashed_password=manager.password_helper.hash("new-valid-password"),
         is_verified=False,
     )
     invalidate_all_tokens = AsyncMock()
@@ -278,7 +278,7 @@ async def test_security_sensitive_updates_invalidate_attached_auth_backends() ->
     user_db.update.return_value = updated_user
 
     result = await manager.update(
-        AdminUserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-valid-password"),
         user,
     )
 

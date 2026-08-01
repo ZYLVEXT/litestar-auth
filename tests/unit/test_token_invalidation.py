@@ -63,8 +63,8 @@ async def test_manager_reset_password_invalidates_tokens_when_supported() -> Non
             id_parser=UUID,
         ),
     )
-    user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-password"))
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-valid-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
 
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
@@ -74,7 +74,7 @@ async def test_manager_reset_password_invalidates_tokens_when_supported() -> Non
 
     token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
-    result = await manager.reset_password(token, "new-password")
+    result = await manager.reset_password(token, "new-valid-password")
 
     assert result is updated_user
     invalidate.assert_awaited_once_with(updated_user)
@@ -95,7 +95,7 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
         ),
         updatable_fields=frozenset({"email", "password", "bio"}),
     )
-    user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-password"))
+    user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-valid-password"))
 
     invalidate = AsyncMock()
     cast("object", manager).backends = [_Backend(strategy=_Strategy(invalidate_all_tokens=invalidate))]  # ty: ignore[unresolved-attribute]
@@ -116,9 +116,9 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
     invalidate.reset_mock()
 
     # Password change invalidates once.
-    updated_password_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_password_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     user_db.update.return_value = updated_password_user
-    await manager.update(AdminUserUpdate(password="new-password"), user)
+    await manager.update(AdminUserUpdate(password="new-valid-password"), user)
     invalidate.assert_awaited_once_with(updated_password_user)
 
 

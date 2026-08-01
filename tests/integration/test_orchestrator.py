@@ -571,7 +571,7 @@ async def test_plugin_registers_di_middleware_and_generated_controllers(
 
     register_response = await test_client.post(
         "/auth/register",
-        json={"email": "fresh@example.com", "password": "fresh-password"},
+        json={"email": "fresh@example.com", "password": "fresh-valid-password"},
     )
     assert register_response.status_code == HTTP_CREATED
     assert user_db.user_ids_by_email["fresh@example.com"] in user_db.users_by_id
@@ -640,7 +640,7 @@ async def test_plugin_scopes_client_exception_handler_to_auth_routes() -> None:
 
 
 async def test_plugin_enforces_default_minimum_password_length() -> None:
-    """The plugin defaults to rejecting passwords shorter than 12 characters."""
+    """The plugin defaults to rejecting passwords shorter than 15 characters."""
     app, _user_db, _primary_strategy, _secondary_strategy = build_app()
     async with AsyncTestClient(app=app) as client:
         too_short_response = await client.post(
@@ -651,7 +651,7 @@ async def test_plugin_enforces_default_minimum_password_length() -> None:
 
         ok_response = await client.post(
             "/auth/register",
-            json={"email": "ok@example.com", "password": "123456789012"},
+            json={"email": "ok@example.com", "password": "123456789012345"},
         )
         assert ok_response.status_code == HTTP_CREATED
 
@@ -664,6 +664,6 @@ async def test_plugin_allows_overriding_minimum_password_length() -> None:
     async with AsyncTestClient(app=app) as client:
         response = await client.post(
             "/auth/register",
-            json={"email": "override@example.com", "password": "123456789012"},
+            json={"email": "override@example.com", "password": "123456789012345"},
         )
         assert response.status_code == HTTP_CREATED

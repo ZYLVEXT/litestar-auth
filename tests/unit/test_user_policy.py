@@ -149,9 +149,9 @@ def test_validate_password_custom_validator_called() -> None:
             raise _invalid_password_error_cls()(message=msg)
 
     policy = _make_policy(password_validator=reject_short)
-    # Password meets baseline (12+) but fails custom validator (20+)
+    # Password meets baseline (15+) but fails custom validator (20+)
     with pytest.raises(_invalid_password_error_cls(), match="too short"):
-        policy.validate_password("a]b]c]d]e]f]g]")
+        policy.validate_password("a]b]c]d]e]f]g]h]")
 
 
 def test_validate_password_wraps_value_error() -> None:
@@ -170,7 +170,7 @@ def test_validate_password_wraps_baseline_length_error_message() -> None:
     """Baseline password-length failures are normalized into InvalidPasswordError."""
     policy = _make_policy()
 
-    with pytest.raises(_invalid_password_error_cls(), match="at least 12 characters long"):
+    with pytest.raises(_invalid_password_error_cls(), match="at least 15 characters long"):
         policy.validate_password("short-pass")
 
 

@@ -55,8 +55,8 @@ COMPONENT_CONTRACTS = {
     "ChangePasswordRequest": ComponentContract(
         required=frozenset({"current_password", "new_password"}),
         properties={
-            "current_password": PropertyContract(min_length=12, max_length=128),
-            "new_password": PropertyContract(min_length=12, max_length=128),
+            "current_password": PropertyContract(min_length=1, max_length=128),
+            "new_password": PropertyContract(min_length=15, max_length=128),
         },
     ),
     "ForgotPassword": ComponentContract(
@@ -77,7 +77,7 @@ COMPONENT_CONTRACTS = {
     "ResetPassword": ComponentContract(
         required=frozenset({"password", "token"}),
         properties={
-            "password": PropertyContract(min_length=1, max_length=128),
+            "password": PropertyContract(min_length=15, max_length=128),
             "token": PropertyContract(min_length=1, max_length=2048),
         },
     ),
@@ -114,7 +114,7 @@ COMPONENT_CONTRACTS = {
         required=frozenset({"email", "password"}),
         properties={
             "email": PropertyContract(max_length=320, pattern=EMAIL_PATTERN),
-            "password": PropertyContract(min_length=12, max_length=128),
+            "password": PropertyContract(min_length=15, max_length=128),
         },
     ),
     "UserUpdate": ComponentContract(

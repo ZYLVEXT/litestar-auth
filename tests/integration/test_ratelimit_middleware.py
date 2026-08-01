@@ -284,19 +284,19 @@ async def test_login_rate_limit_uses_ip_and_email_key(client: AsyncTestClient[Li
     """Failed login attempts are isolated per email on the same IP."""
     first_response = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     second_response = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     blocked_response = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     other_email_response = await client.post(
         "/auth/login",
-        json={"identifier": "other@example.com", "password": "wrong-password"},
+        json={"identifier": "other@example.com", "password": "wrong-user-password"},
     )
 
     assert first_response.status_code == HTTP_BAD_REQUEST
@@ -318,20 +318,20 @@ async def test_login_budget_exhaustion_does_not_block_change_password(
 
     first_login_failure = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     second_login_failure = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     blocked_login = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
     change_password_failure = await client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+        json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
     )
 
     assert first_login_failure.status_code == HTTP_BAD_REQUEST
@@ -354,21 +354,21 @@ async def test_change_password_budget_exhaustion_does_not_block_login(
     first_change_password_failure = await client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+        json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
     )
     second_change_password_failure = await client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+        json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
     )
     blocked_change_password = await client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+        json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
     )
     login_failure = await client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
 
     assert first_change_password_failure.status_code == HTTP_BAD_REQUEST
@@ -381,15 +381,15 @@ async def test_register_rate_limit_uses_ip_key(client: AsyncTestClient[Litestar]
     """Registration attempts share a single limit per client IP."""
     first_response = await client.post(
         "/auth/register",
-        json={"email": "user@example.com", "password": "new-password"},
+        json={"email": "user@example.com", "password": "new-valid-password"},
     )
     second_response = await client.post(
         "/auth/register",
-        json={"email": "user@example.com", "password": "new-password"},
+        json={"email": "user@example.com", "password": "new-valid-password"},
     )
     blocked_response = await client.post(
         "/auth/register",
-        json={"email": "fresh@example.com", "password": "new-password"},
+        json={"email": "fresh@example.com", "password": "new-valid-password"},
     )
 
     assert first_response.status_code == HTTP_BAD_REQUEST
@@ -468,7 +468,7 @@ async def test_shared_backend_recipe_preserves_login_and_totp_verify_reset_contr
     async with AsyncTestClient(app=app) as client:
         initial_login_failure = await client.post(
             "/auth/login",
-            json={"identifier": "user@example.com", "password": "wrong-password"},
+            json={"identifier": "user@example.com", "password": "wrong-user-password"},
         )
         assert initial_login_failure.status_code == HTTP_BAD_REQUEST
 
@@ -523,7 +523,7 @@ async def test_shared_backend_recipe_preserves_login_and_totp_verify_reset_contr
 
         post_verify_login_failure = await client.post(
             "/auth/login",
-            json={"identifier": "user@example.com", "password": "wrong-password"},
+            json={"identifier": "user@example.com", "password": "wrong-user-password"},
         )
         assert post_verify_login_failure.status_code == HTTP_BAD_REQUEST
 

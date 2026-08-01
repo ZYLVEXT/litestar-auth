@@ -40,7 +40,7 @@ _REPEATED_SECRET_UNIT_LENGTH_FLOOR = MINIMUM_SECRET_LENGTH // 2
 # and ~0.21 for token_urlsafe across the 32-byte outputs this floor targets).
 _MAX_SEQUENTIAL_PAIR_FRACTION = 0.5
 # Shared password-length bounds for built-in validation and schema metadata.
-DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
+DEFAULT_MINIMUM_PASSWORD_LENGTH = 15
 MAX_PASSWORD_LENGTH = 128
 # Small validation margin for JWT time claims (`exp` / `nbf`) to absorb normal clock skew.
 JWT_TIME_CLAIM_LEEWAY_SECONDS = 30

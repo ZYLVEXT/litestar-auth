@@ -56,7 +56,7 @@ class ResetPassword(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unkn
     """Payload used to reset a password with a previously issued token."""
 
     token: schema_fields.LongLivedTokenField
-    password: schema_fields.PasswordField
+    password: schema_fields.UserPasswordField
 
 
 class VerifyToken(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):

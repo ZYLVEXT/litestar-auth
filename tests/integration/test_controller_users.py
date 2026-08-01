@@ -185,21 +185,21 @@ def build_app(
     admin_user = ExampleUser(
         id=uuid4(),
         email="admin@example.com",
-        hashed_password=password_helper.hash("admin-password"),
+        hashed_password=password_helper.hash("valid-admin-password"),
         is_verified=True,
         roles=["admin", "superuser"],
     )
     regular_user = ExampleUser(
         id=uuid4(),
         email="user@example.com",
-        hashed_password=password_helper.hash("user-password"),
+        hashed_password=password_helper.hash("valid-user-password"),
         is_verified=True,
         roles=["member"],
     )
     extra_user = ExampleUser(
         id=uuid4(),
         email="extra@example.com",
-        hashed_password=password_helper.hash("extra-password"),
+        hashed_password=password_helper.hash("extra-valid-password"),
         is_verified=True,
         roles=["support"],
     )
@@ -394,7 +394,7 @@ async def test_me_endpoints_return_public_payload_and_allow_non_privileged_updat
     patch_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"email": "updated-user@example.com", "current_password": "user-password"},
+        json={"email": "updated-user@example.com", "current_password": "valid-user-password"},
     )
 
     assert get_response.status_code == HTTP_OK
@@ -421,7 +421,7 @@ async def test_me_endpoints_return_public_payload_and_allow_non_privileged_updat
     assert stored_user.email == "updated-user@example.com"
     assert stored_user.is_verified is False
     assert stored_user.roles == ["member"]
-    assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
+    assert PasswordHelper().verify("valid-user-password", stored_user.hashed_password) is True
 
 
 async def test_patch_me_rejects_email_change_without_current_password(
@@ -469,17 +469,17 @@ async def test_patch_me_email_reauth_uses_change_password_rate_limit(
         first_response = await test_client.patch(
             "/users/me",
             headers=headers,
-            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+            json={"email": "updated-user@example.com", "current_password": "wrong-user-password"},
         )
         second_response = await test_client.patch(
             "/users/me",
             headers=headers,
-            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+            json={"email": "updated-user@example.com", "current_password": "wrong-user-password"},
         )
         blocked_response = await test_client.patch(
             "/users/me",
             headers=headers,
-            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+            json={"email": "updated-user@example.com", "current_password": "wrong-user-password"},
         )
 
     assert first_response.status_code == HTTP_BAD_REQUEST
@@ -506,7 +506,7 @@ async def test_change_password_rejects_wrong_current_password_and_preserves_hash
     response = await test_client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+        json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
@@ -515,7 +515,7 @@ async def test_change_password_rejects_wrong_current_password_and_preserves_hash
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.hashed_password == original_hash
-    assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
+    assert PasswordHelper().verify("valid-user-password", stored_user.hashed_password) is True
 
 
 async def test_patch_me_rejects_password_and_preserves_hash(
@@ -537,7 +537,7 @@ async def test_patch_me_rejects_password_and_preserves_hash(
     response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"password": "new-password"},
+        json={"password": "new-valid-password"},
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
@@ -546,7 +546,7 @@ async def test_patch_me_rejects_password_and_preserves_hash(
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.hashed_password == original_hash
-    assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
+    assert PasswordHelper().verify("valid-user-password", stored_user.hashed_password) is True
 
 
 async def test_change_password_succeeds_and_revokes_prior_sessions(
@@ -563,7 +563,7 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
     test_client, user_db, _, _, _, regular_user = client
     login_response = await test_client.post(
         "/auth/login",
-        json={"identifier": regular_user.email, "password": "user-password"},
+        json={"identifier": regular_user.email, "password": "valid-user-password"},
     )
     assert login_response.status_code == HTTP_CREATED
     access_token = login_response.cookies.get("litestar_auth")
@@ -575,7 +575,7 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
     response = await test_client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "user-password", "new_password": "rotated-password"},
+        json={"current_password": "valid-user-password", "new_password": "rotated-password"},
     )
     old_access_response = await test_client.get("/users/me", headers=headers)
     old_refresh_response = await test_client.post(
@@ -599,7 +599,7 @@ async def test_change_password_succeeds_and_revokes_prior_sessions(
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert PasswordHelper().verify("rotated-password", stored_user.hashed_password) is True
-    assert PasswordHelper().verify("user-password", stored_user.hashed_password) is False
+    assert PasswordHelper().verify("valid-user-password", stored_user.hashed_password) is False
 
 
 async def test_change_password_rate_limit_returns_429_after_invalid_current_password_attempts(
@@ -618,17 +618,17 @@ async def test_change_password_rate_limit_returns_429_after_invalid_current_pass
         first_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
         second_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
         blocked_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
 
     assert first_response.status_code == HTTP_BAD_REQUEST
@@ -652,28 +652,28 @@ async def test_change_password_rate_limit_resets_after_success(
         first_failure = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
         success = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "user-password", "new_password": "rotated-password"},
+            json={"current_password": "valid-user-password", "new_password": "rotated-password"},
         )
         rotated_headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
         post_reset_first_failure = await test_client.post(
             "/users/me/change-password",
             headers=rotated_headers,
-            json={"current_password": "wrong-password", "new_password": "second-rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "second-rotated-password"},
         )
         post_reset_second_failure = await test_client.post(
             "/users/me/change-password",
             headers=rotated_headers,
-            json={"current_password": "wrong-password", "new_password": "second-rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "second-rotated-password"},
         )
         blocked_response = await test_client.post(
             "/users/me/change-password",
             headers=rotated_headers,
-            json={"current_password": "wrong-password", "new_password": "second-rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "second-rotated-password"},
         )
 
     assert first_failure.status_code == HTTP_BAD_REQUEST
@@ -708,17 +708,17 @@ async def test_change_password_redis_rate_limit_returns_429_after_invalid_curren
         first_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
         second_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
         blocked_response = await test_client.post(
             "/users/me/change-password",
             headers=headers,
-            json={"current_password": "wrong-password", "new_password": "rotated-password"},
+            json={"current_password": "wrong-user-password", "new_password": "rotated-password"},
         )
 
     assert first_response.status_code == HTTP_BAD_REQUEST
@@ -812,7 +812,7 @@ async def test_me_endpoints_require_authenticated_user(
     patch_response = await test_client.patch("/users/me", json={"email": "ignored@example.com"})
     change_password_response = await test_client.post(
         "/users/me/change-password",
-        json={"current_password": "user-password", "new_password": "rotated-password"},
+        json={"current_password": "valid-user-password", "new_password": "rotated-password"},
     )
 
     assert get_response.status_code == HTTP_UNAUTHORIZED
@@ -849,7 +849,7 @@ async def test_me_endpoints_reject_inactive_users(
     change_password_response = await test_client.post(
         "/users/me/change-password",
         headers=headers,
-        json={"current_password": "user-password", "new_password": "rotated-password"},
+        json={"current_password": "valid-user-password", "new_password": "rotated-password"},
     )
 
     assert get_response.status_code == HTTP_UNAUTHORIZED
@@ -878,7 +878,7 @@ async def test_update_me_maps_user_manager_errors(
     exists_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"email": "dup@example.com", "current_password": "user-password"},
+        json={"email": "dup@example.com", "current_password": "valid-user-password"},
     )
     assert exists_response.status_code == HTTP_BAD_REQUEST
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
@@ -892,7 +892,7 @@ async def test_update_me_maps_user_manager_errors(
     authorization_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"email": "blocked@example.com", "current_password": "user-password"},
+        json={"email": "blocked@example.com", "current_password": "valid-user-password"},
     )
     assert authorization_response.status_code == HTTP_BAD_REQUEST
     assert (authorization_response.json().get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID
@@ -974,7 +974,7 @@ async def test_update_user_maps_user_manager_errors(
     exists_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"email": "dup@example.com", "current_password": "admin-password"},
+        json={"email": "dup@example.com", "current_password": "valid-admin-password"},
     )
     assert exists_response.status_code == HTTP_BAD_REQUEST
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
@@ -988,7 +988,7 @@ async def test_update_user_maps_user_manager_errors(
     password_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"password": "invalid-password", "current_password": "admin-password"},
+        json={"password": "invalid-password", "current_password": "valid-admin-password"},
     )
     assert password_response.status_code == HTTP_BAD_REQUEST
     assert (password_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_INVALID_PASSWORD
@@ -1016,7 +1016,7 @@ async def test_admin_update_requires_admin_current_password_step_up(
     wrong_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"email": "admin-updated@example.com", "current_password": "wrong-password"},
+        json={"email": "admin-updated@example.com", "current_password": "wrong-user-password"},
     )
 
     assert missing_response.status_code == HTTP_BAD_REQUEST
@@ -1048,7 +1048,7 @@ async def test_admin_delete_requires_admin_current_password_step_up(
         "DELETE",
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"current_password": "wrong-password"},
+        json={"current_password": "wrong-user-password"},
     )
 
     assert missing_response.status_code == HTTP_BAD_REQUEST
@@ -1059,6 +1059,35 @@ async def test_admin_delete_requires_admin_current_password_step_up(
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.is_active is True
+
+
+async def test_admin_delete_accepts_legacy_current_password(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """A pre-7.1 password remains usable as step-up proof so it can be rotated."""
+    test_client, user_db, _, strategy, admin_user, regular_user = client
+    legacy_password = "legacy-pass12"
+    admin_user.hashed_password = PasswordHelper().hash(legacy_password)
+    headers = {"Cookie": f"litestar_auth={await strategy.write_token(admin_user)}"}
+
+    response = await test_client.request(
+        "DELETE",
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"current_password": legacy_password},
+    )
+
+    assert response.status_code == HTTP_OK
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.is_active is False
 
 
 async def test_admin_update_requires_totp_step_up_when_admin_is_enrolled(
@@ -1082,14 +1111,14 @@ async def test_admin_update_requires_totp_step_up_when_admin_is_enrolled(
     missing_totp_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"is_verified": False, "current_password": "admin-password"},
+        json={"is_verified": False, "current_password": "valid-admin-password"},
     )
     inline_totp_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
         json={
             "is_verified": False,
-            "current_password": "admin-password",
+            "current_password": "valid-admin-password",
             "totp_code": _generate_totp_code(secret, _current_counter()),
         },
     )
@@ -1120,7 +1149,7 @@ async def test_admin_user_lookup_returns_404_for_unparseable_ids(
         "DELETE",
         "/users/not-a-uuid",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
 
     assert get_response.status_code == HTTP_NOT_FOUND
@@ -1179,7 +1208,7 @@ async def test_soft_delete_calls_update_and_skips_hard_delete(
         "DELETE",
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
     assert response.status_code == HTTP_OK
     assert update_spy.await_count == 1
@@ -1209,7 +1238,7 @@ async def test_admin_endpoints_require_superuser(
         "DELETE",
         f"/users/{admin_user.id}",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
 
     assert get_response.status_code == HTTP_FORBIDDEN
@@ -1264,7 +1293,7 @@ async def test_admin_role_updates_feed_request_user_role_contract_at_runtime(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=admin_headers,
-        json={"roles": [" Billing ", "ADMIN"], "current_password": "admin-password"},
+        json={"roles": [" Billing ", "ADMIN"], "current_password": "valid-admin-password"},
     )
     member_headers = {"Cookie": f"litestar_auth={await strategy.write_token(regular_user)}"}
     runtime_response = await test_client.get("/role-guarded/runtime", headers=member_headers)
@@ -1301,7 +1330,7 @@ async def test_superuser_update_accepts_admin_user_update_fields_including_passw
             "is_active": False,
             "is_verified": False,
             "roles": [" Billing ", "ADMIN"],
-            "current_password": "admin-password",
+            "current_password": "valid-admin-password",
         },
     )
 
@@ -1341,13 +1370,17 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"is_verified": False, "roles": [" Billing ", "admin", "ADMIN"], "current_password": "admin-password"},
+        json={
+            "is_verified": False,
+            "roles": [" Billing ", "admin", "ADMIN"],
+            "current_password": "valid-admin-password",
+        },
     )
     delete_response = await test_client.request(
         "DELETE",
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
 
     assert get_response.status_code == HTTP_OK
@@ -1387,7 +1420,7 @@ async def test_superuser_cannot_delete_their_own_account(
         "DELETE",
         f"/users/{admin_user.id}",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
 
     assert response.status_code == HTTP_FORBIDDEN
@@ -1419,7 +1452,7 @@ async def test_superuser_can_hard_delete_users(
         "DELETE",
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
 
     assert delete_response.status_code == HTTP_OK

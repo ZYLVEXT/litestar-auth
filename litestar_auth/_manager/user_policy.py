@@ -150,7 +150,7 @@ class UserPolicy:
     def validate_password(self, password: str) -> None:
         """Validate a plain-text password and normalize errors.
 
-        The baseline length check uses ``DEFAULT_MINIMUM_PASSWORD_LENGTH`` (12
+        The baseline length check uses ``DEFAULT_MINIMUM_PASSWORD_LENGTH`` (15
         characters) to enforce a safe default even without the plugin facade.
         When a ``password_validator`` is configured, it runs in addition to the
         baseline check and may impose stricter requirements.

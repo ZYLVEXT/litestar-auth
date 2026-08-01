@@ -1552,7 +1552,7 @@ async def test_plugin_event_subscriber_receives_register_and_login_events() -> N
     seeded_user = ExampleUser(
         id=uuid4(),
         email="extension-user@example.com",
-        hashed_password=password_helper.hash("user-password"),
+        hashed_password=password_helper.hash("valid-user-password"),
         is_verified=True,
     )
     config = _config_with_event_subscriber(events, users=(seeded_user,))
@@ -1565,7 +1565,7 @@ async def test_plugin_event_subscriber_receives_register_and_login_events() -> N
         )
         login_response = await client.post(
             "/auth/login",
-            json={"identifier": "extension-user@example.com", "password": "user-password"},
+            json={"identifier": "extension-user@example.com", "password": "valid-user-password"},
         )
 
     assert register_response.status_code == HTTP_CREATED
@@ -1584,7 +1584,7 @@ async def test_plugin_event_subscriber_receives_redacted_update_payloads() -> No
     admin_user = ExampleUser(
         id=uuid4(),
         email="admin@example.com",
-        hashed_password=password_helper.hash("admin-password"),
+        hashed_password=password_helper.hash("valid-admin-password"),
         is_verified=True,
         roles=["superuser"],
     )
@@ -1600,19 +1600,19 @@ async def test_plugin_event_subscriber_receives_redacted_update_payloads() -> No
     async with AsyncTestClient(app=app) as client:
         login_response = await client.post(
             "/auth/login",
-            json={"identifier": "admin@example.com", "password": "admin-password"},
+            json={"identifier": "admin@example.com", "password": "valid-admin-password"},
         )
         access_token = cast("str", login_response.cookies.get("litestar_auth"))
         headers = {"Cookie": f"litestar_auth={access_token}"}
         password_update_response = await client.patch(
             f"/users/{target_user.id}",
             headers=headers,
-            json={"password": "rotated-password", "current_password": "admin-password"},
+            json={"password": "rotated-password", "current_password": "valid-admin-password"},
         )
         profile_update_response = await client.patch(
             f"/users/{target_user.id}",
             headers=headers,
-            json={"is_verified": False, "roles": ["Billing", "ADMIN"], "current_password": "admin-password"},
+            json={"is_verified": False, "roles": ["Billing", "ADMIN"], "current_password": "valid-admin-password"},
         )
 
     assert login_response.status_code == HTTP_CREATED
@@ -1637,7 +1637,7 @@ async def test_plugin_event_subscribers_do_not_accumulate_across_requests() -> N
     seeded_user = ExampleUser(
         id=uuid4(),
         email="extension-user@example.com",
-        hashed_password=password_helper.hash("user-password"),
+        hashed_password=password_helper.hash("valid-user-password"),
         is_verified=True,
     )
     config = _config_with_event_subscriber(events, users=(seeded_user,))
@@ -1646,11 +1646,11 @@ async def test_plugin_event_subscribers_do_not_accumulate_across_requests() -> N
     async with AsyncTestClient(app=app) as client:
         first_login = await client.post(
             "/auth/login",
-            json={"identifier": "extension-user@example.com", "password": "user-password"},
+            json={"identifier": "extension-user@example.com", "password": "valid-user-password"},
         )
         second_login = await client.post(
             "/auth/login",
-            json={"identifier": "extension-user@example.com", "password": "user-password"},
+            json={"identifier": "extension-user@example.com", "password": "valid-user-password"},
         )
 
     assert first_login.status_code == HTTP_CREATED

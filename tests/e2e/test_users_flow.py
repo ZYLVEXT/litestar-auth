@@ -306,7 +306,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
     with SASession(engine) as session:
         admin_user = User(
             email="admin@example.com",
-            hashed_password=password_helper.hash("admin-password"),
+            hashed_password=password_helper.hash("valid-admin-password"),
             is_verified=True,
             roles=["admin"],
         )
@@ -318,7 +318,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         )
         extra_user = User(
             email="extra@example.com",
-            hashed_password=password_helper.hash("extra-password"),
+            hashed_password=password_helper.hash("extra-valid-password"),
             is_verified=True,
             roles=["support"],
         )
@@ -397,7 +397,7 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
     with SASession(engine) as session:
         admin_user = User(
             email="admin@example.com",
-            hashed_password=password_helper.hash("admin-password"),
+            hashed_password=password_helper.hash("valid-admin-password"),
             is_verified=True,
             roles=["admin"],
         )
@@ -409,7 +409,7 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
         )
         extra_user = User(
             email="extra@example.com",
-            hashed_password=password_helper.hash("extra-password"),
+            hashed_password=password_helper.hash("extra-valid-password"),
             is_verified=True,
             roles=["support"],
         )
@@ -534,7 +534,7 @@ async def test_users_crud_flow_via_plugin(
     admin_headers = await _login_headers(
         test_client,
         email="admin@example.com",
-        password="admin-password",
+        password="valid-admin-password",
     )
 
     response = await test_client.get(f"/users/{user_ids['member']}", headers=admin_headers)
@@ -557,7 +557,7 @@ async def test_users_crud_flow_via_plugin(
             "email": "vip@example.com",
             "is_verified": False,
             "roles": [" Billing ", "ADMIN"],
-            "current_password": "admin-password",
+            "current_password": "valid-admin-password",
         },
     )
     assert response.status_code == HTTP_OK
@@ -602,7 +602,7 @@ async def test_users_crud_flow_via_plugin(
         "DELETE",
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -738,14 +738,14 @@ async def test_users_me_rejects_deactivated_user_with_existing_session(
     admin_headers = await _login_headers(
         test_client,
         email="admin@example.com",
-        password="admin-password",
+        password="valid-admin-password",
     )
 
     deactivate_response = await test_client.request(
         "DELETE",
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"current_password": "admin-password"},
+        json={"current_password": "valid-admin-password"},
     )
     assert deactivate_response.status_code == HTTP_OK
     assert deactivate_response.json()["is_active"] is False
@@ -762,7 +762,7 @@ async def test_role_guards_and_request_user_roles_survive_relational_storage(
     admin_headers = await _login_headers(
         test_client,
         email="admin@example.com",
-        password="admin-password",
+        password="valid-admin-password",
     )
     member_headers = await _login_headers(
         test_client,
@@ -773,7 +773,7 @@ async def test_role_guards_and_request_user_roles_survive_relational_storage(
     patch_response = await test_client.patch(
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"roles": [" Billing ", "ADMIN"], "current_password": "admin-password"},
+        json={"roles": [" Billing ", "ADMIN"], "current_password": "valid-admin-password"},
     )
     any_response = await test_client.get("/role-guarded/any", headers=member_headers)
     all_response = await test_client.get("/role-guarded/all", headers=member_headers)

@@ -18,7 +18,11 @@ from litestar_auth.controllers import create_register_controller, create_users_c
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserEmailField, UserPasswordField  # ruff: ignore[typing-only-first-party-import]
+from litestar_auth.schemas import (  # ruff: ignore[typing-only-first-party-import]
+    CurrentPasswordField,
+    UserEmailField,
+    UserPasswordField,
+)
 from tests._helpers import (
     auth_middleware_get_request_session,
     human_session_bindings_factory,
@@ -73,7 +77,7 @@ class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fiel
     is_verified: bool | None = None
     roles: list[str] | None = None
     bio: str | None = None
-    current_password: UserPasswordField | None = None
+    current_password: CurrentPasswordField | None = None
     totp_code: str | None = None
 
 
@@ -101,7 +105,7 @@ def build_app() -> tuple[
     admin_user = ExampleUser(
         id=uuid4(),
         email="admin@example.com",
-        hashed_password=password_helper.hash("admin-password"),
+        hashed_password=password_helper.hash("valid-admin-password"),
         bio="admin-bio",
         roles=["admin"],
     )
@@ -232,7 +236,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
         "/auth/register",
         json={
             "email": "extended@example.com",
-            "password": "plain-password",
+            "password": "valid-plain-password",
             "bio": "registered-bio",
         },
     )
@@ -278,7 +282,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     admin_patch_response = await test_client.patch(
         f"/users/{created_user.id}",
         headers=admin_headers,
-        json={"roles": [" Support ", "ADMIN"], "current_password": "admin-password"},
+        json={"roles": [" Support ", "ADMIN"], "current_password": "valid-admin-password"},
     )
     assert admin_patch_response.status_code == HTTP_OK
     assert admin_patch_response.json()["roles"] == ["admin", "support"]
@@ -305,7 +309,7 @@ async def test_custom_msgspec_schemas_reject_unknown_update_fields(
         "/auth/register",
         json={
             "email": "strict-update@example.com",
-            "password": "plain-password",
+            "password": "valid-plain-password",
             "bio": "registered-bio",
         },
     )
@@ -463,3 +467,10 @@ def test_controllers_reject_permissive_custom_request_schemas() -> None:
         match=r"user_update_schema must set forbid_unknown_fields=True so unknown request fields are rejected\.",
     ):
         create_users_controller(user_update_schema=PermissiveUpdate)
+
+
+def test_custom_current_password_field_accepts_legacy_credentials() -> None:
+    """App-owned DTOs can rotate credentials created under the former minimum."""
+    payload = msgspec.convert({"current_password": "legacy-pass12"}, type=ExtendedUserUpdate)
+
+    assert payload.current_password == "legacy-pass12"

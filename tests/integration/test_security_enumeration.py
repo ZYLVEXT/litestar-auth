@@ -199,7 +199,7 @@ async def test_login_uses_same_response_for_missing_email_and_wrong_password(
     )
     wrong_password_response = await test_client.post(
         "/auth/login",
-        json={"identifier": "user@example.com", "password": "wrong-password"},
+        json={"identifier": "user@example.com", "password": "wrong-user-password"},
     )
 
     assert missing_response.status_code == HTTP_BAD_REQUEST
@@ -242,7 +242,7 @@ async def test_login_timing_does_not_depend_on_email_existence() -> None:
         wrong_password_duration, wrong_password_response = await _timed_post(
             client,
             "/auth/login",
-            json={"identifier": "user@example.com", "password": "wrong-password"},
+            json={"identifier": "user@example.com", "password": "wrong-user-password"},
         )
 
     assert missing_response.status_code == HTTP_BAD_REQUEST
@@ -258,12 +258,12 @@ async def test_register_timing_does_not_depend_on_email_existence() -> None:
         duplicate_duration, duplicate_response = await _timed_post(
             client,
             "/auth/register",
-            json={"email": "user@example.com", "password": "new-password"},
+            json={"email": "user@example.com", "password": "new-valid-password"},
         )
         new_duration, new_response = await _timed_post(
             client,
             "/auth/register",
-            json={"email": "fresh@example.com", "password": "new-password"},
+            json={"email": "fresh@example.com", "password": "new-valid-password"},
         )
 
     assert duplicate_response.status_code == HTTP_BAD_REQUEST

@@ -548,6 +548,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     user_create_email_meta = _field_meta(UserCreate, "email")
     user_update_email_meta = _field_meta(UserUpdate, "email")
     user_create_meta = _field_meta(UserCreate, "password")
+    user_update_current_password_meta = _field_meta(UserUpdate, "current_password")
     user_read_roles_annotation = get_type_hints(UserRead, include_extras=True)["roles"]
     user_create_email_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     user_update_email_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
@@ -560,6 +561,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     assert schemas_module.__all__ == (
         "AdminUserUpdate",
         "ChangePasswordRequest",
+        "CurrentPasswordField",
         "UserCreate",
         "UserEmailField",
         "UserPasswordField",
@@ -568,12 +570,15 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     )
     assert schemas_module.AdminUserUpdate is AdminUserUpdate
     assert schemas_module.ChangePasswordRequest is ChangePasswordRequest
+    assert schemas_module.CurrentPasswordField is not None
+    assert schemas_module.CurrentPasswordField.__module__ == "litestar_auth.schemas"
     assert schemas_module.UserEmailField is not None
     assert schemas_module.UserEmailField.__module__ == "litestar_auth.schemas"
     assert schemas_module.UserPasswordField is not None
     assert schemas_module.UserPasswordField.__module__ == "litestar_auth.schemas"
     assert not hasattr(litestar_auth, "AdminUserUpdate")
     assert not hasattr(litestar_auth, "ChangePasswordRequest")
+    assert not hasattr(litestar_auth, "CurrentPasswordField")
     assert not hasattr(litestar_auth, "UserEmailField")
     assert not hasattr(litestar_auth, "UserPasswordField")
     assert getattr(user_create_email_annotation, "__value__", user_create_email_annotation) == email_field_value
@@ -583,14 +588,6 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     )
     assert get_args(user_update_email_annotation)[1] is type(None)
     assert getattr(user_create_annotation, "__value__", user_create_annotation) == password_field_value
-    assert (
-        getattr(
-            get_args(user_update_current_password_annotation)[0],
-            "__value__",
-            get_args(user_update_current_password_annotation)[0],
-        )
-        == password_field_value
-    )
     assert get_args(user_update_current_password_annotation)[1] is type(None)
     assert "password" not in user_update_hints
     # Privileged fields live exclusively on AdminUserUpdate now.
@@ -604,6 +601,8 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     assert user_update_email_meta.pattern == EMAIL_PATTERN
     assert user_create_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert user_create_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+    assert user_update_current_password_meta.min_length == 1
+    assert user_update_current_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
     assert (
         importlib.import_module("litestar_auth.config").require_password_length is config_module.require_password_length
     )
@@ -613,6 +612,7 @@ def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
     """AdminUserUpdate mirrors the current public update helper contracts."""
     admin_user_update_email_meta = _field_meta(AdminUserUpdate, "email")
     admin_user_update_meta = _field_meta(AdminUserUpdate, "password")
+    admin_user_update_current_password_meta = _field_meta(AdminUserUpdate, "current_password")
     admin_user_update_roles_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["roles"]
     admin_user_update_email_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["email"]
     admin_user_update_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["password"]
@@ -637,11 +637,6 @@ def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
         get_args(admin_user_update_annotation)[0],
     ) == (password_field_value)
     assert get_args(admin_user_update_annotation)[1] is type(None)
-    assert getattr(
-        get_args(admin_user_update_current_password_annotation)[0],
-        "__value__",
-        get_args(admin_user_update_current_password_annotation)[0],
-    ) == (password_field_value)
     assert get_args(admin_user_update_current_password_annotation)[1] is type(None)
     assert get_args(admin_user_update_roles_annotation)[0] == list[str]
     assert get_args(admin_user_update_roles_annotation)[1] is type(None)
@@ -649,19 +644,19 @@ def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
     assert admin_user_update_email_meta.pattern == EMAIL_PATTERN
     assert admin_user_update_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert admin_user_update_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+    assert admin_user_update_current_password_meta.min_length == 1
+    assert admin_user_update_current_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
 
 
 def test_change_password_request_reuse_surface_stays_importable() -> None:
-    """ChangePasswordRequest reuses the shared password metadata on both fields."""
+    """ChangePasswordRequest accepts old credentials but applies policy to the replacement."""
     current_password_meta = _field_meta(ChangePasswordRequest, "current_password")
     new_password_meta = _field_meta(ChangePasswordRequest, "new_password")
-    current_password_annotation = get_type_hints(ChangePasswordRequest, include_extras=True)["current_password"]
     new_password_annotation = get_type_hints(ChangePasswordRequest, include_extras=True)["new_password"]
     password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
 
-    assert getattr(current_password_annotation, "__value__", current_password_annotation) == password_field_value
     assert getattr(new_password_annotation, "__value__", new_password_annotation) == password_field_value
-    assert current_password_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert current_password_meta.min_length == 1
     assert current_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
     assert new_password_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert new_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH

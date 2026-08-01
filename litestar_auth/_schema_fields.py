@@ -1,8 +1,8 @@
 """Internal msgspec field aliases shared across auth payload schemas.
 
-Public code should import ``UserEmailField`` / ``UserPasswordField`` from
-``litestar_auth.schemas`` when custom user create/update payloads need the
-built-in user-schema contract.
+Public code should import ``UserEmailField``, ``UserPasswordField``, or
+``CurrentPasswordField`` from ``litestar_auth.schemas`` when custom user
+payloads need the built-in schema contract.
 """
 
 from __future__ import annotations

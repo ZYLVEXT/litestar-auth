@@ -149,9 +149,9 @@ def test_timing_password_helper_verify_delegates_to_pwdlib_verify() -> None:
     helper = PasswordHelper()
 
     with patch.object(helper.password_hash, "verify", return_value=True) as verify_mock:
-        assert helper.verify("plain-password", "hashed-password") is True
+        assert helper.verify("valid-plain-password", "hashed-password") is True
 
-    verify_mock.assert_called_once_with("plain-password", "hashed-password")
+    verify_mock.assert_called_once_with("valid-plain-password", "hashed-password")
 
 
 def test_require_password_length_rejects_passwords_longer_than_default_maximum() -> None:
@@ -221,7 +221,7 @@ async def test_reset_password_rejects_missing_or_invalid_fingerprint_claim(
         caplog.at_level(logging.WARNING, logger=manager_logger.name),
         pytest.raises(InvalidResetPasswordTokenError),
     ):
-        await manager.reset_password(token, "new-password")
+        await manager.reset_password(token, "new-valid-password")
 
     assert "Reset token missing password fingerprint" in caplog.messages
     assert cast("str | None", getattr(caplog.records[-1], "event", None)) == "token_validation_failed"
@@ -234,7 +234,7 @@ async def test_reset_password_rejects_mismatched_fingerprint(caplog: pytest.LogC
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    changed_user = replace(user, hashed_password=password_helper.hash("other-password"))
+    changed_user = replace(user, hashed_password=password_helper.hash("other-valid-password"))
     user_db.get.return_value = changed_user
 
     token = jwt.encode(
@@ -252,7 +252,7 @@ async def test_reset_password_rejects_mismatched_fingerprint(caplog: pytest.LogC
         caplog.at_level(logging.WARNING, logger=manager_logger.name),
         pytest.raises(InvalidResetPasswordTokenError),
     ):
-        await manager.reset_password(token, "new-password")
+        await manager.reset_password(token, "new-valid-password")
 
     assert "Reset token fingerprint mismatch (password changed)" in caplog.messages
     assert cast("str | None", getattr(caplog.records[-1], "event", None)) == "token_validation_failed"
@@ -265,7 +265,7 @@ async def test_reset_password_accepts_matching_fingerprint() -> None:
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    updated_user = replace(user, hashed_password=password_helper.hash("new-valid-password"))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
 
@@ -280,7 +280,7 @@ async def test_reset_password_accepts_matching_fingerprint() -> None:
         headers=jwt_encode_headers(),
     )
 
-    result = await manager.reset_password(token, "new-password")
+    result = await manager.reset_password(token, "new-valid-password")
 
     assert result is updated_user
     user_db.update.assert_awaited_once()
@@ -291,7 +291,7 @@ def test_dummy_reset_password_token_keeps_password_fingerprint_structure() -> No
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    dummy_hash = password_helper.hash("dummy-password")
+    dummy_hash = password_helper.hash("dummy-valid-password")
 
     token = manager._account_tokens.write_reset_password_token(None, dummy_hash=dummy_hash)
 

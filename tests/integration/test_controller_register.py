@@ -194,7 +194,7 @@ async def test_register_creates_user_returns_public_payload_and_calls_hook(
 
     response = await test_client.post(
         "/auth/register",
-        json={"email": "new@example.com", "password": "plain-password"},
+        json={"email": "new@example.com", "password": "valid-plain-password"},
     )
 
     assert response.status_code == HTTP_CREATED
@@ -207,8 +207,8 @@ async def test_register_creates_user_returns_public_payload_and_calls_hook(
 
     created_user = await user_db.get_by_email("new@example.com")
     assert created_user is not None
-    assert created_user.hashed_password != "plain-password"
-    assert PasswordHelper().verify("plain-password", created_user.hashed_password) is True
+    assert created_user.hashed_password != "valid-plain-password"
+    assert PasswordHelper().verify("valid-plain-password", created_user.hashed_password) is True
     assert user_manager.registered_users == [created_user]
     assert user_manager.registration_tokens["new@example.com"]
 
@@ -221,7 +221,7 @@ async def test_register_hook_token_verifies_created_user(
 
     response = await test_client.post(
         "/auth/register",
-        json={"email": "verify-me@example.com", "password": "plain-password"},
+        json={"email": "verify-me@example.com", "password": "valid-plain-password"},
     )
 
     assert response.status_code == HTTP_CREATED
@@ -249,7 +249,7 @@ async def test_register_rejects_duplicate_email(
 
     response = await test_client.post(
         "/auth/register",
-        json={"email": "duplicate@example.com", "password": "new-password"},
+        json={"email": "duplicate@example.com", "password": "new-valid-password"},
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
@@ -318,7 +318,7 @@ async def test_register_failures_share_response_body_and_increment_rate_limit(
     async with AsyncTestClient(app=app) as test_client:
         duplicate_response = await test_client.post(
             "/auth/register",
-            json={"email": existing_user.email, "password": "valid-password"},
+            json={"email": existing_user.email, "password": "valid-test-password"},
         )
         invalid_password_response = await test_client.post(
             "/auth/register",
@@ -333,12 +333,12 @@ async def test_register_failures_share_response_body_and_increment_rate_limit(
             )
             authorization_response = await test_client.post(
                 "/auth/register",
-                json={"email": "authorization@example.com", "password": "valid-password"},
+                json={"email": "authorization@example.com", "password": "valid-test-password"},
             )
 
         success_response = await test_client.post(
             "/auth/register",
-            json={"email": "fresh@example.com", "password": "valid-password"},
+            json={"email": "fresh@example.com", "password": "valid-test-password"},
         )
 
     failure_responses = [duplicate_response, invalid_password_response, authorization_response]
@@ -399,7 +399,7 @@ async def test_register_applies_minimum_response_duration_to_success_and_domain_
         started_at = time.perf_counter()
         duplicate_response = await test_client.post(
             "/auth/register",
-            json={"email": existing_user.email, "password": "valid-password"},
+            json={"email": existing_user.email, "password": "valid-test-password"},
         )
         duplicate_elapsed = time.perf_counter() - started_at
 
@@ -419,14 +419,14 @@ async def test_register_applies_minimum_response_duration_to_success_and_domain_
             started_at = time.perf_counter()
             authorization_response = await test_client.post(
                 "/auth/register",
-                json={"email": "timing-authorization@example.com", "password": "valid-password"},
+                json={"email": "timing-authorization@example.com", "password": "valid-test-password"},
             )
             authorization_elapsed = time.perf_counter() - started_at
 
         started_at = time.perf_counter()
         success_response = await test_client.post(
             "/auth/register",
-            json={"email": "timing-success@example.com", "password": "valid-password"},
+            json={"email": "timing-success@example.com", "password": "valid-test-password"},
         )
         success_elapsed = time.perf_counter() - started_at
 
@@ -466,7 +466,7 @@ async def test_register_minimum_response_does_not_double_delay_after_slow_busine
     async with AsyncTestClient(app=app) as test_client:
         response = await test_client.post(
             "/auth/register",
-            json={"email": "slow-success@example.com", "password": "plain-password"},
+            json={"email": "slow-success@example.com", "password": "valid-plain-password"},
         )
 
     assert response.status_code == HTTP_CREATED
@@ -506,18 +506,18 @@ async def test_register_rate_limit_callbacks_fire_for_success_and_error() -> Non
     existing_user = ExampleUser(
         id=uuid4(),
         email="duplicate-rate-limit@example.com",
-        hashed_password=PasswordHelper().hash("plain-password"),
+        hashed_password=PasswordHelper().hash("valid-plain-password"),
     )
     user_db.users_by_id[existing_user.id] = existing_user
     user_db.user_ids_by_email[existing_user.email] = existing_user.id
     async with AsyncTestClient(app=app) as test_client:
         duplicate_response = await test_client.post(
             "/auth/register",
-            json={"email": existing_user.email, "password": "plain-password"},
+            json={"email": existing_user.email, "password": "valid-plain-password"},
         )
         success_response = await test_client.post(
             "/auth/register",
-            json={"email": "rate-limit-success@example.com", "password": "plain-password"},
+            json={"email": "rate-limit-success@example.com", "password": "valid-plain-password"},
         )
 
     assert duplicate_response.status_code == HTTP_BAD_REQUEST
@@ -545,7 +545,7 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
             "/auth/register",
             json={
                 "email": "privileged@example.com",
-                "password": "plain-password",
+                "password": "valid-plain-password",
                 "is_active": False,
                 "is_verified": True,
                 "roles": [" Billing ", "ADMIN"],
@@ -577,7 +577,7 @@ async def test_register_rejects_unknown_fields_from_builtin_schema(
             "/auth/register",
             json={
                 "email": "unknown-field@example.com",
-                "password": "plain-password",
+                "password": "valid-plain-password",
                 "deprecated_admin_flag": True,
             },
         )
@@ -607,7 +607,7 @@ async def test_register_ignores_non_safe_fields_from_custom_schema(
             "/auth/register",
             json={
                 "email": "safe@example.com",
-                "password": "plain-password",
+                "password": "valid-plain-password",
                 "bio": "should-not-persist",
             },
         )

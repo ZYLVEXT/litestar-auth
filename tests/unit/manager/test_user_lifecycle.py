@@ -38,7 +38,7 @@ def _build_user(
         id=uuid4(),
         email=email,
         username=username,
-        hashed_password=password_helper.hash("test-password"),
+        hashed_password=password_helper.hash("valid-test-password"),
     )
 
 
@@ -57,14 +57,14 @@ async def test_create_normalizes_email_hashes_password_and_runs_register_hook() 
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
 
-    result = await service.create({"email": "  USER@Example.COM  ", "password": "test-password"})
+    result = await service.create({"email": "  USER@Example.COM  ", "password": "valid-test-password"})
 
     assert result is created_user
     user_db.get_by_email.assert_awaited_once_with("user@example.com")
     create_payload = user_db.create.await_args.args[0]
     assert create_payload["email"] == "user@example.com"
     assert "password" not in create_payload
-    assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
+    assert password_helper.verify("valid-test-password", create_payload["hashed_password"]) is True
     assert len(manager.registration_events) == 1
     registered_user, token = manager.registration_events[0]
     assert registered_user is created_user
@@ -81,7 +81,7 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     user_db.get_by_email.return_value = existing_user
 
     with pytest.raises(UserAlreadyExistsError) as exc_info:
-        await service.create({"email": " DUPLICATE@example.com ", "password": "test-password"})
+        await service.create({"email": " DUPLICATE@example.com ", "password": "valid-test-password"})
 
     assert exc_info.value.identifier_type == "email"
     assert exc_info.value.identifier_value == "duplicate@example.com"
@@ -104,7 +104,7 @@ async def test_create_normalizes_roles_when_privileged_payload_allows_them() -> 
     result = await service.create(
         {
             "email": "roles@example.com",
-            "password": "test-password",
+            "password": "valid-test-password",
             "roles": [" Billing ", "admin", "ADMIN"],
         },
         safe=False,
@@ -131,13 +131,13 @@ async def test_create_uses_injected_policy_for_normalization_and_hashing() -> No
         patch.object(policy, "normalize_email", wraps=policy.normalize_email) as normalize_email,
         patch.object(policy, "validate_password", wraps=policy.validate_password) as validate_password,
     ):
-        result = await service.create(UserCreate(email="policy@example.com", password="test-password"))
+        result = await service.create(UserCreate(email="policy@example.com", password="valid-test-password"))
 
     normalize_email.assert_called_once_with("policy@example.com")
-    validate_password.assert_called_once_with("test-password")
+    validate_password.assert_called_once_with("valid-test-password")
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
-    assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
+    assert password_helper.verify("valid-test-password", create_payload["hashed_password"]) is True
 
 
 async def test_password_work_is_offloaded_from_async_lifecycle_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -154,19 +154,19 @@ async def test_password_work_is_offloaded_from_async_lifecycle_paths(monkeypatch
     user_db.get_by_email.return_value = None
     user_db.create.return_value = user
 
-    await service.create({"email": "offload@example.com", "password": "test-password"})
+    await service.create({"email": "offload@example.com", "password": "valid-test-password"})
 
     user_db.get_by_field.return_value = None
     await service.authenticate(
         "missing@example.com",
-        "test-password",
+        "valid-test-password",
         login_identifier="email",
         dummy_hash=await manager._get_dummy_hash(),
         logger=Mock(),
     )
 
     user_db.update.return_value = updated_user
-    await service.update(AdminUserUpdate(password="new-password"), user)
+    await service.update(AdminUserUpdate(password="new-valid-password"), user)
 
     assert offloaded == ["hash", "verify_and_update", "hash"]
 
@@ -210,9 +210,9 @@ async def test_authenticate_username_mode_returns_none_for_blank_lookup() -> Non
 
     result = await service.authenticate(
         "   ",
-        "test-password",
+        "valid-test-password",
         login_identifier="username",
-        dummy_hash=password_helper.hash("dummy-password"),
+        dummy_hash=password_helper.hash("dummy-valid-password"),
         logger=Mock(),
     )
 
@@ -239,7 +239,7 @@ async def test_authenticate_redacts_password_upgrade_failure_and_preserves_login
     ):
         result = await service.authenticate(
             " User-Name ",
-            "test-password",
+            "valid-test-password",
             login_identifier="username",
             dummy_hash="dummy-hash",
             logger=logging.getLogger("litestar_auth.manager"),
@@ -301,12 +301,12 @@ async def test_update_password_change_hashes_password_invalidates_tokens_and_run
     updated_user = replace(user)
     user_db.update.return_value = updated_user
 
-    result = await service.update(AdminUserUpdate(password="new-password"), user)
+    result = await service.update(AdminUserUpdate(password="new-valid-password"), user)
 
     assert result is updated_user
     update_payload = user_db.update.await_args.args[1]
     assert "password" not in update_payload
-    assert password_helper.verify("new-password", update_payload["hashed_password"]) is True
+    assert password_helper.verify("new-valid-password", update_payload["hashed_password"]) is True
     invalidator.assert_awaited_once_with(updated_user)
     assert manager.request_verify_events == []
     assert manager.after_update_events == [(updated_user, update_payload)]
