@@ -34,7 +34,7 @@ repos:
         pass_filenames: false
     -   id: deptry
         name: deptry
-        entry: just deptry-check
+        entry: uv run --no-sync just deptry-check
         language: system
         pass_filenames: false
     -   id: pip-audit
@@ -50,7 +50,7 @@ repos:
         pass_filenames: false
     -   id: reference-vectors
         name: Reference vectors
-        entry: just vectors-check
+        entry: uv run --no-sync just vectors-check
         files: ^(docs/vectors/|packages/authweave-(workload|webhooks|http-signatures)/)
         language: system
         pass_filenames: false
