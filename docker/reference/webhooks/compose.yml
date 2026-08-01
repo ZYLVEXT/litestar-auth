@@ -1,0 +1,12 @@
+# Standard Webhooks Redis rotation/replay reference.
+
+services:
+  redis:
+    image: redis:8.0-alpine@sha256:5f61955be8ab2ccee9372b84ae4d4da2e2b156f87281e3f218544055e7ee04d4
+    ports:
+      - "127.0.0.1:16381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
