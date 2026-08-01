@@ -141,11 +141,10 @@ class UserLifecycleService[UP, ID]:
         if new_hash is not None:
             try:
                 user = await self._manager.user_db.update(user, {"hashed_password": new_hash})
-            except Exception as exc:
+            except Exception:  # ruff: ignore[blind-except] - hash upgrades are best effort across adapters
                 logger.warning(
                     "Password hash upgrade skipped (login succeeded)",
                     extra={"event": "password_upgrade_skipped", "user_id": str(user.id)},
-                    exc_info=exc,
                 )
         return user
 

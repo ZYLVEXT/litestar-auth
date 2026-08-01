@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 _PKCE_CODE_VERIFIER_LENGTH = 64
@@ -23,7 +23,7 @@ _PKCE_CODE_CHALLENGE_METHOD: Literal["S256"] = "S256"
 class PkceMaterial:
     """PKCE S256 material generated for one OAuth authorization-code flow."""
 
-    code_verifier: str
+    code_verifier: str = field(repr=False)
     code_challenge: str
     code_challenge_method: Literal["S256"]
 

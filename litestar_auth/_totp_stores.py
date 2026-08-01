@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from math import ceil
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -51,7 +51,7 @@ class _TotpEnrollmentEntry:
     """Process-local pending TOTP enrollment record."""
 
     jti: str
-    secret: str
+    secret: str = field(repr=False)
     expires_at: float
 
 

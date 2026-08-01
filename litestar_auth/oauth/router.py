@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload
 
@@ -33,11 +33,11 @@ class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
     backend: AuthenticationBackend[UP, ID]
     user_manager: OAuthControllerUserManagerProtocol[UP, ID]
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
-    oauth_client: OAuthClientProtocol | None = None
-    oauth_client_factory: OAuthClientFactory | None = None
+    oauth_flow_cookie_secret: str = field(repr=False)
+    oauth_client: OAuthClientProtocol | None = field(default=None, repr=False)
+    oauth_client_factory: OAuthClientFactory | None = field(default=None, repr=False)
     oauth_client_class: str | None = None
-    oauth_client_kwargs: Mapping[str, object] | None = None
+    oauth_client_kwargs: Mapping[str, object] | None = field(default=None, repr=False)
     auth_path: str = "/auth"
     path: str | None = None
     cookie_secure: bool = True

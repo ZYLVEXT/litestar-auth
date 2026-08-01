@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from litestar_auth.config import OAuthProviderConfig
@@ -23,7 +23,7 @@ class _OAuthRouteRegistrationContract:
     oauth_cookie_secure: bool
     oauth_associate_by_email: bool
     oauth_trust_provider_email_verified: bool
-    oauth_flow_cookie_secret: str | None
+    oauth_flow_cookie_secret: str | None = field(repr=False)
     login_path: str
     associate_path: str
     redirect_base_url: str | None

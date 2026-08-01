@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar_auth.types import LoginIdentifier, UserProtocol
@@ -19,9 +19,9 @@ class OAuthAccountData:
     oauth_name: str
     account_id: str
     account_email: str
-    access_token: str
+    access_token: str = field(repr=False)
     expires_at: int | None
-    refresh_token: str | None
+    refresh_token: str | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +48,7 @@ class OrganizationInvitationData[ID]:
     organization_id: ID
     invited_email: str
     roles: list[str]
-    token_hash: bytes
+    token_hash: bytes = field(repr=False)
     expires_at: datetime
 
 

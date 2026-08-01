@@ -26,6 +26,19 @@ SESSION_CLIENT_METADATA_KEY_MAX_LENGTH = 64
 SESSION_CLIENT_METADATA_VALUE_MAX_LENGTH = 255
 ORGANIZATION_SLUG_MAX_LENGTH = 128
 
+
+class RedactedReprMixin:
+    """Replace secret-bearing struct representations with a safe placeholder."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        """Return a representation that cannot expose struct field values."""
+        return f"{type(self).__name__}(...)"
+
+    __str__ = __repr__
+
+
 EMAIL_FIELD_META = msgspec.Meta(max_length=EMAIL_MAX_LENGTH, pattern=EMAIL_PATTERN)
 USER_PASSWORD_FIELD_META = msgspec.Meta(
     min_length=DEFAULT_MINIMUM_PASSWORD_LENGTH,

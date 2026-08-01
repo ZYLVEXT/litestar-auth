@@ -478,9 +478,9 @@ class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
     provider_name: str
     backend: AuthenticationBackend[UP, ID]
     user_manager: OAuthControllerUserManagerProtocol[UP, ID]
-    oauth_client: OAuthClientProtocol
+    oauth_client: OAuthClientProtocol = field(repr=False)
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     path: str = "/auth/oauth"
     cookie_secure: bool = True
     oauth_scopes: Sequence[str] | None = None
@@ -515,9 +515,9 @@ class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
     """Configuration for :func:`create_oauth_associate_controller`."""
 
     provider_name: str
-    oauth_client: OAuthClientProtocol
+    oauth_client: OAuthClientProtocol = field(repr=False)
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None = None
     user_manager_dependency_key: str | None = None
     path: str = "/auth/associate"

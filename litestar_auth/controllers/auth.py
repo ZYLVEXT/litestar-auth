@@ -126,8 +126,8 @@ class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     refresh_inc: RequestHandler
     refresh_reset: RequestHandler
     account_lockout_store: AccountLockoutStore | None
-    account_lockout_key_secret: str | None
-    totp_pending_secret: str | None
+    account_lockout_key_secret: str | None = field(repr=False)
+    totp_pending_secret: str | None = field(repr=False)
     totp_pending_lifetime: timedelta
     totp_pending_require_client_binding: bool
     login_minimum_response_seconds: float
@@ -147,7 +147,7 @@ class AuthControllerConfig[UP: UserProtocol[Any], ID]:
     enable_refresh: bool = False
     requires_verification: bool = True
     login_identifier: LoginIdentifier = "email"
-    totp_pending_secret: str | None = None
+    totp_pending_secret: str | None = field(default=None, repr=False)
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME
     totp_pending_require_client_binding: bool = True
     login_minimum_response_seconds: float = DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
@@ -186,7 +186,7 @@ class _AuthControllerSettings[UP: UserProtocol[Any], ID]:
     enable_refresh: bool
     requires_verification: bool
     login_identifier: LoginIdentifier
-    totp_pending_secret: str | None
+    totp_pending_secret: str | None = field(repr=False)
     totp_pending_lifetime: timedelta
     totp_pending_require_client_binding: bool = True
     login_minimum_response_seconds: float = DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS

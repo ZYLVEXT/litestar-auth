@@ -49,7 +49,7 @@ def _raise_startup_only_database_token_runtime_error() -> Never:
 class _DatabaseTokenStrategySettings:
     """Immutable runtime settings shared by startup-only and bound DB-token strategies."""
 
-    token_hash_secret: str
+    token_hash_secret: str = field(repr=False)
     max_age: timedelta
     refresh_max_age: timedelta
     token_bytes: int
@@ -63,7 +63,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
     settings: _DatabaseTokenStrategySettings
     token_models: DatabaseTokenModels
     runtime_strategy_cls: type[Any]
-    _token_hash_secret: bytes = field(init=False)
+    _token_hash_secret: bytes = field(init=False, repr=False)
     access_token_model: type[Any] = field(init=False)
     refresh_token_model: type[Any] = field(init=False)
     max_age: timedelta = field(init=False)

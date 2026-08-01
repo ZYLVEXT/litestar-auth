@@ -9,7 +9,7 @@ import json
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from urllib.parse import urlencode, urlsplit
@@ -168,7 +168,7 @@ class IntrospectionClientAuth(Protocol):
 class StaticBearerClientAuth:
     """Outbound Bearer credential for the introspection endpoint (not the merchant token)."""
 
-    token: str
+    token: str = field(repr=False)
 
     def __post_init__(self) -> None:
         """Require a non-empty outbound credential."""
@@ -195,7 +195,7 @@ class PrivateKeyJWTClientAuth:
     audience: str
     key_id: str
     algorithm: str
-    signer: AsyncJWTSigner
+    signer: AsyncJWTSigner = field(repr=False)
     lifetime: timedelta = timedelta(seconds=60)
     time_source: Callable[[], datetime] = lambda: datetime.now(UTC)
     jti_source: Callable[[], str] = lambda: secrets.token_urlsafe(24)

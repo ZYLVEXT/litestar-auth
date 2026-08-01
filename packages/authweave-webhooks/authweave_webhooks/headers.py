@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from authweave_webhooks.errors import WebhookFailureCode, WebhookVerificationError
 from authweave_webhooks.models import (
@@ -29,7 +29,7 @@ class ParsedWebhookHeaders:
 
     webhook_id: str
     timestamp: int
-    signatures: tuple[bytes, ...]
+    signatures: tuple[bytes, ...] = field(repr=False)
 
 
 def build_signing_input(*, webhook_id: str, timestamp: int, body: bytes) -> bytes:

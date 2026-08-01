@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -64,7 +64,7 @@ class TokenWriteRequest:
 
     subject: str
     audience: str
-    secret: str
+    secret: str = field(repr=False)
     lifetime: timedelta
     extra_claims: Mapping[str, Any] | None = None
     issued_at: datetime | None = None
@@ -74,8 +74,8 @@ class TokenWriteRequest:
 class OrganizationInvitationToken:
     """Signed invitation token plus the digest stored on the invitation row."""
 
-    token: str
-    token_hash: bytes
+    token: str = field(repr=False)
+    token_hash: bytes = field(repr=False)
     expires_at: datetime
 
 
@@ -380,15 +380,18 @@ class AccountTokenSecurityService[UP, ID]:
             invalid_token_error=InvalidResetPasswordTokenError,
         )
         user_id = self._subject_id_from_payload(payload, InvalidResetPasswordTokenError)
+        lookup_failed = False
         try:
             user = await user_db.get(user_id)
-        except Exception as exc:  # pragma: no cover - defensive lookup path across custom backends
+        except Exception:  # ruff: ignore[blind-except] - custom stores expose no common adapter error
             self._logger.warning(
                 "User lookup failed during reset-password",
                 extra={"event": "token_validation_failed"},
-                exc_info=exc,
             )
-            raise InvalidResetPasswordTokenError from exc
+            lookup_failed = True
+            user = None
+        if lookup_failed:
+            raise InvalidResetPasswordTokenError
 
         if user is None:
             self._logger.warning(

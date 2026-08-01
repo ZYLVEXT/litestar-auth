@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from importlib import import_module
@@ -147,7 +147,7 @@ class RedisTokenStrategyConfig[ID]:
     """Configuration for :class:`RedisTokenStrategy`."""
 
     redis: RedisClientProtocol
-    token_hash_secret: str
+    token_hash_secret: str = field(repr=False)
     lifetime: timedelta = DEFAULT_LIFETIME
     refresh_lifetime: timedelta = DEFAULT_REFRESH_LIFETIME
     token_bytes: int = DEFAULT_TOKEN_BYTES

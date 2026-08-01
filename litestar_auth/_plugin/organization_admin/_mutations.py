@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -30,7 +30,7 @@ class OrganizationInvitationIssue[INVITATION]:
     """New invitation row and the one-time raw token for out-of-band delivery."""
 
     invitation: INVITATION
-    token: str
+    token: str = field(repr=False)
 
 
 class _OrganizationInvitationToken(Protocol):

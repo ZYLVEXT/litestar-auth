@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from base64 import urlsafe_b64encode
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
 import msgspec
@@ -28,15 +28,15 @@ class _OAuthFlowCookie:
     dataclass itself never crosses the browser boundary in plaintext.
     """
 
-    state: str
-    code_verifier: str
+    state: str = field(repr=False)
+    code_verifier: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class _OAuthFlowCookieCipher:
     """Encrypt and authenticate transient OAuth state + PKCE verifier material."""
 
-    _fernet: Any
+    _fernet: Any = field(repr=False)
     _invalid_token_type: type[Exception]
 
     @classmethod

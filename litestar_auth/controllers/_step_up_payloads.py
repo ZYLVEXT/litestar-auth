@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import msgspec
 
-import litestar_auth._schema_fields as schema_fields  # ruff: ignore[typing-only-first-party-import]
+import litestar_auth._schema_fields as schema_fields
 from litestar_auth.schemas import UserPasswordField  # ruff: ignore[typing-only-first-party-import]
 
 
-class _AdminCurrentPasswordStepUpRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+class _AdminCurrentPasswordStepUpRequest(
+    schema_fields.RedactedReprMixin,
+    msgspec.Struct,
+    omit_defaults=True,
+    forbid_unknown_fields=True,
+):
     """Reusable current-password field contract for privileged admin step-up bodies."""
 
     current_password: UserPasswordField | None = None

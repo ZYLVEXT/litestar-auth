@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, get
@@ -68,9 +68,9 @@ class _PluginOAuthAssociateControllerSettings:
 
     provider_name: str
     user_manager_dependency_key: str
-    oauth_client: OAuthClientProtocol
+    oauth_client: OAuthClientProtocol = field(repr=False)
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     path: str = "/auth/associate"
     cookie_secure: bool = True
     security: Sequence[SecurityRequirement] | None = None
@@ -82,11 +82,11 @@ class _PluginOAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
     """Static settings for a plugin-owned OAuth login controller."""
 
     provider_name: str
-    oauth_client: OAuthClientProtocol
+    oauth_client: OAuthClientProtocol = field(repr=False)
     backend_inventory: StartupBackendInventory[UP, ID]
     backend_index: int
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     cookie_secure: bool = True
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False

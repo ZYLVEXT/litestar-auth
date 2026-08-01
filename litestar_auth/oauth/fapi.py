@@ -9,7 +9,7 @@ import json
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from urllib.parse import urlencode, urlsplit
@@ -87,9 +87,9 @@ class FAPIIssuerProfile:
     redirect_uri: str
     key_id: str
     algorithm: str
-    signer: AsyncJWTSigner
-    key_resolver: AsyncJWTKeyResolver
-    replay_store: ReplayStore
+    signer: AsyncJWTSigner = field(repr=False)
+    key_resolver: AsyncJWTKeyResolver = field(repr=False)
+    replay_store: ReplayStore = field(repr=False)
     response_algorithms: frozenset[str] = _ALGORITHMS
     jar_lifetime: timedelta = timedelta(minutes=5)
     jarm_maximum_lifetime: timedelta = timedelta(minutes=10)
@@ -127,20 +127,20 @@ class FAPIIssuerProfile:
 class FAPIAuthorization:
     """Persistable browser redirect and protocol-run binding material."""
 
-    authorization_url: str
-    request_uri: str
+    authorization_url: str = field(repr=False)
+    request_uri: str = field(repr=False)
     expires_in: int
-    state: str
-    nonce: str
-    code_verifier: str
+    state: str = field(repr=False)
+    nonce: str = field(repr=False)
+    code_verifier: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class FAPIJARMResult:
     """Verified JARM success or error response."""
 
-    state: str
-    code: str | None = None
+    state: str = field(repr=False)
+    code: str | None = field(default=None, repr=False)
     error: str | None = None
     error_description: str | None = None
 

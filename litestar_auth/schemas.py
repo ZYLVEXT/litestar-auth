@@ -31,14 +31,14 @@ class UserRead(msgspec.Struct):
     roles: list[str]
 
 
-class UserCreate(msgspec.Struct, forbid_unknown_fields=True):
+class UserCreate(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to create a new user."""
 
     email: UserEmailField
     password: UserPasswordField
 
 
-class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+class UserUpdate(schema_fields.RedactedReprMixin, msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Self-service profile-update payload (non-privileged).
 
     Security:
@@ -59,7 +59,7 @@ class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True)
     totp_code: schema_fields.TotpCodeField | None = None
 
 
-class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+class AdminUserUpdate(schema_fields.RedactedReprMixin, msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Privileged admin update payload.
 
     Admin writes may include ``password`` for operator-initiated credential
@@ -78,7 +78,7 @@ class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
     totp_code: schema_fields.TotpCodeField | None = None
 
 
-class ChangePasswordRequest(msgspec.Struct, forbid_unknown_fields=True):
+class ChangePasswordRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Self-service password-rotation payload.
 
     ``POST /users/me/change-password`` requires the current password plus the

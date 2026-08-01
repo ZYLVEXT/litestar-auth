@@ -86,7 +86,7 @@ class IssuedTokenVerifier(Protocol):
 class DPoPTokenEndpointBinding:
     """External DPoP signer and public key for one token endpoint."""
 
-    signer: AsyncJWTSigner
+    signer: AsyncJWTSigner = field(repr=False)
     public_jwk: Mapping[str, object]
     algorithm: str
     jti_source: Callable[[], str] = lambda: secrets.token_urlsafe(24)
@@ -174,9 +174,9 @@ class TokenExchangeProfile:
     source_audience: str
     resource: str
     audience: str
-    client_auth: PrivateKeyJWTClientAuth
-    sender_binding: TokenEndpointBinding
-    verifier: IssuedTokenVerifier
+    client_auth: PrivateKeyJWTClientAuth = field(repr=False)
+    sender_binding: TokenEndpointBinding = field(repr=False)
+    verifier: IssuedTokenVerifier = field(repr=False)
     allowed_scopes: frozenset[str]
     payment_authorization: PaymentAuthorizationPolicy | None = None
     maximum_delegation_depth: int = 4
@@ -243,7 +243,7 @@ class _Transition:
 
 @dataclass(frozen=True, slots=True)
 class _ParsedTokenResponse:
-    access_token: str
+    access_token: str = field(repr=False)
     token_type: str
     scopes: tuple[str, ...]
     authorization_details: tuple[PaymentAuthorizationDetail, ...]

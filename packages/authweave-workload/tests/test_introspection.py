@@ -317,6 +317,15 @@ def test_endpoint_and_profile_validation() -> None:
     assert digest != _TOKEN
 
 
+def test_static_bearer_client_auth_repr_redacts_token() -> None:
+    secret_canary = "SECRET_CANARY_introspection_client"
+
+    client_auth = StaticBearerClientAuth(secret_canary)
+
+    assert secret_canary not in repr(client_auth)
+    assert secret_canary not in str(client_auth)
+
+
 async def test_match_ambiguity_and_missing_tls() -> None:
     provider = MTLSBoundIntrospectionProvider(
         name="intro",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack
 
 from litestar_auth._totp_enrollment import _resolve_enrollment_token_cipher
@@ -133,9 +133,9 @@ class _TotpControllerFactorySettings[UP: UserProtocol[Any], ID]:
     require_replay_protection: bool
     rate_limit_config: AuthRateLimitConfig | None
     requires_verification: bool
-    totp_pending_secret: str
-    totp_secret_key: str | None
-    totp_secret_keyring: FernetKeyringConfig | None
+    totp_pending_secret: str = field(repr=False)
+    totp_secret_key: str | None = field(repr=False)
+    totp_secret_keyring: FernetKeyringConfig | None = field(repr=False)
     totp_enable_requires_password: bool
     totp_issuer: str
     totp_algorithm: TotpAlgorithm

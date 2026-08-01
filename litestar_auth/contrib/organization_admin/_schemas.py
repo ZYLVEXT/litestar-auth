@@ -81,7 +81,11 @@ class OrganizationInvitationRead(msgspec.Struct):
     status: str
 
 
-class OrganizationInvitationTokenRequest(msgspec.Struct, forbid_unknown_fields=True):
+class OrganizationInvitationTokenRequest(
+    schema_fields.RedactedReprMixin,
+    msgspec.Struct,
+    forbid_unknown_fields=True,
+):
     """Payload used to accept or decline an organization invitation."""
 
     token: schema_fields.LongLivedTokenField

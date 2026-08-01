@@ -7,7 +7,7 @@ import logging
 import secrets
 import warnings
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import compare_digest
@@ -159,7 +159,7 @@ class CompletedTotpLogin[UP: TotpUserProtocol[Any]]:
 class TotpLoginFlowConfig[ID]:
     """Configuration for pending-login TOTP issue and verification."""
 
-    totp_pending_secret: str
+    totp_pending_secret: str = field(repr=False)
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME
     totp_algorithm: TotpAlgorithm = "SHA256"
     require_replay_protection: bool = True

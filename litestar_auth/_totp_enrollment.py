@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -136,7 +136,7 @@ def _decode_enrollment_secret(
 
 @dataclass(frozen=True, slots=True)
 class _EnrollmentTokenIssueConfig:
-    signing_key: str
+    signing_key: str = field(repr=False)
     cipher: FernetKeyring
     enrollment_store: TotpEnrollmentStore
     lifetime_seconds: int = _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS

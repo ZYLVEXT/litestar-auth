@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from litestar_auth.exceptions import AuthenticationError
@@ -18,7 +18,7 @@ class OAuthCallbackIdentity:
     account_id: str
     account_email: str
     email_verified: bool | None
-    token_payload: OAuthTokenPayload
+    token_payload: OAuthTokenPayload = field(repr=False)
 
 
 class OAuthCallbackResolver:

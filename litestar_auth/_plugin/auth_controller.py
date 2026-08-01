@@ -65,7 +65,7 @@ class PluginAuthControllerSettings[UP: UserProtocol[Any], ID]:
     requires_verification: bool = True
     login_identifier: LoginIdentifier = "email"
     login_minimum_response_seconds: float = DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
-    totp_pending_secret: str | None = None
+    totp_pending_secret: str | None = field(default=None, repr=False)
     totp_pending_lifetime: timedelta = timedelta(minutes=5)
     totp_pending_require_client_binding: bool = True
     path: str = "/auth"

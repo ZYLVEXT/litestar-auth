@@ -11,7 +11,7 @@ import math
 import secrets
 import warnings
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from re import fullmatch
 from typing import Final
@@ -126,7 +126,7 @@ class OAuthProviderConfig:
     """
 
     name: str
-    client: object
+    client: object = field(repr=False)
 
     def __post_init__(self) -> None:
         """Validate provider names before they are used in routes, cookies, and callback URLs."""

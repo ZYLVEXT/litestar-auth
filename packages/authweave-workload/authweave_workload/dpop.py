@@ -9,7 +9,7 @@ import json
 import re
 import secrets
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
@@ -100,7 +100,7 @@ class DPoPPolicy:
 class DPoPNonceChallenge:
     """Opaque RS nonce challenge returned to the client."""
 
-    nonce: str
+    nonce: str = field(repr=False)
 
     def www_authenticate(self) -> str:
         """Return the RFC 9449 ``WWW-Authenticate`` challenge value.

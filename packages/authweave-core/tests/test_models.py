@@ -61,7 +61,12 @@ def test_request_preserves_duplicate_headers_case_insensitively() -> None:
 
 def test_request_hides_credentials_and_bounds_headers() -> None:
     token = b"secret-session-token"
-    request = RequestView(method="GET", headers=((b"cookie", token),), timestamp=_NOW)
+    request = RequestView(
+        method="GET",
+        headers=((b"cookie", token),),
+        target_uri=f"https://api.example/callback?access_token={token.decode()}",
+        timestamp=_NOW,
+    )
 
     assert token.decode() not in repr(request)
     with pytest.raises(ValueError, match="projection limits"):

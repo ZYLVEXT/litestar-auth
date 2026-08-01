@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import (
     TYPE_CHECKING,
@@ -73,7 +73,7 @@ class DatabaseTokenStrategyConfig:
     """Configuration for :class:`DatabaseTokenStrategy`."""
 
     session: AsyncSessionT
-    token_hash_secret: str
+    token_hash_secret: str = field(repr=False)
     token_models: DatabaseTokenModels | None = None
     max_age: timedelta = DEFAULT_MAX_AGE
     refresh_max_age: timedelta = DEFAULT_REFRESH_MAX_AGE

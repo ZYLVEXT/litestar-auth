@@ -45,9 +45,9 @@ type SecretFactory = Callable[[str], SecretValueProtocol]
 class AccountTokenSecrets:
     """Resolved verify/reset secrets consumed by account-token services."""
 
-    verification_token_secret: SecretValueProtocol
-    reset_password_token_secret: SecretValueProtocol
-    organization_invitation_token_secret: SecretValueProtocol | None
+    verification_token_secret: SecretValueProtocol = field(repr=False)
+    reset_password_token_secret: SecretValueProtocol = field(repr=False)
+    organization_invitation_token_secret: SecretValueProtocol | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +55,8 @@ class ResolvedSecretInputs[ID]:
     """Resolved user-manager secret inputs used during construction."""
 
     security: UserManagerSecurity[ID]
-    account_token_secrets: AccountTokenSecrets
-    login_identifier_telemetry_secret: str | None
+    account_token_secrets: AccountTokenSecrets = field(repr=False)
+    login_identifier_telemetry_secret: str | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)

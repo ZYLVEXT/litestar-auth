@@ -50,7 +50,7 @@ class _TotpControllerSecurityContext:
 class _TotpPendingTokenContext[ID]:
     """Pending-login token signing, replay storage, and client-binding settings."""
 
-    totp_pending_secret: str
+    totp_pending_secret: str = field(repr=False)
     totp_pending_require_client_binding: bool
     totp_pending_client_binding_trusted_proxy: bool
     totp_pending_client_binding_trusted_headers: tuple[str, ...]
@@ -64,7 +64,7 @@ class _TotpEnrollmentContext:
     """TOTP enrollment token and server-side secret storage dependencies."""
 
     totp_issuer: str
-    enrollment_token_cipher: FernetKeyring
+    enrollment_token_cipher: FernetKeyring = field(repr=False)
     enrollment_store: TotpEnrollmentStore
 
 
@@ -92,7 +92,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     totp_stepup_ttl_seconds: int
     totp_stepup_allow_recovery: bool
     totp_rate_limit: TotpRateLimitOrchestrator
-    totp_pending_secret: str
+    totp_pending_secret: str = field(repr=False)
     totp_pending_require_client_binding: bool
     totp_pending_client_binding_trusted_proxy: bool
     totp_pending_client_binding_trusted_headers: tuple[str, ...]
@@ -100,7 +100,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
     unsafe_testing: bool
-    enrollment_token_cipher: FernetKeyring
+    enrollment_token_cipher: FernetKeyring = field(repr=False)
     enrollment_store: TotpEnrollmentStore
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
     enable_refresh: bool = False

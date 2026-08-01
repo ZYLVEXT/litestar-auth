@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jwt
@@ -22,7 +22,7 @@ EXPECTED_JWT_TYPE = "JWT"
 class JwtDecodeConfig:
     """Configuration for signed JWT decode after JOSE header validation."""
 
-    key: str | bytes
+    key: str | bytes = field(repr=False)
     algorithms: Sequence[str]
     audience: str
     options: Options

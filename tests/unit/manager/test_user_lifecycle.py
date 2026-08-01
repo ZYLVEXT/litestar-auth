@@ -220,33 +220,39 @@ async def test_authenticate_username_mode_returns_none_for_blank_lookup() -> Non
     user_db.get_by_field.assert_not_awaited()
 
 
-async def test_authenticate_logs_password_upgrade_failure_and_preserves_login() -> None:
-    """authenticate() logs and continues when hash-upgrade persistence fails."""
+async def test_authenticate_redacts_password_upgrade_failure_and_preserves_login(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Hash-upgrade failures remain best effort without logging adapter details."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, username="user-name")
-    logger = Mock(spec=logging.Logger)
     user_db.get_by_field.return_value = user
-    user_db.update.side_effect = RuntimeError("db unavailable")
+    secret_canary = "SECRET_CANARY_password_hash_upgrade"
+    user_db.update.side_effect = RuntimeError(secret_canary)
 
-    with patch.object(password_helper, "verify_and_update", return_value=(True, "new-hash")):
+    with (
+        patch.object(password_helper, "verify_and_update", return_value=(True, "new-hash")),
+        caplog.at_level(logging.WARNING, logger="litestar_auth.manager"),
+    ):
         result = await service.authenticate(
             " User-Name ",
             "test-password",
             login_identifier="username",
             dummy_hash="dummy-hash",
-            logger=logger,
+            logger=logging.getLogger("litestar_auth.manager"),
         )
 
     assert result is user
     user_db.get_by_field.assert_awaited_once_with("username", "user-name")
     user_db.update.assert_awaited_once_with(user, {"hashed_password": "new-hash"})
-    logger.warning.assert_called_once()
-    assert logger.warning.call_args.args[0] == "Password hash upgrade skipped (login succeeded)"
-    assert logger.warning.call_args.kwargs["extra"]["event"] == "password_upgrade_skipped"
-    assert logger.warning.call_args.kwargs["extra"]["user_id"] == str(user.id)
+    assert caplog.messages == ["Password hash upgrade skipped (login succeeded)"]
+    assert getattr(caplog.records[0], "event", None) == "password_upgrade_skipped"
+    assert getattr(caplog.records[0], "user_id", None) == str(user.id)
+    assert caplog.records[0].exc_info is None
+    assert secret_canary not in caplog.text
 
 
 async def test_update_email_change_resets_verification_invalidates_tokens_and_requests_verify() -> None:

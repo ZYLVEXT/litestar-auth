@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from litestar_auth.oauth._pkce import _generate_pkce_material
@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 class OAuthAuthorization:
     """Authorization URL plus state and PKCE verifier material persisted by transport."""
 
-    authorization_url: str
-    state: str
-    code_verifier: str
+    authorization_url: str = field(repr=False)
+    state: str = field(repr=False)
+    code_verifier: str = field(repr=False)
 
 
 class OAuthAuthorizationIssuer:

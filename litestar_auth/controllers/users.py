@@ -288,8 +288,8 @@ class _AdminMutationStepUpCheck[UP: UsersControllerUserProtocol[Any], ID]:
 
     request: Request[Any, Any, Any]
     admin_user: UP
-    current_password: str | None
-    totp_code: str | None
+    current_password: str | None = field(repr=False)
+    totp_code: str | None = field(repr=False)
     totp_endpoint: TotpStepUpEndpoint
     ctx: _UsersControllerContext[UP, ID]
     user_manager: UsersControllerUserManagerProtocol[UP, ID]

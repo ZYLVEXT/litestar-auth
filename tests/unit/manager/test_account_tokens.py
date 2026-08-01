@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import traceback
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
@@ -736,7 +737,35 @@ async def test_get_reset_password_context_rejects_missing_user(caplog: pytest.Lo
     token = manager._account_tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
     user_db.get.return_value = None
 
-    with caplog.at_level(logging.WARNING, logger=manager_logger.name), pytest.raises(InvalidResetPasswordTokenError):
+    with (
+        caplog.at_level(logging.WARNING, logger=manager_logger.name),
+        pytest.raises(InvalidResetPasswordTokenError) as exc_info,
+    ):
         await manager._account_token_security.get_reset_password_context(token, user_db=user_db)
 
+    assert exc_info.value.__cause__ is None
     assert [getattr(record, "event", None) for record in caplog.records] == ["token_validation_failed"]
+
+
+async def test_get_reset_password_context_redacts_lookup_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """Adapter lookup failures do not expose exception details in manager logs."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
+    secret_canary = "SECRET_CANARY_reset_lookup"
+    user_db.get.side_effect = RuntimeError(secret_canary)
+
+    with (
+        caplog.at_level(logging.WARNING, logger=manager_logger.name),
+        pytest.raises(InvalidResetPasswordTokenError) as exc_info,
+    ):
+        await manager._account_token_security.get_reset_password_context(token, user_db=user_db)
+
+    assert caplog.messages == ["User lookup failed during reset-password"]
+    assert getattr(caplog.records[0], "event", None) == "token_validation_failed"
+    assert caplog.records[0].exc_info is None
+    assert secret_canary not in caplog.text
+    assert exc_info.value.__context__ is None
+    assert secret_canary not in "".join(traceback.format_exception(exc_info.value))

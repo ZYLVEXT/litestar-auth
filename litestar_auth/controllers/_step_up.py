@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from litestar.openapi.datastructures import ResponseSpec
@@ -81,7 +81,7 @@ class PasswordStepUpCheck[UP: PasswordStepUpUserProtocol[Any]]:
 
     user: UP
     user_manager: PasswordStepUpAuthenticatorProtocol
-    current_password: str | None
+    current_password: str | None = field(repr=False)
     on_failure: StepUpCallback
     on_success: StepUpCallback | None = None
     login_identifier: LoginIdentifier = "email"
@@ -124,7 +124,7 @@ class TotpStepUpCheck[UP: UserProtocol[Any]]:
     endpoint: TotpStepUpEndpoint
     policy: dict[str, TotpStepUpPolicyMode]
     user_manager: TotpStepUpVerifierProtocol[UP]
-    totp_code: str | None = None
+    totp_code: str | None = field(default=None, repr=False)
     totp_algorithm: TotpAlgorithm = "SHA256"
 
 

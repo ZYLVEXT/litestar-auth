@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import keyword
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth.config import validate_oauth_provider_name
@@ -69,7 +69,7 @@ class _OAuthControllerAssemblySettings:
     redirect_base_url: str
     path: str
     cookie_secure: bool
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     state_cookie_prefix: str
     controller_name_suffix: str
     validate_redirect_base_url: bool = True
@@ -90,8 +90,8 @@ class _OAuthServiceSettings:
 class _OAuthClientBinding:
     """Exactly one resolved or raw OAuth client input for controller assembly."""
 
-    oauth_client: OAuthClientProtocol | None = None
-    oauth_client_adapter: OAuthClientAdapter | None = None
+    oauth_client: OAuthClientProtocol | None = field(default=None, repr=False)
+    oauth_client_adapter: OAuthClientAdapter | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +101,9 @@ class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
     provider_name: str
     backend: AuthenticationBackend[UP, ID]
     user_manager: OAuthControllerUserManagerProtocol[UP, ID]
-    oauth_client_adapter: OAuthClientAdapter
+    oauth_client_adapter: OAuthClientAdapter = field(repr=False)
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     path: str = "/auth/oauth"
     cookie_secure: bool = True
     oauth_scopes: Sequence[str] | None = None
@@ -118,9 +118,9 @@ class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
     """Resolved inputs for a provider-specific OAuth association controller."""
 
     provider_name: str
-    oauth_client: OAuthClientProtocol
+    oauth_client: OAuthClientProtocol = field(repr=False)
     redirect_base_url: str
-    oauth_flow_cookie_secret: str
+    oauth_flow_cookie_secret: str = field(repr=False)
     user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None = None
     user_manager_dependency_key: str | None = None
     path: str = "/auth/associate"
@@ -136,8 +136,8 @@ class _OAuthLoginCallbackInputs[UP: UserProtocol[Any], ID]:
     """Runtime inputs needed to complete an OAuth login callback."""
 
     request: Request[Any, Any, Any]
-    code: str
-    oauth_state: str
+    code: str = field(repr=False)
+    oauth_state: str = field(repr=False)
     user_manager: OAuthControllerUserManagerProtocol[UP, ID]
     backend: AuthenticationBackend[UP, ID]
 

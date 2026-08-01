@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from litestar_auth.exceptions import ConfigurationError
 
@@ -71,14 +71,14 @@ _OAUTH_FLOW_COOKIE_SECRET_ROLE = _SecretRole(
 class SecretRoleValues:
     """Configured secret material grouped by the auth role each value protects."""
 
-    verification_token_secret: str | None
-    reset_password_token_secret: str | None
-    organization_invitation_token_secret: str | None = None
-    login_identifier_telemetry_secret: str | None = None
-    totp_secret_key: str | None = None
-    totp_pending_secret: str | None = None
-    totp_recovery_code_lookup_secret: str | None = None
-    oauth_flow_cookie_secret: str | None = None
+    verification_token_secret: str | None = field(repr=False)
+    reset_password_token_secret: str | None = field(repr=False)
+    organization_invitation_token_secret: str | None = field(default=None, repr=False)
+    login_identifier_telemetry_secret: str | None = field(default=None, repr=False)
+    totp_secret_key: str | None = field(default=None, repr=False)
+    totp_pending_secret: str | None = field(default=None, repr=False)
+    totp_recovery_code_lookup_secret: str | None = field(default=None, repr=False)
+    oauth_flow_cookie_secret: str | None = field(default=None, repr=False)
 
     def as_role_pairs(self) -> tuple[tuple[_SecretRole, str | None], ...]:
         """Return role metadata paired with the configured secret material."""

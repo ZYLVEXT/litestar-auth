@@ -17,7 +17,7 @@ type SessionClientMetadataKey = schema_fields.SessionClientMetadataKey
 type SessionClientMetadataValue = schema_fields.SessionClientMetadataValue
 
 
-class LoginCredentials(msgspec.Struct, forbid_unknown_fields=True):
+class LoginCredentials(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Login payload accepted by the auth controller."""
 
     identifier: schema_fields.LoginIdentifierField
@@ -52,14 +52,14 @@ class ForgotPassword(msgspec.Struct, forbid_unknown_fields=True):
     email: schema_fields.EmailField
 
 
-class ResetPassword(msgspec.Struct, forbid_unknown_fields=True):
+class ResetPassword(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to reset a password with a previously issued token."""
 
     token: schema_fields.LongLivedTokenField
     password: schema_fields.PasswordField
 
 
-class VerifyToken(msgspec.Struct, forbid_unknown_fields=True):
+class VerifyToken(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to complete an email-verification flow."""
 
     token: schema_fields.LongLivedTokenField
@@ -71,7 +71,7 @@ class RequestVerifyToken(msgspec.Struct, forbid_unknown_fields=True):
     email: schema_fields.EmailField
 
 
-class TotpEnableResponse(msgspec.Struct):
+class TotpEnableResponse(schema_fields.RedactedReprMixin, msgspec.Struct):
     """Response returned when 2FA enrollment is initiated (phase 1).
 
     The secret is not yet persisted. The client must confirm enrollment via
@@ -83,13 +83,13 @@ class TotpEnableResponse(msgspec.Struct):
     enrollment_token: str
 
 
-class TotpEnableRequest(msgspec.Struct, forbid_unknown_fields=True):
+class TotpEnableRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Optional step-up payload for enabling 2FA."""
 
     password: schema_fields.PasswordField
 
 
-class TotpRegenerateRecoveryCodesRequest(msgspec.Struct, forbid_unknown_fields=True):
+class TotpRegenerateRecoveryCodesRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Step-up payload for rotating TOTP recovery codes.
 
     Required only when ``totp_enable_requires_password=True``. When that
@@ -100,7 +100,7 @@ class TotpRegenerateRecoveryCodesRequest(msgspec.Struct, forbid_unknown_fields=T
     totp_code: schema_fields.TotpCodeField | None = None
 
 
-class TotpRecoveryCodesResponse(msgspec.Struct):
+class TotpRecoveryCodesResponse(schema_fields.RedactedReprMixin, msgspec.Struct):
     """Response containing one-time plaintext TOTP recovery codes.
 
     The values are returned only from confirm-enable or regenerate responses.
@@ -110,7 +110,7 @@ class TotpRecoveryCodesResponse(msgspec.Struct):
     recovery_codes: tuple[str, ...]
 
 
-class TotpVerifyRequest(msgspec.Struct, forbid_unknown_fields=True):
+class TotpVerifyRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload for completing 2FA login verification.
 
     ``code`` accepts either a current TOTP code or an unused recovery code.
@@ -120,14 +120,14 @@ class TotpVerifyRequest(msgspec.Struct, forbid_unknown_fields=True):
     code: schema_fields.TotpVerificationCodeField
 
 
-class TotpConfirmEnableRequest(msgspec.Struct, forbid_unknown_fields=True):
+class TotpConfirmEnableRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload for confirming TOTP enrollment (phase 2)."""
 
     enrollment_token: schema_fields.LongLivedTokenField
     code: schema_fields.TotpCodeField
 
 
-class TotpConfirmEnableResponse(msgspec.Struct):
+class TotpConfirmEnableResponse(schema_fields.RedactedReprMixin, msgspec.Struct):
     """Response returned when 2FA is successfully confirmed and persisted.
 
     Recovery codes are returned only in this response and should be shown once.
@@ -138,7 +138,7 @@ class TotpConfirmEnableResponse(msgspec.Struct):
     recovery_codes: tuple[str, ...]
 
 
-class TotpDisableRequest(msgspec.Struct, forbid_unknown_fields=True):
+class TotpDisableRequest(schema_fields.RedactedReprMixin, msgspec.Struct, forbid_unknown_fields=True):
     """Payload for disabling 2FA.
 
     ``code`` accepts either a current TOTP code or an unused recovery code.

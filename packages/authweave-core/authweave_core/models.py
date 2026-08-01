@@ -207,7 +207,7 @@ class RequestView:
     headers: tuple[tuple[bytes, bytes], ...] = field(default=(), repr=False)
     scheme: str | None = None
     authority: str | None = None
-    target_uri: str | None = None
+    target_uri: str | None = field(default=None, repr=False)
     tls_peer: TlsPeerEvidence | None = None
     spiffe_peer: SpiffePeerEvidence | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
