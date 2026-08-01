@@ -1,0 +1,37 @@
+{
+    "profile": "authweave-spiffe-x509-svid",
+    "normative": [
+        "SPIFFE X.509-SVID",
+        "AuthWeave ADR 0006"
+    ],
+    "readiness": "library-ready-vectors",
+    "interoperability_note": "Synthetic vectors only. SPIRE Docker and federation allowlists remain integration-ready.",
+    "trust_domain": "example.org",
+    "cases": [
+        {
+            "id": "valid-spiffe-id",
+            "expect": "pass",
+            "spiffe_id": "spiffe://example.org/payments/worker"
+        },
+        {
+            "id": "root-path-rejected",
+            "expect": "fail",
+            "spiffe_id": "spiffe://example.org/"
+        },
+        {
+            "id": "uppercase-trust-domain-rejected",
+            "expect": "fail",
+            "spiffe_id": "spiffe://Example.org/payments/worker"
+        },
+        {
+            "id": "dot-dot-segment-rejected",
+            "expect": "fail",
+            "spiffe_id": "spiffe://example.org/payments/../evil"
+        },
+        {
+            "id": "https-scheme-rejected",
+            "expect": "fail",
+            "spiffe_id": "https://example.org/payments/worker"
+        }
+    ]
+}

@@ -1,0 +1,79 @@
+{
+    "profile": "authweave-dpop-bound-access-token-rs",
+    "normative": [
+        "RFC 9449 (https://www.rfc-editor.org/rfc/rfc9449.html, sections 4.2, 4.3, 6.1, 7.1 and 9)",
+        "RFC 9068",
+        "AuthWeave ADR 0003"
+    ],
+    "readiness": "independently-verified-vectors",
+    "interoperability_note": "Verified by dependency-independent Python/AuthWeave and Node.js implementations. This is not a FAPI certification claim.",
+    "issuer": "https://as.example",
+    "audience": "payments-api",
+    "resource_server_id": "payments-rs",
+    "jwks": {
+        "keys": [
+            {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+                "kid": "as-1",
+                "alg": "ES256",
+                "use": "sig"
+            }
+        ]
+    },
+    "proof_jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "fPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI_EdmmXg",
+        "y": "B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E"
+    },
+    "jkt": "AhqHzaYXA5MzmDCrsseUsVBGKyfhDhvekx0THjH_xIE",
+    "now": "2026-07-31T12:00:00+00:00",
+    "cases": [
+        {
+            "id": "valid-dpop",
+            "expect": "pass",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "authorization": "DPoP eyJhbGciOiJFUzI1NiIsImtpZCI6ImFzLTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2FzLmV4YW1wbGUiLCJzdWIiOiJtZXJjaGFudC13b3JrbG9hZC0xIiwiYXVkIjoicGF5bWVudHMtYXBpIiwiZXhwIjoxNzg1NDk5NTAwLCJpYXQiOjE3ODU0OTkyMDAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJtZXJjaGFudC1jbGllbnQiLCJzY29wZSI6InBheW1lbnRzOndyaXRlIiwiY25mIjp7ImprdCI6IkFocUh6YVlYQTVNem1EQ3Jzc2VVc1ZCR0t5ZmhEaHZla3gwVEhqSF94SUUifX0.2a3sBL555YvsW3Aefzvvt19xbfqEqB7x_aK54fD_0u1P3Io629rVEIQtahtu2MQSJb2MbJVKDe3ZOoKNgbwo8A",
+            "dpop": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImZQSjdHSTBEVDM2S1VqZ0RCTFVhdzhDSmFlSjM4aHMxcGd0SV9FZG1tWGciLCJ5IjoiQjNkVkVOdU8wRUFwUFpyR24zUXcyN3A5cmVZODZZSXBuZ1MzblNKNGM5RSJ9LCJ0eXAiOiJkcG9wK2p3dCJ9.eyJqdGkiOiJwcm9vZi0xIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUvdjEvcGF5bWVudHMiLCJpYXQiOjE3ODU0OTkyMDAsImF0aCI6InlCVGRYTlZjYXQ0TWJxbTkyVUVYVGRlNkp2cEpqR1I1VEk5MUgySHBQakkifQ.AGSu3qDnlV-8bUawbltp9_Y956CaP6FgjXIPcfhEK-TDkhgGhh0edJZ_1X3HX5ETM1oSAMK757_nraAwlWUa7w"
+        },
+        {
+            "id": "htu-strips-query",
+            "expect": "pass",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments?trace=1",
+            "authorization": "DPoP eyJhbGciOiJFUzI1NiIsImtpZCI6ImFzLTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2FzLmV4YW1wbGUiLCJzdWIiOiJtZXJjaGFudC13b3JrbG9hZC0xIiwiYXVkIjoicGF5bWVudHMtYXBpIiwiZXhwIjoxNzg1NDk5NTAwLCJpYXQiOjE3ODU0OTkyMDAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJtZXJjaGFudC1jbGllbnQiLCJzY29wZSI6InBheW1lbnRzOndyaXRlIiwiY25mIjp7ImprdCI6IkFocUh6YVlYQTVNem1EQ3Jzc2VVc1ZCR0t5ZmhEaHZla3gwVEhqSF94SUUifX0.2a3sBL555YvsW3Aefzvvt19xbfqEqB7x_aK54fD_0u1P3Io629rVEIQtahtu2MQSJb2MbJVKDe3ZOoKNgbwo8A",
+            "dpop": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImZQSjdHSTBEVDM2S1VqZ0RCTFVhdzhDSmFlSjM4aHMxcGd0SV9FZG1tWGciLCJ5IjoiQjNkVkVOdU8wRUFwUFpyR24zUXcyN3A5cmVZODZZSXBuZ1MzblNKNGM5RSJ9LCJ0eXAiOiJkcG9wK2p3dCJ9.eyJqdGkiOiJwcm9vZi0xIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUvdjEvcGF5bWVudHMiLCJpYXQiOjE3ODU0OTkyMDAsImF0aCI6InlCVGRYTlZjYXQ0TWJxbTkyVUVYVGRlNkp2cEpqR1I1VEk5MUgySHBQakkifQ.AGSu3qDnlV-8bUawbltp9_Y956CaP6FgjXIPcfhEK-TDkhgGhh0edJZ_1X3HX5ETM1oSAMK757_nraAwlWUa7w"
+        },
+        {
+            "id": "ath-mismatch",
+            "expect": "fail",
+            "failure": "sender_constraint_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "authorization": "DPoP eyJhbGciOiJFUzI1NiIsImtpZCI6ImFzLTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2FzLmV4YW1wbGUiLCJzdWIiOiJtZXJjaGFudC13b3JrbG9hZC0xIiwiYXVkIjoicGF5bWVudHMtYXBpIiwiZXhwIjoxNzg1NDk5NTAwLCJpYXQiOjE3ODU0OTkyMDAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJtZXJjaGFudC1jbGllbnQiLCJzY29wZSI6InBheW1lbnRzOndyaXRlIiwiY25mIjp7ImprdCI6IkFocUh6YVlYQTVNem1EQ3Jzc2VVc1ZCR0t5ZmhEaHZla3gwVEhqSF94SUUifX0.2a3sBL555YvsW3Aefzvvt19xbfqEqB7x_aK54fD_0u1P3Io629rVEIQtahtu2MQSJb2MbJVKDe3ZOoKNgbwo8A",
+            "dpop": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImZQSjdHSTBEVDM2S1VqZ0RCTFVhdzhDSmFlSjM4aHMxcGd0SV9FZG1tWGciLCJ5IjoiQjNkVkVOdU8wRUFwUFpyR24zUXcyN3A5cmVZODZZSXBuZ1MzblNKNGM5RSJ9LCJ0eXAiOiJkcG9wK2p3dCJ9.eyJqdGkiOiJwcm9vZi0yIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUvdjEvcGF5bWVudHMiLCJpYXQiOjE3ODU0OTkyMDAsImF0aCI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEifQ.iIjz5uITghFDKgImFdBt9G3Ko6dYxh0G6lUaQuCw21Gc8FA3efm_G2T4b8DmGxU4POeY67P9O2yI3d-uOoTnFA"
+        },
+        {
+            "id": "missing-proof",
+            "expect": "fail",
+            "failure": "malformed",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "authorization": "DPoP eyJhbGciOiJFUzI1NiIsImtpZCI6ImFzLTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2FzLmV4YW1wbGUiLCJzdWIiOiJtZXJjaGFudC13b3JrbG9hZC0xIiwiYXVkIjoicGF5bWVudHMtYXBpIiwiZXhwIjoxNzg1NDk5NTAwLCJpYXQiOjE3ODU0OTkyMDAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJtZXJjaGFudC1jbGllbnQiLCJzY29wZSI6InBheW1lbnRzOndyaXRlIiwiY25mIjp7ImprdCI6IkFocUh6YVlYQTVNem1EQ3Jzc2VVc1ZCR0t5ZmhEaHZla3gwVEhqSF94SUUifX0.2a3sBL555YvsW3Aefzvvt19xbfqEqB7x_aK54fD_0u1P3Io629rVEIQtahtu2MQSJb2MbJVKDe3ZOoKNgbwo8A",
+            "dpop": null
+        },
+        {
+            "id": "mixed-bearer",
+            "expect": "ambiguous",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "authorization": "Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImFzLTEiLCJ0eXAiOiJhdCtqd3QifQ.eyJpc3MiOiJodHRwczovL2FzLmV4YW1wbGUiLCJzdWIiOiJtZXJjaGFudC13b3JrbG9hZC0xIiwiYXVkIjoicGF5bWVudHMtYXBpIiwiZXhwIjoxNzg1NDk5NTAwLCJpYXQiOjE3ODU0OTkyMDAsImp0aSI6ImF0LTEiLCJjbGllbnRfaWQiOiJtZXJjaGFudC1jbGllbnQiLCJzY29wZSI6InBheW1lbnRzOndyaXRlIiwiY25mIjp7ImprdCI6IkFocUh6YVlYQTVNem1EQ3Jzc2VVc1ZCR0t5ZmhEaHZla3gwVEhqSF94SUUifX0.2a3sBL555YvsW3Aefzvvt19xbfqEqB7x_aK54fD_0u1P3Io629rVEIQtahtu2MQSJb2MbJVKDe3ZOoKNgbwo8A",
+            "dpop": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImZQSjdHSTBEVDM2S1VqZ0RCTFVhdzhDSmFlSjM4aHMxcGd0SV9FZG1tWGciLCJ5IjoiQjNkVkVOdU8wRUFwUFpyR24zUXcyN3A5cmVZODZZSXBuZ1MzblNKNGM5RSJ9LCJ0eXAiOiJkcG9wK2p3dCJ9.eyJqdGkiOiJwcm9vZi0xIiwiaHRtIjoiUE9TVCIsImh0dSI6Imh0dHBzOi8vYXBpLmV4YW1wbGUvdjEvcGF5bWVudHMiLCJpYXQiOjE3ODU0OTkyMDAsImF0aCI6InlCVGRYTlZjYXQ0TWJxbTkyVUVYVGRlNkp2cEpqR1I1VEk5MUgySHBQakkifQ.AGSu3qDnlV-8bUawbltp9_Y956CaP6FgjXIPcfhEK-TDkhgGhh0edJZ_1X3HX5ETM1oSAMK757_nraAwlWUa7w"
+        }
+    ],
+    "seed_note": "Deterministic P-256 fixture keys use private scalars 1 and 2; never use them outside vector tests."
+}

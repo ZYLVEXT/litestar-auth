@@ -1,0 +1,5 @@
+Deterministic Ed25519 private seeds are bytes(range(0, 32)),
+bytes(range(32, 64)), and bytes(range(64, 96)) for the active, next, and
+retiring vector keys. The unknown-key negative case uses bytes(range(96, 128)).
+These public test seeds are only for deterministic vector regeneration;
+consumers never receive production signing keys.

@@ -1,0 +1,313 @@
+{
+    "profile": "authweave-payment-http-sig-v1",
+    "normative": [
+        "RFC 9421 (https://www.rfc-editor.org/rfc/rfc9421.html, sections 2.5, 3.2, 4 and 7)",
+        "RFC 9530 (https://www.rfc-editor.org/rfc/rfc9530.html)",
+        "RFC 8941",
+        "AuthWeave ADR 0004"
+    ],
+    "readiness": "independently-verified-vectors+sf-matrix",
+    "interoperability_note": "Verified by AuthWeave/Python and a dependency-free Node.js implementation that independently constructs the signature base and digest.",
+    "seed_note": "Deterministic Ed25519 private seed is bytes(range(32)). Private seed is for vector regeneration only.",
+    "key_id": "merchant-key-1",
+    "public_key_raw_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+    "binding": {
+        "application_id": "payments",
+        "principal_subject": "payments-worker",
+        "environment": "sandbox"
+    },
+    "now": "2026-07-31T12:00:00+00:00",
+    "created": 1785499200,
+    "expires": 1785499500,
+    "cases": [
+        {
+            "id": "valid-payment",
+            "expect": "pass",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "valid-dpop-authorization-component",
+            "expect": "pass",
+            "require_authorization_component": true,
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "authorization": "DPoP access-token-fixture",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\" \"authorization\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-dpop\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:jQ6qFXrdhNfQyC76qNqNf3O1PXHBcKXLqqDkTblz1uuX/f0Rl4h77Aj/wn12AHdvymgpqXIPoEj4dt69JszrDA==:"
+            }
+        },
+        {
+            "id": "trusted-external-target",
+            "expect": "pass",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-proxy\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:bnaq9+MQ15u2gAB0KdQHS2q4sekq6f1xGdXZOqpnWErf+2RviJ+b+o6ql8loTTQOBZQUEvp05ng5isW1w8hODQ==:"
+            },
+            "note": "Application must supply trusted external target_uri; never Host/Forwarded alone."
+        },
+        {
+            "id": "body-mutation-digest",
+            "expect": "fail",
+            "failure": "digest_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMSIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "query-rejected",
+            "expect": "fail",
+            "failure": "query_rejected",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments?trace=1",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "wrong-target-uri",
+            "expect": "fail",
+            "failure": "signature_invalid",
+            "method": "POST",
+            "target_uri": "https://internal.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "content-encoding-rejected",
+            "expect": "fail",
+            "failure": "content_encoding_rejected",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:",
+                "content-encoding": "gzip"
+            }
+        },
+        {
+            "id": "missing-signature",
+            "expect": "fail",
+            "failure": "missing_component",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:"
+            }
+        },
+        {
+            "id": "duplicate-idempotency-key",
+            "expect": "fail",
+            "failure": "malformed",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers_list": [
+                [
+                    "content-type",
+                    "application/json"
+                ],
+                [
+                    "idempotency-key",
+                    "idem-vector-1"
+                ],
+                [
+                    "content-digest",
+                    "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:"
+                ],
+                [
+                    "Signature-Input",
+                    "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\""
+                ],
+                [
+                    "Signature",
+                    "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+                ],
+                [
+                    "Idempotency-Key",
+                    "idem-vector-2"
+                ]
+            ]
+        },
+        {
+            "id": "binding-mismatch",
+            "expect": "fail",
+            "failure": "key_binding_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            },
+            "override_principal_subject": "other-worker"
+        },
+        {
+            "id": "duplicate-signature-labels",
+            "expect": "fail",
+            "failure": "malformed",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\", payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:, payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "extra-signature-label",
+            "expect": "fail",
+            "failure": "malformed",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\", other=(\"@method\");created=1785499200;keyid=\"merchant-key-1\";nonce=\"n2\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:, other=:AA==:"
+            }
+        },
+        {
+            "id": "wrong-signature-label",
+            "expect": "fail",
+            "failure": "profile_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "other=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "other=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "malformed-signature-input",
+            "expect": "fail",
+            "failure": "profile_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "not-a-structured-field",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "digest-alg-confusion",
+            "expect": "fail",
+            "failure": "malformed",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-512=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "content-type-rejected",
+            "expect": "fail",
+            "failure": "content_type_rejected",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "text/plain",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "wrong-profile-tag",
+            "expect": "fail",
+            "failure": "signature_invalid",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"other-profile\"",
+                "signature": "payment=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        },
+        {
+            "id": "label-mismatch-signature-header",
+            "expect": "fail",
+            "failure": "profile_mismatch",
+            "method": "POST",
+            "target_uri": "https://api.example/v1/payments",
+            "body_b64": "eyJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiVVNEIn0=",
+            "headers": {
+                "content-type": "application/json",
+                "idempotency-key": "idem-vector-1",
+                "content-digest": "sha-256=:6mpclRCa5jgu16PzW9kPEjbk1qkvAwCG1bbfArGkrI8=:",
+                "signature-input": "payment=(\"@method\" \"@target-uri\" \"content-digest\" \"content-type\" \"idempotency-key\");created=1785499200;keyid=\"merchant-key-1\";alg=\"ed25519\";expires=1785499500;nonce=\"nonce-vector-1\";tag=\"authweave-payment-http-sig-v1\"",
+                "signature": "other=:m4UW/Dj8k+L+wI/FtMLEL9anZ+B50MmDO8hNOnep4r1ExpuOMEyqXQpn87AWKxFxOQ40tlHe6WIr4oElKjfSAg==:"
+            }
+        }
+    ]
+}

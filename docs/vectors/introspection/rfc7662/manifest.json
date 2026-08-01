@@ -1,0 +1,48 @@
+{
+    "profile": "rfc7662-plain",
+    "cases": [
+        {
+            "id": "active-mtls-cnf",
+            "expect": "pass",
+            "body": {
+                "active": true,
+                "sub": "merchant-1",
+                "client_id": "client-1",
+                "aud": "payments-api",
+                "scope": "payments:write",
+                "exp": 1785500400,
+                "iat": 1785496800,
+                "cnf": {
+                    "x5t#S256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                }
+            }
+        },
+        {
+            "id": "inactive-clean",
+            "expect": "pass",
+            "body": {
+                "active": false
+            }
+        },
+        {
+            "id": "inactive-with-metadata",
+            "expect": "fail",
+            "body": {
+                "active": false,
+                "sub": "merchant-1"
+            }
+        },
+        {
+            "id": "active-dpop-cnf-rejected-in-mtls-parser",
+            "expect": "fail",
+            "body": {
+                "active": true,
+                "sub": "merchant-1",
+                "client_id": "client-1",
+                "cnf": {
+                    "jkt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                }
+            }
+        }
+    ]
+}

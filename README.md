@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="litestar-auth 7 separates opaque human sessions from certificate-bound workload identity on a shared AuthWeave core">
+  <img src="./assets/readme/hero.svg" width="100%" alt="litestar-auth 7 separates opaque human sessions from sender-constrained workload identity on a shared AuthWeave core">
 </p>
 
 <p align="center">
@@ -24,9 +24,10 @@
   </a>
 </p>
 
-`litestar-auth` 7 is the human-authentication layer in a coordinated three-package stack for
-Python 3.12–3.14. It keeps browser sessions, workload credentials, and framework-neutral
-coordination in explicit packages instead of mixing them behind one credential parser.
+`litestar-auth` 7 is the human-authentication layer in the six-distribution AuthWeave workspace for
+Python 3.12–3.14. Browser sessions, workload credentials, framework-neutral coordination,
+observability, webhooks, and payment-message integrity remain explicit package boundaries instead
+of one credential parser.
 
 ## Choose the layer you need
 
@@ -34,15 +35,21 @@ coordination in explicit packages instead of mixing them behind one credential p
 | --- | --- | --- |
 | [`litestar-auth`](https://pypi.org/project/litestar-auth/) | Registration, login, OAuth + PKCE, TOTP, roles, organizations, and opaque database or Redis sessions in Litestar | `uv add litestar-auth` |
 | `authweave-core` | Typed principals, evidence, decisions, route policies, and fail-closed provider coordination | `uv add authweave-core` |
-| `authweave-workload` | X.509 workload lifecycle, direct mTLS, and externally issued certificate-bound JWTs | `uv add 'authweave-workload[mtls,jwt]'` |
+| `authweave-workload` | X.509 workload lifecycle plus mTLS-, DPoP-, SPIFFE-, JWT-, and introspection-based Resource Server profiles | `uv add 'authweave-workload[all]'` |
+| `authweave-otel` | API-only security spans and metrics without installing an SDK or exporter | `uv add authweave-otel` |
+| `authweave-webhooks` | Ed25519 Standard Webhooks signing, verification, replay control, and bounded delivery | `uv add 'authweave-webhooks[httpx]'` |
+| `authweave-http-signatures` | RFC 9530/RFC 9421 payment-message integrity after machine authentication | `uv add authweave-http-signatures` |
 
-All three distributions use coordinated `7.x` versions. The dependency direction stays one-way:
+All six distributions use coordinated `7.x` versions. The dependency direction stays one-way:
 
 ```text
 authweave-core
 ├── litestar-auth
-└── authweave-workload
-    └── authweave-workload[litestar] → litestar-auth Extension SDK v2
+├── authweave-workload
+│   └── authweave-workload[litestar] → litestar-auth Extension SDK v2
+├── authweave-otel
+├── authweave-webhooks
+└── authweave-http-signatures
 ```
 
 ## Start with a secure human session
@@ -74,8 +81,9 @@ app = Litestar(plugins=[LitestarAuth(config)])
 
 The [quickstart](docs/quickstart.md) covers schema requirements and links the runnable
 registration/login flow. Use `RedisTokenStrategy` with `litestar-auth[redis]` when sessions belong
-in Redis. Both implementations issue opaque access and refresh tokens, rotate refresh tokens,
-revoke replayed chains, and expose safe session metadata.
+in Redis. Both implementations issue opaque server-side access tokens. With
+`LitestarAuthConfig.enable_refresh=True`, they also rotate refresh tokens, revoke replayed chains,
+and expose safe session metadata.
 
 ## Keep machine identity on its own path
 
@@ -92,9 +100,15 @@ At request time:
 
 - `DirectMTLSProvider` consumes trusted TLS peer evidence.
 - `MTLSBoundJWTProvider` verifies an asymmetric access token from a configured external issuer.
-- The token's RFC 8705 thumbprint must match the same peer certificate.
+- DPoP, SPIFFE, and sender-constrained introspection profiles remain behind explicit extras and
+  route policy.
+- Bound tokens or proofs must match the same verified certificate or DPoP key.
 - Ambiguous credential ownership and provider failures stop authentication; they never fall
   through to another provider.
+
+`authweave-workload` also provides strict outbound RFC 8693 token exchange and typed payment
+authorization details. `authweave-webhooks` and `authweave-http-signatures` verify message
+integrity after authentication; `authweave-otel` observes outcomes without changing them.
 
 The repository includes an Envoy-based reference stack with negative-path verification:
 
@@ -107,9 +121,10 @@ sh docker/reference/verify.sh
 Authentication establishes a verified principal and constraints. Your application still owns
 tenant mapping, row-level security, resource ownership, and business authorization.
 
-Version 7 intentionally does **not** provide bearer login, user-owned API keys, proprietary HMAC
-request signing, an OAuth Authorization Server, generic IAM, DPoP, SPIFFE, opaque-token
-introspection, or production rollout automation.
+Version 7 intentionally does **not** provide unconstrained bearer login, user-owned API keys,
+shared-secret machine or request-signing credentials, an OAuth Authorization Server or STS,
+generic IAM, or production rollout automation. Token exchange is a strict client for an external
+STS; it does not operate one.
 
 ## Documentation
 

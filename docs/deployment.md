@@ -4,7 +4,8 @@ Human sessions require HTTPS, secure cookies, CSRF protection, one database or R
 provider, and worker-shared persistence. Use distinct high-entropy secrets for token digests,
 account artifacts, OAuth flow cookies, encrypted provider tokens, and encrypted TOTP material.
 
-Machine routes require TLS 1.3 mutual authentication. The reference Envoy boundary:
+Direct-mTLS and mTLS-bound routes require TLS 1.3 mutual authentication. The reference Envoy
+boundary for those profiles:
 
 - validates the client chain and CRL;
 - removes caller-supplied TLS evidence headers;
@@ -37,9 +38,24 @@ bundled Envoy evidence adapter is optional: Traefik or another ingress needs an 
 reviewed adapter that proves the immediate proxy boundary and never trusts public forwarded
 headers.
 
-External issuer configuration uses an explicit HTTPS JWKS URL, bounded network/cache/key limits,
-an asymmetric algorithm allowlist, issuer and audience allowlists, and mandatory TLS certificate
-binding. Outage is unavailable, never anonymous.
+External issuer configuration uses an explicit HTTPS JWKS URL or reviewed static key source,
+bounded network/cache/key limits, an asymmetric algorithm allowlist, and issuer and audience
+allowlists. The selected profile then requires either mTLS certificate binding or DPoP key binding.
+Outage is unavailable, never anonymous.
+
+Optional profiles add deployment-owned boundaries:
+
+- DPoP and DPoP-bound introspection require the trusted effective external request target, clock
+  policy, and a worker-shared replay store.
+- SPIFFE requires one reviewed mesh/headless evidence boundary or the bounded Workload API snapshot
+  manager; trust-bundle freshness and outage behavior are explicit.
+- Introspection and outbound token exchange require exact HTTPS endpoint allowlists, bounded clients,
+  controlled egress, client authentication, and no redirects.
+- Webhook sending requires exact endpoint onboarding plus network-level egress control. HTTP
+  signatures and webhooks require shared replay state where multiple workers consume traffic.
+
+The profile-specific controls and runnable references are linked from the
+[readiness matrix](roadmap.md).
 
 Run `sh docker/reference/verify.sh` before deployment. Production rollout additionally requires an
 independent review of proxy/TLS/JWKS trust boundaries and an explicit rollout approval.

@@ -1,0 +1,35 @@
+{
+    "schema": "authweave.webhooks.merchant-environment-pack/v1",
+    "status": "example-do-not-deploy",
+    "profile": "authweave-standard-webhooks-v1a",
+    "environment": "live",
+    "owner": "merchant-demo",
+    "endpoint": "https://merchant.example/hooks/payments",
+    "key_set_url": "https://keys.example/merchants/merchant-demo/webhooks/payments.json",
+    "key_document": {
+        "version": "2026-08-01T00:00:00Z",
+        "not_before": 1785542400,
+        "retire_after": 1788134400,
+        "keys": [
+            {
+                "role": "active",
+                "public_key_raw_b64": "DVhX1ezMvQDx6zoME0pFs8Nak4HDXGIL8sYhUeiUv4I="
+            },
+            {
+                "role": "next",
+                "public_key_raw_b64": "en2TVI2bjIjJ245tq/1HNzRhuqMu4ExYMKaYGtczsFY="
+            },
+            {
+                "role": "retiring",
+                "public_key_raw_b64": "WHosMgorCUcCRgTOzrJ8CAwmMeOBNUM3BfXW3dzwqdY="
+            }
+        ]
+    },
+    "sender_egress": {
+        "exact_endpoint_allowlist": [
+            "https://merchant.example/hooks/payments"
+        ],
+        "controlled_proxy_required": true,
+        "redirects_allowed": false
+    }
+}

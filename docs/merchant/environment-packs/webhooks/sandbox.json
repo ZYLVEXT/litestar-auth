@@ -1,0 +1,35 @@
+{
+    "schema": "authweave.webhooks.merchant-environment-pack/v1",
+    "status": "example-do-not-deploy",
+    "profile": "authweave-standard-webhooks-v1a",
+    "environment": "sandbox",
+    "owner": "merchant-demo",
+    "endpoint": "https://sandbox-merchant.example/hooks/payments",
+    "key_set_url": "https://sandbox-keys.example/merchants/merchant-demo/webhooks/payments.json",
+    "key_document": {
+        "version": "2026-08-01T00:00:00Z",
+        "not_before": 1785542400,
+        "retire_after": 1788134400,
+        "keys": [
+            {
+                "role": "active",
+                "public_key_raw_b64": "2Kv5MAuKg9Nk8qwopY8v8qGIcfadp/oc3mhBPc6jDWU="
+            },
+            {
+                "role": "next",
+                "public_key_raw_b64": "5wFG3Mbs37wilYdp1AmVb3WD/7PwxBLpVV3+tvx/7J4="
+            },
+            {
+                "role": "retiring",
+                "public_key_raw_b64": "uecrs44SmVBy5v1ixILjTmWTFcSW5GavacTRiZ5d5lI="
+            }
+        ]
+    },
+    "sender_egress": {
+        "exact_endpoint_allowlist": [
+            "https://sandbox-merchant.example/hooks/payments"
+        ],
+        "controlled_proxy_required": true,
+        "redirects_allowed": false
+    }
+}

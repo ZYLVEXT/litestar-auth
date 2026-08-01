@@ -1,0 +1,275 @@
+{
+    "profile": "authweave-standard-webhooks-v1a",
+    "normative": [
+        "Standard Webhooks v1.0.2",
+        "AuthWeave ADR 0002"
+    ],
+    "upstream_revision": "https://github.com/standard-webhooks/standard-webhooks/blob/v1.0.2/spec/standard-webhooks.md",
+    "readiness": "independent-non-python-verification",
+    "interoperability_note": "The Python implementation and a dependency-free Node.js verifier consume the same exact-byte, rotation-overlap, and negative vectors. External cryptographic review remains a production gate.",
+    "public_keys_raw_b64": {
+        "active": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        "next": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+        "retiring": "JUO5L/EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0="
+    },
+    "key_document": {
+        "version": "2",
+        "environment": "sandbox",
+        "owner": "merchant-demo",
+        "endpoint": "https://merchant.example/hooks/payments",
+        "not_before": 0,
+        "retire_after": null
+    },
+    "cases": [
+        {
+            "id": "valid-active-delivery",
+            "expect": "pass",
+            "now": 1700000000,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "active-next-rotation-overlap",
+            "expect": "pass",
+            "now": 1700000001,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3JvdGF0aW9uX292ZXJsYXBfMDAyLjE3MDAwMDAwMDEueyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_rotation_overlap_002"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000001"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,be69q4Nq9XxuXtdB1sQuEwm4ek1J6BDxG7KnyYT6nOmUNhRY8u3Xi0PLSvvm441ug9j2Ub72KLsMk7ibcw1FDQ== v1a,P/tQ3g85Ld1AAz76EF61BVNdf+87Neq7aYBUXIwxQKpYOxN3y++nkiU5aktzifPUCIv10nrSBDxEdEI6FLHwAg=="
+                ]
+            ]
+        },
+        {
+            "id": "retiring-key-overlap",
+            "expect": "pass",
+            "now": 1700000002,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3JldGlyaW5nX292ZXJsYXBfMDAzLjE3MDAwMDAwMDIueyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_retiring_overlap_003"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000002"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,dEBmOlMuc8JZGz7aBh2HBmZ1XPbpdPmsZOB97Av8FUXTNkdZno/mu+cWBQ2ppMKLQxIBSP/71cj5JKu68XeiBQ=="
+                ]
+            ]
+        },
+        {
+            "id": "compromised-retiring-key-removed",
+            "expect": "fail",
+            "failure": "signature_invalid",
+            "trusted_key_roles": [
+                "active",
+                "next"
+            ],
+            "now": 1700000002,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3JldGlyaW5nX292ZXJsYXBfMDAzLjE3MDAwMDAwMDIueyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_retiring_overlap_003"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000002"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,dEBmOlMuc8JZGz7aBh2HBmZ1XPbpdPmsZOB97Av8FUXTNkdZno/mu+cWBQ2ppMKLQxIBSP/71cj5JKu68XeiBQ=="
+                ]
+            ]
+        },
+        {
+            "id": "forged-body",
+            "expect": "fail",
+            "failure": "signature_invalid",
+            "now": 1700000000,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiI5OTkuMDAifQ==",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6Ijk5OS4wMCJ9",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "stale-timestamp",
+            "expect": "fail",
+            "failure": "timestamp_out_of_tolerance",
+            "now": 1700010000,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "wrong-environment",
+            "expect": "fail",
+            "failure": "environment_mismatch",
+            "now": 1700000000,
+            "override_environment": "live",
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "wrong-endpoint",
+            "expect": "fail",
+            "failure": "endpoint_mismatch",
+            "now": 1700000000,
+            "override_endpoint": "https://other.example/hooks/payments",
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "wrong-owner",
+            "expect": "fail",
+            "failure": "owner_mismatch",
+            "now": 1700000000,
+            "override_owner": "merchant-other",
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        },
+        {
+            "id": "unknown-signing-key",
+            "expect": "fail",
+            "failure": "signature_invalid",
+            "now": 1700000003,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3Vua25vd25fa2V5XzAwNC4xNzAwMDAwMDAzLnsiZXZlbnQiOiJwYXltZW50LmNhcHR1cmVkIiwiYW1vdW50IjoiMTAuMDAiLCJjdXJyZW5jeSI6IkVVUiJ9",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_unknown_key_004"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000003"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,9o3Zt7n12ebCGKsOFAjElbr0uAug1FbbIWRjmQ7A185SvqOvVhjsmP0YbKsE/eXioOtfGI/VAqKx8kGslN5uCg=="
+                ]
+            ]
+        },
+        {
+            "id": "duplicate-webhook-id-header",
+            "expect": "fail",
+            "failure": "duplicate_header",
+            "now": 1700000000,
+            "body_b64": "eyJldmVudCI6InBheW1lbnQuY2FwdHVyZWQiLCJhbW91bnQiOiIxMC4wMCIsImN1cnJlbmN5IjoiRVVSIn0=",
+            "signing_input_b64": "bXNnX3BheW1lbnRfZGVtb18wMDEuMTcwMDAwMDAwMC57ImV2ZW50IjoicGF5bWVudC5jYXB0dXJlZCIsImFtb3VudCI6IjEwLjAwIiwiY3VycmVuY3kiOiJFVVIifQ==",
+            "headers": [
+                [
+                    "webhook-id",
+                    "msg_payment_demo_001"
+                ],
+                [
+                    "webhook-id",
+                    "msg_duplicate"
+                ],
+                [
+                    "webhook-timestamp",
+                    "1700000000"
+                ],
+                [
+                    "webhook-signature",
+                    "v1a,sY4N7sUBdCuKz1bh3RnjSm1gUcmkPcOQO2G8UwOAk8l/E1buODPXBSwQA0fbOk5Z6QX79aG+MYMX1gItKpCdAg=="
+                ]
+            ]
+        }
+    ]
+}

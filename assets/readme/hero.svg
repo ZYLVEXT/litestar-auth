@@ -4,7 +4,7 @@
   <title id="title">litestar-auth 7 authentication stack</title>
   <desc id="desc">
     Human requests follow an opaque session path through litestar-auth. Machine requests follow
-    a certificate-bound path through authweave-workload. Both use authweave-core contracts.
+    a sender-constrained path through authweave-workload. Both use authweave-core contracts.
   </desc>
 
   <rect width="1200" height="400" rx="24" fill="#10162f"/>

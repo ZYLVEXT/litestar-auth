@@ -1,13 +1,14 @@
 # Migration from 6.x to 7.0
 
 Version 7 is a security-boundary release, not an in-place credential-format upgrade. Upgrade the
-three coordinated distributions together, rehearse against a copy of production data, and require
-an explicit operator decision before cutover. There is no automatic conversion of removed
-credentials.
+six lockstep workspace distributions that your deployment uses, rehearse against a copy of
+production data, and require an explicit operator decision before cutover. There is no automatic
+conversion of removed credentials.
 
 ## Upgrade invariants
 
-- Keep `authweave-core`, `litestar-auth`, and `authweave-workload` on the same `7.x` release line.
+- Keep every installed AuthWeave distribution on the same `7.x` major line; published workspace
+  releases use one lockstep version.
 - Do not run a v7 Litestar extension inside a v6 host or mix Extension SDK major versions.
 - Do not accept an old credential and reinterpret it as a v7 session or certificate identity.
 - Keep human and machine routes on separate provider profiles.
@@ -99,8 +100,13 @@ commit.
 
 Choose one profile per route:
 
-- direct mTLS through trusted `TlsPeerEvidence`; or
-- an external modern asymmetric access token bound to the same client certificate.
+- direct mTLS through trusted `TlsPeerEvidence`;
+- an external modern asymmetric access token bound to the same client certificate;
+- a DPoP-bound access token with a shared replay store;
+- SPIFFE X.509-SVID evidence projected by one trusted mesh/headless boundary; or
+- mTLS/DPoP-bound opaque-token introspection through a bounded, allowlisted client.
+
+Outbound RFC 8693 token exchange is a client operation, not an inbound provider or fallback path.
 
 Do not translate an old shared secret into certificate metadata. Revoke and delete old credential
 rows only after every caller has moved and rollback policy has expired. That data change is
@@ -109,11 +115,14 @@ operator-owned and intentionally outside this package.
 Move callers one at a time at the routing or infrastructure boundary:
 
 1. Provision and validate a new certificate.
-2. Register its public metadata in `pending` state.
-3. Activate it and confirm the target route's direct-mTLS or bound-JWT profile.
-4. Shift that caller to the v7 route without enabling fallback in the v7 process.
-5. Observe authentication, revocation freshness, rate-limit identity, and security events.
-6. Revoke the old credential after the caller-specific rollback window.
+2. Register its public metadata; a current credential is created in `active` state.
+3. For a staged rotation, register a future-dated replacement with `rotation_of` and call
+   `complete_rotation()` at cutover to activate it and revoke its predecessor.
+4. Confirm the target route's direct-mTLS or bound-JWT profile.
+5. Shift that caller to the v7 route without enabling fallback in the v7 process.
+6. Observe authentication, revocation freshness, rate-limit identity, and security events.
+7. Revoke the old credential after the caller-specific rollback window if it was not revoked by
+   `complete_rotation()`.
 
 ## 6. Persistence
 
@@ -138,6 +147,28 @@ profile. Update guards to test verified principal kind, audience, scope, environ
 delegation depth. Configure `correlation_id_factory` from trusted application scope/state; inbound
 request IDs are not trusted automatically.
 
+### Mandatory authentication event delivery (ADR 0001)
+
+Every workload provider config on `WorkloadAuthExtension` now takes an `event_callback`, and it
+is a mandatory delivery channel for production configuration:
+
+- When a callback is configured, invoking it is required for every terminal authentication
+  outcome. If the callback raises or returns `Unavailable`, the authentication decision fails
+  closed to `Unavailable` — there is no ordered fallback to another provider.
+- `WorkloadAuthExtension.validate()` rejects a production configuration whose providers omit
+  `event_callback`. Omission is permitted only for explicitly non-audited local fixtures, which
+  must opt in with `allow_unaudited=True`.
+- The authentication `event_callback` and the `authweave-otel` observer stay independent. A
+  telemetry fault never changes the authentication result and never substitutes for the callback.
+- Enable request-scoped operational telemetry with
+  `LitestarAuthConfig(observer=AuthWeaveTelemetry())`. Security spans are
+  `INTERNAL` children of the existing ASGI server span; AuthWeave does not emit
+  duplicate HTTP spans. Event callbacks receive bounded `trace_id` and `span_id`
+  correlation fields when a valid span is active.
+- Applications that want absorb-and-observe semantics supply their own wrapper callback that
+  catches, records, and acknowledges success back to AuthWeave. AuthWeave does not implement a
+  best-effort mode, outbox, or SIEM export.
+
 The bundled examples show the supported boundaries:
 
 - [`examples/workload_headless.py`](https://github.com/ZYLVEXT/litestar-auth/blob/main/examples/workload_headless.py)
@@ -147,6 +178,22 @@ The bundled examples show the supported boundaries:
   for the Litestar extension;
 - [`examples/workload_asgi.py`](https://github.com/ZYLVEXT/litestar-auth/blob/main/examples/workload_asgi.py)
   for a minimal neutral ASGI adapter.
+
+### Standard Webhooks onboarding binding and sender egress
+
+The `authweave-webhooks` verifier now requires the complete onboarding binding:
+`expected_environment`, `expected_owner`, and `expected_endpoint`. Add the exact
+merchant owner to every `StandardWebhooksVerifier`; a key document for another
+owner fails with `WebhookFailureCode.OWNER_MISMATCH` even when environment and
+endpoint happen to match.
+
+`HttpxWebhookSender` now requires `allowed_endpoints` at construction and uses
+the HTTP client's streaming API. Supply the exact approved endpoints from the
+merchant environment pack. The sender rejects any other URL, disables
+redirects, and consumes no more than 65,536 response bytes. Deploy the
+application-owned client behind the controlled proxy/subnet in the
+[sender threat model](merchant/webhook-sender-threat-model.md); an arbitrary
+tenant endpoint list is not an SSRF policy.
 
 ## 8. Cutover verification
 

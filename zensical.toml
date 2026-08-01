@@ -15,6 +15,18 @@ nav = [
   { "Security" = "security.md" },
   { "Deployment" = "deployment.md" },
   { "Migration 6.x → 7" = "migration.md" },
+  { "Roadmap" = "roadmap.md" },
+  { "Releasing" = "releasing.md" },
+  { "Merchant webhooks" = "merchant/webhooks.md" },
+  { "Webhook sender threat model" = "merchant/webhook-sender-threat-model.md" },
+  { "Merchant DPoP" = "merchant/dpop.md" },
+  { "DPoP deployment profiles" = "merchant/dpop-deployment-profiles.md" },
+  { "Merchant SPIFFE" = "merchant/spiffe.md" },
+  { "Merchant introspection" = "merchant/introspection.md" },
+  { "Merchant token exchange" = "merchant/token-exchange.md" },
+  { "Payment HTTP signatures" = "merchant/http-signatures.md" },
+  { "Payment authorization details" = "merchant/authorization-details.md" },
+  { "Payment authorization schema v1" = "schemas/payment-authorization-v1.md" },
   { "Contributing" = "contributing.md" },
 ]
 

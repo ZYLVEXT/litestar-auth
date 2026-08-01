@@ -42,12 +42,13 @@ app = Litestar(plugins=[LitestarAuth(config)])
 `session_maker`, `User`, `UserManager`, `user_db_factory`, and `user_manager_security` are the
 application's normal database and account-lifecycle objects.
 
-This minimal configuration warns until public login/registration rate limits and a shared
-verification/reset-token replay store are configured. Treat those warnings as production
-requirements; do not silence them outside controlled tests or local development.
+This minimal configuration warns that the default rate-limit and account-token replay state is
+process-local. Configure worker-shared backends for multi-worker production; do not silence those
+warnings outside controlled tests or local development.
 
-Create the user, access-token, refresh-token, and consumed-refresh-digest tables through the
-application's normal migration system before serving requests. The runnable
+Create the user and access-token tables through the application's normal migration system before
+serving requests. If refresh is explicitly enabled, also create the refresh-token and
+consumed-refresh-digest tables. The runnable
 [`demo_db_token_refresh`](https://github.com/ZYLVEXT/litestar-auth/tree/main/examples/demo_db_token_refresh)
 shows model import, SQLite table bootstrap, registration, login, refresh, and cleanup.
 
@@ -62,3 +63,6 @@ providers or add credential fallback.
 Workload identities are not users. Install `authweave-workload`, configure direct mTLS or a
 trusted external certificate-bound JWT issuer, and optionally contribute that provider through
 `WorkloadAuthExtension`. A route policy selects exactly one human or machine provider profile.
+DPoP, SPIFFE, introspection, and token-exchange integrations are optional advanced profiles; use
+the [architecture](architecture.md), [security posture](security.md), and linked merchant runbooks
+before enabling them.
