@@ -6,6 +6,8 @@ import pytest
 from authweave_core import FailureCode, PrincipalRef
 from authweave_workload.delegation import Delegation, map_rfc8693_actor
 
+pytestmark = pytest.mark.unit
+
 
 def test_rfc8693_actor_mapping_is_bounded_and_scope_intersected() -> None:
     subject = PrincipalRef("https://issuer.test", "resource-owner", "agent")

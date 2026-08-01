@@ -31,7 +31,7 @@ from authweave_workload.models import (
     ResolvedMachineIdentity,
     ServiceApplication,
 )
-from authweave_workload.stores import StoreConflictError, StoreUnavailableError
+from authweave_workload.stores import StoreConflictError, StoreOwnerStateConflictError, StoreUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -163,7 +163,17 @@ class SQLAlchemyWorkloadStore:
             raise StoreConflictError("application does not exist")
 
     async def create_principal(self, principal: MachinePrincipal) -> None:
-        """Insert one principal."""
+        """Insert one principal while serializing against application disablement."""
+        application = await self.session.scalar(
+            select(ServiceApplicationRow)
+            .where(ServiceApplicationRow.id == principal.application_id)
+            .with_for_update()
+            .execution_options(populate_existing=True),
+        )
+        if application is None:
+            raise StoreOwnerStateConflictError("application does not exist")
+        if application.status != EntityStatus.ACTIVE.value:
+            raise StoreOwnerStateConflictError("application is disabled")
         self.session.add(_principal_row(principal))
         await self._flush_conflict("principal already exists")
 
@@ -197,12 +207,26 @@ class SQLAlchemyWorkloadStore:
             raise StoreConflictError("principal does not exist")
 
     async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None:
-        """Atomically enforce the per-principal active credential limit and insert."""
-        principal = await self.session.scalar(
-            select(MachinePrincipalRow).where(MachinePrincipalRow.id == credential.principal_id).with_for_update(),
-        )
-        if principal is None:
-            raise StoreConflictError("principal does not exist")
+        """Atomically validate the owner, enforce the active limit, and insert."""
+        owner = (
+            await self.session.execute(
+                select(MachinePrincipalRow, ServiceApplicationRow)
+                .join(
+                    ServiceApplicationRow,
+                    ServiceApplicationRow.id == MachinePrincipalRow.application_id,
+                )
+                .where(MachinePrincipalRow.id == credential.principal_id)
+                .with_for_update()
+                .execution_options(populate_existing=True),
+            )
+        ).one_or_none()
+        if owner is None:
+            raise StoreOwnerStateConflictError("principal does not exist")
+        principal, application = owner
+        if application.status != EntityStatus.ACTIVE.value or principal.status != EntityStatus.ACTIVE.value:
+            raise StoreOwnerStateConflictError("credential owner is disabled")
+        if application.environment != credential.environment:
+            raise StoreOwnerStateConflictError("credential environment does not match its application")
         active_count = await self.session.scalar(
             select(func.count())
             .select_from(MachineCredentialRow)

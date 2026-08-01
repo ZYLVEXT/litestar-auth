@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -109,6 +110,9 @@ def _provider(store: MatrixStore, *, event_callback: object = None) -> DirectMTL
     )
 
 
+pytestmark = pytest.mark.unit
+
+
 @pytest.mark.parametrize(
     "options",
     [
@@ -164,7 +168,6 @@ def test_direct_mtls_peer_trust_and_time_matrix(changes: dict[str, object], expe
     assert _provider(MatrixStore(None))._validate_peer(request) is expected
 
 
-@pytest.mark.asyncio
 async def test_direct_mtls_absence_unknown_and_store_outage_are_terminal() -> None:
     now = datetime.now(UTC)
     assert isinstance(
@@ -188,7 +191,6 @@ async def test_direct_mtls_absence_unknown_and_store_outage_are_terminal() -> No
     )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("change", "expected"),
     [
@@ -235,7 +237,6 @@ async def test_direct_mtls_entity_and_credential_status_matrix(
     assert decision == Invalid(expected)
 
 
-@pytest.mark.asyncio
 async def test_direct_mtls_success_supports_sync_event_callback() -> None:
     now = datetime.now(UTC)
     events: list[object] = []
@@ -246,3 +247,64 @@ async def test_direct_mtls_success_supports_sync_event_callback() -> None:
     )
     assert isinstance(decision, Authenticated)
     assert events
+
+
+async def test_direct_mtls_success_supports_async_event_callback() -> None:
+    now = datetime.now(UTC)
+    events: list[object] = []
+
+    async def _record(event: object) -> None:
+        await asyncio.to_thread(events.append, event)
+
+    provider = _provider(MatrixStore(_resolved(now)), event_callback=_record)
+    decision = await provider.authenticate(
+        RequestView("GET", timestamp=now, tls_peer=_peer(now)),
+        AuthenticationRuntime(),
+    )
+    assert isinstance(decision, Authenticated)
+    assert events
+
+
+async def test_direct_mtls_callback_exception_fails_closed() -> None:
+    """ADR 0001: a raised callback maps the terminal outcome to Unavailable."""
+    now = datetime.now(UTC)
+
+    def _raise(_event: object) -> None:
+        raise RuntimeError
+
+    provider = _provider(MatrixStore(_resolved(now)), event_callback=_raise)
+    decision = await provider.authenticate(
+        RequestView("GET", timestamp=now, tls_peer=_peer(now)),
+        AuthenticationRuntime(),
+    )
+    assert isinstance(decision, Unavailable)
+
+
+async def test_direct_mtls_callback_returning_unavailable_fails_closed() -> None:
+    """ADR 0001: a returned Unavailable is a delivery failure, not a decision."""
+    now = datetime.now(UTC)
+
+    def _decline(_event: object) -> Unavailable:
+        return Unavailable()
+
+    provider = _provider(MatrixStore(_resolved(now)), event_callback=_decline)
+    decision = await provider.authenticate(
+        RequestView("GET", timestamp=now, tls_peer=_peer(now)),
+        AuthenticationRuntime(),
+    )
+    assert isinstance(decision, Unavailable)
+
+
+async def test_direct_mtls_failure_callback_exception_fails_closed() -> None:
+    """A callback fault on a rejection path still fails closed to Unavailable."""
+    now = datetime.now(UTC)
+
+    def _raise(_event: object) -> None:
+        raise RuntimeError
+
+    provider = _provider(MatrixStore(None), event_callback=_raise)
+    decision = await provider.authenticate(
+        RequestView("GET", timestamp=now, tls_peer=_peer(now)),
+        AuthenticationRuntime(),
+    )
+    assert isinstance(decision, Unavailable)

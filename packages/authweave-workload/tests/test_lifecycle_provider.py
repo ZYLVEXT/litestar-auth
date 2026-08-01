@@ -187,7 +187,9 @@ class MemoryStore:
         return activated, revoked
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.unit
+
+
 async def test_lifecycle_and_direct_mtls_are_principal_neutral() -> None:
     now = datetime.now(UTC)
     store = MemoryStore()
@@ -274,7 +276,6 @@ async def test_lifecycle_and_direct_mtls_are_principal_neutral() -> None:
     assert disabled == Invalid(FailureCode.PRINCIPAL_DISABLED)
 
 
-@pytest.mark.asyncio
 async def test_direct_mtls_rejects_downgrade_and_mixed_credentials() -> None:
     now = datetime.now(UTC)
     store = MemoryStore()

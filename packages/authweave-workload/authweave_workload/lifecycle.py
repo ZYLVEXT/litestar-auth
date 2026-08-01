@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -21,13 +22,15 @@ from authweave_workload.models import (
     ServiceApplication,
     freeze_metadata,
 )
-from authweave_workload.stores import StoreConflictError
+from authweave_workload.stores import StoreConflictError, StoreOwnerStateConflictError
 
 _MAX_REVOCATION_REASON_LENGTH = 128
+_APPLICATION_DISABLED = "application is disabled"
+_CREDENTIAL_ENVIRONMENT_MISMATCH = "credential environment does not match its application"
+_CREDENTIAL_OWNER_DISABLED = "credential owner is disabled"
+_EMPTY_METADATA: Mapping[str, str] = MappingProxyType({})
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from authweave_workload.stores import WorkloadStore
 
 type EventRecorder = Callable[[SecurityEvent], object]
@@ -72,7 +75,7 @@ class WorkloadLifecycleService:
         application_id: str,
         environment: str,
         owner_ref: str,
-        metadata: Mapping[str, str] = {},
+        metadata: Mapping[str, str] = _EMPTY_METADATA,
     ) -> tuple[ServiceApplication, SecurityEvent]:
         """Create an enabled service application."""
         application = ServiceApplication(
@@ -117,14 +120,14 @@ class WorkloadLifecycleService:
         application_id: str,
         subject: str,
         kind: str,
-        metadata: Mapping[str, str] = {},
+        metadata: Mapping[str, str] = _EMPTY_METADATA,
     ) -> tuple[MachinePrincipal, SecurityEvent]:
         """Create an enabled machine principal under an existing application."""
         application = await self.store.get_application(application_id)
         if application is None:
             raise LifecycleConflictError("application does not exist")
         if application.status is not EntityStatus.ACTIVE:
-            raise LifecycleConflictError("application is disabled")
+            raise LifecycleConflictError(_APPLICATION_DISABLED)
         principal = MachinePrincipal(
             id=principal_id,
             application_id=application_id,
@@ -132,7 +135,10 @@ class WorkloadLifecycleService:
             status=EntityStatus.ACTIVE,
             metadata=metadata,
         )
-        await self.store.create_principal(principal)
+        try:
+            await self.store.create_principal(principal)
+        except StoreOwnerStateConflictError as exc:
+            raise LifecycleConflictError(str(exc)) from exc
         event = SecurityEvent(
             SecurityEventType.PRINCIPAL_CREATED,
             target_application_id=application_id,
@@ -169,7 +175,7 @@ class WorkloadLifecycleService:
         scopes: tuple[str, ...],
         audiences: tuple[str, ...],
         environment: str,
-        metadata: Mapping[str, str] = {},
+        metadata: Mapping[str, str] = _EMPTY_METADATA,
         rotation_of: str | None = None,
         now: datetime | None = None,
     ) -> tuple[MachineCredential, SecurityEvent]:
@@ -183,9 +189,9 @@ class WorkloadLifecycleService:
             raise LifecycleConflictError("principal does not exist")
         application = await self.store.get_application(principal.application_id)
         if application is None or application.environment != environment:
-            raise LifecycleConflictError("credential environment does not match its application")
+            raise LifecycleConflictError(_CREDENTIAL_ENVIRONMENT_MISMATCH)
         if application.status is not EntityStatus.ACTIVE or principal.status is not EntityStatus.ACTIVE:
-            raise LifecycleConflictError("credential owner is disabled")
+            raise LifecycleConflictError(_CREDENTIAL_OWNER_DISABLED)
         if certificate.not_before > current_time:
             if rotation_of is None or certificate.not_before - current_time > self.maximum_rotation_lead:
                 raise LifecycleConflictError("future-dated certificate is outside the rotation window")
@@ -215,7 +221,7 @@ class WorkloadLifecycleService:
             rotation_of=rotation_of,
             metadata=freeze_metadata(metadata),
         )
-        await self.store.register_credential(credential, active_limit=self.active_credential_limit)
+        await self._register_credential(credential)
         event = SecurityEvent(
             SecurityEventType.CREDENTIAL_ROTATION_STARTED
             if rotation_of is not None
@@ -226,6 +232,13 @@ class WorkloadLifecycleService:
         )
         event = await self._record(event)
         return credential, event
+
+    async def _register_credential(self, credential: MachineCredential) -> None:
+        """Persist one credential while preserving lifecycle conflict errors."""
+        try:
+            await self.store.register_credential(credential, active_limit=self.active_credential_limit)
+        except StoreOwnerStateConflictError as exc:
+            raise LifecycleConflictError(str(exc)) from exc
 
     async def revoke_credential(
         self,

@@ -116,6 +116,9 @@ def _provider(
     )
 
 
+pytestmark = pytest.mark.unit
+
+
 @pytest.mark.parametrize(
     ("issuer_options", "message"),
     [
@@ -176,7 +179,6 @@ def test_jwt_provider_match_rejects_ambiguous_presentations() -> None:
     assert provider.match(RequestView("GET", headers=((b"authorization", b"Bearer "),))) is CredentialMatch.OWNED
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("peer_change", "expected"),
     [
@@ -211,7 +213,23 @@ async def test_jwt_provider_tls_negative_matrix(
     assert decision == expected
 
 
-@pytest.mark.asyncio
+async def test_jwt_provider_callback_failure_fails_closed() -> None:
+    """ADR 0001: a raised event callback maps the outcome to Unavailable."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    key, jwks = _key_and_jwks()
+
+    def _raise(_event: object) -> None:
+        raise RuntimeError
+
+    provider = _provider(BoundedJWKSClient(static_jwks=jwks), event_callback=_raise)
+    peer = replace(_peer(now), tls_version="TLSv1.2")
+    decision = await provider.authenticate(
+        _request(_token(key, now), now, peer=peer),
+        AuthenticationRuntime(),
+    )
+    assert isinstance(decision, Unavailable)
+
+
 async def test_jwt_provider_rejects_missing_and_malformed_presentations() -> None:
     """Owned malformed credentials terminate as malformed."""
     now = datetime.now(UTC)
@@ -232,7 +250,6 @@ async def test_jwt_provider_rejects_missing_and_malformed_presentations() -> Non
         assert await provider.authenticate(request, AuthenticationRuntime()) == Invalid(FailureCode.MALFORMED)
 
 
-@pytest.mark.asyncio
 async def test_jwt_provider_maps_jwks_outage_to_unavailable() -> None:
     """Trust-service outage is terminal and never anonymous."""
 
@@ -246,7 +263,6 @@ async def test_jwt_provider_maps_jwks_outage_to_unavailable() -> None:
     assert isinstance(decision, Unavailable)
 
 
-@pytest.mark.asyncio
 async def test_jwt_header_key_and_signature_negative_matrix() -> None:
     class InvalidKeys:
         async def get_key(self, kid: str, algorithm: str) -> object:
@@ -278,7 +294,6 @@ async def test_jwt_header_key_and_signature_negative_matrix() -> None:
     ) == Invalid(FailureCode.INVALID)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
@@ -312,7 +327,6 @@ async def test_jwt_claim_negative_matrix(mutate: dict[str, object], expected: Fa
     assert decision == Invalid(expected)
 
 
-@pytest.mark.asyncio
 async def test_jwt_time_and_scope_ceilings() -> None:
     """Future, excessive-lifetime, duplicate, and oversized claims fail closed."""
     now = datetime.now(UTC)
@@ -347,7 +361,6 @@ async def test_jwt_time_and_scope_ceilings() -> None:
         assert decision == Invalid(expected)
 
 
-@pytest.mark.asyncio
 async def test_jwt_provider_maps_invalid_runtime_configuration_to_typed_failure() -> None:
     """Invalid provider projection never escapes as a model-construction exception."""
     now = datetime.now(UTC)
@@ -367,7 +380,6 @@ async def test_jwt_provider_maps_invalid_runtime_configuration_to_typed_failure(
     ) == Invalid(FailureCode.INVALID)
 
 
-@pytest.mark.asyncio
 async def test_jwt_delegation_requires_trust_and_application_policy() -> None:
     """Signed actor data grants no authority without both explicit controls."""
     now = datetime.now(UTC)
@@ -405,7 +417,6 @@ async def test_jwt_delegation_requires_trust_and_application_policy() -> None:
     ) == Invalid(FailureCode.INVALID)
 
 
-@pytest.mark.asyncio
 async def test_jwt_async_event_and_optional_dependency(monkeypatch: pytest.MonkeyPatch) -> None:
     now = datetime.now(UTC)
     key, jwks = _key_and_jwks()

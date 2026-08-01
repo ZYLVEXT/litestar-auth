@@ -1,0 +1,110 @@
+# DPoP resource-server Docker reference (no client certificate)
+#
+# External test AS/JWKS + Redis-backed multi-worker RS for authweave-workload[dpop].
+# Direct mTLS live harness remains docker/reference/verify.sh.
+
+services:
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  test-authorization-server:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - dpop
+      - --with
+      - uvicorn
+      - uvicorn
+      - test_authorization_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8082"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/as-venv
+      AS_ISSUER: https://as.example
+      AS_AUDIENCE: payments-api
+      AS_TOKEN_TARGET: https://as.example/oauth/token
+    ports:
+      - "127.0.0.1:18082:8082"
+    volumes:
+      - ../../..:/workspace:ro
+      - ./test_authorization_server.py:/app/test_authorization_server.py:ro
+    working_dir: /app
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8082),2); s.close()"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+  upstream:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      redis:
+        condition: service_healthy
+      test-authorization-server:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - dpop
+      - --extra
+      - redis
+      - --with
+      - uvicorn
+      - --with
+      - typing_extensions
+      - uvicorn
+      - upstream_dpop:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --workers
+      - "4"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/upstream-venv
+      REDIS_URL: redis://redis:6379/0
+      AS_INTERNAL_JWKS_URL: http://test-authorization-server:8082/.well-known/jwks.json
+      AS_ISSUER: https://as.example
+      AS_AUDIENCE: payments-api
+      EXTERNAL_TARGET: https://api.example/v1/payments
+      UPSTREAM_HOST: 0.0.0.0
+      UPSTREAM_PORT: "8080"
+    ports:
+      - "127.0.0.1:18081:8080"
+    working_dir: /app
+    volumes:
+      - ../../..:/workspace:ro
+      - ./upstream_dpop.py:/app/upstream_dpop.py:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8080),2); s.close()"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s

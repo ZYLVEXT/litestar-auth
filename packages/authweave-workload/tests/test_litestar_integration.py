@@ -14,7 +14,9 @@ from authweave_workload.integrations.litestar import (
     UNIX_SOCKET_PROXY,
     DirectMTLSProviderConfig,
     EnvoyTLSHeaderEvidence,
+    MeshSPIFFEHeaderEvidence,
     MTLSBoundJWTProviderConfig,
+    SPIFFEProviderConfig,
     WorkloadAuthExtension,
     require_machine_audience,
     require_machine_environment,
@@ -23,7 +25,13 @@ from authweave_workload.integrations.litestar import (
     require_maximum_delegation_depth,
 )
 from authweave_workload.provider import DirectMTLSPolicy
+from authweave_workload.spiffe import SpiffePolicy, SpiffeResolvedPrincipal
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
+
+from litestar_auth._plugin.extensions._context import (
+    ExtensionRegistrationContext,
+    ExtensionRegistrationContributions,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,6 +74,9 @@ def _evidence_factory(*, proxy_addresses: frozenset[str] = frozenset({"127.0.0.1
         frozenset({"local-ca"}),
         lambda: _REVOCATION_CHECKED_AT,
     )
+
+
+pytestmark = pytest.mark.integration
 
 
 def test_envoy_evidence_is_absent_without_proxy_headers() -> None:
@@ -153,7 +164,12 @@ def _extension(
     direct: tuple[DirectMTLSProviderConfig, ...] = (),
     jwt: tuple[MTLSBoundJWTProviderConfig, ...] = (),
 ) -> WorkloadAuthExtension:
-    return WorkloadAuthExtension(lambda _scope: None, direct_mtls=direct, mtls_bound_jwt=jwt)
+    return WorkloadAuthExtension(
+        lambda _scope: None,
+        direct_mtls=direct,
+        mtls_bound_jwt=jwt,
+        allow_unaudited=True,
+    )
 
 
 def _validation_context(*backend_names: str) -> AuthExtensionValidationContext:
@@ -173,6 +189,32 @@ def test_workload_extension_rejects_empty_duplicate_and_conflicting_inventory() 
         _extension(direct=(direct,)).validate(_validation_context("machine"))
 
 
+def test_workload_extension_requires_mandatory_event_callback_in_production() -> None:
+    """ADR 0001: production configuration must wire a mandatory event callback."""
+    direct = DirectMTLSProviderConfig("machine", _policy())
+    production = WorkloadAuthExtension(lambda _scope: None, direct_mtls=(direct,))
+    with pytest.raises(ValueError, match="event_callback"):
+        production.validate(_validation_context())
+
+    delivered: list[object] = []
+
+    def _deliver(event: object) -> None:
+        delivered.append(event)
+
+    audited = WorkloadAuthExtension(
+        lambda _scope: None,
+        direct_mtls=(replace(direct, event_callback=_deliver),),
+    )
+    audited.validate(_validation_context())
+
+    fixture = WorkloadAuthExtension(
+        lambda _scope: None,
+        direct_mtls=(direct,),
+        allow_unaudited=True,
+    )
+    fixture.validate(_validation_context())
+
+
 class _RegistrationRecorder:
     """Minimal Extension SDK v2 recorder."""
 
@@ -180,11 +222,15 @@ class _RegistrationRecorder:
 
     def __init__(self) -> None:
         self.tls_factories: list[tuple[str, object]] = []
+        self.spiffe_factories: list[tuple[str, object]] = []
         self.providers: list[tuple[str, str, str, object]] = []
         self.schemes: list[tuple[str, str, object]] = []
 
     def add_tls_peer_evidence_factory(self, extension_name: str, factory: object) -> None:
         self.tls_factories.append((extension_name, factory))
+
+    def add_spiffe_peer_evidence_factory(self, extension_name: str, factory: object) -> None:
+        self.spiffe_factories.append((extension_name, factory))
 
     def add_authentication_provider(
         self,
@@ -287,3 +333,134 @@ def test_machine_guards_enforce_verified_context_dimensions() -> None:
     )
     with pytest.raises(PermissionDeniedException):
         require_maximum_delegation_depth(0)(cast("ASGIConnection", _connection(delegated)), handler)
+
+
+_SPIFFE_ID = "spiffe://example.org/payments/worker"
+_SPIFFE_BOUNDARY = "mesh-local"
+
+
+def _spiffe_headers() -> list[tuple[bytes, bytes]]:
+    return [
+        (b"x-auth-spiffe-id", _SPIFFE_ID.encode()),
+        (b"x-auth-spiffe-not-before", b"2026-07-31T11:00:00+00:00"),
+        (b"x-auth-spiffe-not-after", b"2026-07-31T13:00:00+00:00"),
+    ]
+
+
+def _spiffe_factory(*, proxy_addresses: frozenset[str] = frozenset({"127.0.0.1"})) -> MeshSPIFFEHeaderEvidence:
+    return MeshSPIFFEHeaderEvidence(proxy_addresses, termination_boundary=_SPIFFE_BOUNDARY)
+
+
+class _StaticSpiffeResolver:
+    async def resolve(self, spiffe_id: object) -> SpiffeResolvedPrincipal:
+        return SpiffeResolvedPrincipal(
+            principal=PrincipalRef(
+                f"spiffe://{getattr(spiffe_id, 'trust_domain', 'example.org')}", str(spiffe_id), "workload"
+            ),
+            application_id="payments",
+            environment="sandbox",
+        )
+
+
+def test_mesh_spiffe_evidence_is_absent_without_headers() -> None:
+    assert _spiffe_factory()(_scope()) is None
+
+
+def test_mesh_spiffe_evidence_rejects_untrusted_proxy() -> None:
+    with pytest.raises(NotAuthorizedException, match="not trusted"):
+        _spiffe_factory()(_scope(client="203.0.113.5", headers=_spiffe_headers()))
+
+
+def test_mesh_spiffe_evidence_rejects_duplicate_headers() -> None:
+    with pytest.raises(NotAuthorizedException, match="ambiguous"):
+        _spiffe_factory()(_scope(headers=[*_spiffe_headers(), (b"x-auth-spiffe-id", _SPIFFE_ID.encode())]))
+
+
+def test_mesh_spiffe_evidence_builds_secret_free_projection() -> None:
+    evidence = _spiffe_factory()(_scope(headers=[(b"x-irrelevant", b"ignored"), *_spiffe_headers()]))
+    assert evidence is not None
+    assert evidence.spiffe_id == _SPIFFE_ID
+    assert evidence.trust_domain == "example.org"
+    assert evidence.termination_boundary == _SPIFFE_BOUNDARY
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        _spiffe_headers()[:-1],
+        [(b"x-auth-spiffe-id", b"\xff"), *_spiffe_headers()[1:]],
+    ],
+)
+def test_mesh_spiffe_evidence_rejects_incomplete_or_malformed_projection(
+    headers: list[tuple[bytes, bytes]],
+) -> None:
+    with pytest.raises(NotAuthorizedException, match="invalid"):
+        _spiffe_factory()(_scope(headers=headers))
+
+
+def test_mesh_spiffe_evidence_accepts_unix_socket_proxy() -> None:
+    factory = _spiffe_factory(proxy_addresses=frozenset({UNIX_SOCKET_PROXY}))
+    evidence = factory(_scope(client=None, headers=_spiffe_headers()))
+    assert evidence is not None
+
+
+def test_mesh_spiffe_evidence_requires_proxy_allowlist() -> None:
+    with pytest.raises(ValueError, match="proxy addresses"):
+        MeshSPIFFEHeaderEvidence(frozenset())
+
+
+def test_spiffe_extension_requires_peer_factory_and_registers_profile() -> None:
+    settings = SPIFFEProviderConfig(
+        name="spiffe",
+        policy=SpiffePolicy(
+            allowed_trust_domains=frozenset({"example.org"}),
+            termination_boundaries=frozenset({_SPIFFE_BOUNDARY}),
+        ),
+        resolver=_StaticSpiffeResolver(),
+    )
+    with pytest.raises(ValueError, match="spiffe_peer_evidence_factory"):
+        WorkloadAuthExtension(lambda _scope: None, spiffe=(settings,)).validate(_validation_context())
+
+    extension = WorkloadAuthExtension(
+        lambda _scope: None,
+        spiffe=(settings,),
+        spiffe_peer_evidence_factory=_spiffe_factory(),
+        allow_unaudited=True,
+    )
+    recorder = _RegistrationRecorder()
+    extension.validate(_validation_context())
+    extension.register(cast("AuthExtensionRegistrationContext", recorder))
+    assert recorder.providers[0][2] == "spiffe_x509_svid"
+    assert recorder.spiffe_factories[0][0] == "authweave_workload"
+    factory = cast("Callable[[object], object]", recorder.spiffe_factories[0][1])
+    projected = factory(cast("object", _scope(headers=_spiffe_headers())))
+    assert projected is not None
+    binding_factory = cast("Callable[[object], Any]", recorder.providers[0][3])
+    assert binding_factory(None).provider.profile == "spiffe_x509_svid"
+
+    with pytest.raises(ValueError, match="at most one"):
+        WorkloadAuthExtension(
+            lambda _scope: None,
+            spiffe=(settings, settings),
+            spiffe_peer_evidence_factory=_spiffe_factory(),
+        ).validate(_validation_context())
+
+
+def test_extension_spiffe_peer_factory_conflict_is_enforced() -> None:
+    class _Holder:
+        contributions = ExtensionRegistrationContributions()
+
+    holder = _Holder()
+
+    def factory(_scope: object) -> None:
+        return None
+
+    cast("Any", ExtensionRegistrationContext.add_spiffe_peer_evidence_factory)(holder, "alpha", factory)
+    assert holder.contributions.spiffe_evidence is not None
+    assert holder.contributions.spiffe_evidence.extension_name == "alpha"
+    with pytest.raises(ValueError, match="conflicts with extension 'alpha'"):
+        cast("Any", ExtensionRegistrationContext.add_spiffe_peer_evidence_factory)(holder, "beta", factory)
+    with pytest.raises(TypeError, match="callable"):
+        cast("Any", ExtensionRegistrationContext.add_spiffe_peer_evidence_factory)(
+            holder, "gamma", cast("Any", object())
+        )

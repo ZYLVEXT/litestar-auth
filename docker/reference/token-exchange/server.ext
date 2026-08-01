@@ -1,0 +1,3 @@
+subjectAltName=DNS:token-exchange,DNS:token-exchange-mtls,IP:127.0.0.1
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth

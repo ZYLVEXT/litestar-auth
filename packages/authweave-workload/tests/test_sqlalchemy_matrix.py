@@ -49,7 +49,9 @@ def _credential(
     )
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.integration
+
+
 async def test_sqlalchemy_store_full_crud_rotation_and_last_used() -> None:  # ruff: ignore[too-many-statements]
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as connection:
@@ -163,7 +165,52 @@ async def test_sqlalchemy_store_full_crud_rotation_and_last_used() -> None:  # r
     await engine.dispose()
 
 
-@pytest.mark.asyncio
+async def test_sqlalchemy_store_rechecks_owner_state_before_principal_and_credential_writes() -> None:
+    """Owner disablement cannot race lifecycle writes into latent active identities."""
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as connection:
+        await connection.run_sync(WorkloadBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    application = ServiceApplication("app", EntityStatus.ACTIVE, "sandbox", "owner")
+    principal = MachinePrincipal(
+        "principal",
+        application.id,
+        PrincipalRef("issuer", "subject", "service"),
+        EntityStatus.ACTIVE,
+    )
+    credential = _credential("credential", "A" * 43, now)
+
+    async with factory.begin() as session:
+        store = SQLAlchemyWorkloadStore(session)
+        with pytest.raises(StoreConflictError, match="application does not exist"):
+            await store.create_principal(principal)
+        await store.create_application(application)
+        await store.set_application_status(application.id, EntityStatus.DISABLED)
+        with pytest.raises(StoreConflictError, match="application is disabled"):
+            await store.create_principal(principal)
+
+        await store.set_application_status(application.id, EntityStatus.ACTIVE)
+        await store.create_principal(principal)
+        await store.set_application_status(application.id, EntityStatus.DISABLED)
+        with pytest.raises(StoreConflictError, match="credential owner is disabled"):
+            await store.register_credential(credential, active_limit=4)
+
+        await store.set_application_status(application.id, EntityStatus.ACTIVE)
+        await store.set_principal_status(principal.id, EntityStatus.DISABLED)
+        with pytest.raises(StoreConflictError, match="credential owner is disabled"):
+            await store.register_credential(credential, active_limit=4)
+
+        await store.set_principal_status(principal.id, EntityStatus.ACTIVE)
+        with pytest.raises(StoreConflictError, match="environment"):
+            await store.register_credential(
+                replace(credential, environment="live"),
+                active_limit=4,
+            )
+
+    await engine.dispose()
+
+
 async def test_sqlalchemy_rotation_never_reactivates_a_revoked_replacement() -> None:
     """A revoke committed before rotation validation remains terminal."""
     engine = create_async_engine("sqlite+aiosqlite://")
@@ -209,7 +256,6 @@ class _FailingSession:
         raise SQLAlchemyError
 
 
-@pytest.mark.asyncio
 async def test_sqlalchemy_store_maps_database_outages() -> None:
     store = SQLAlchemyWorkloadStore(cast("AsyncSession", _FailingSession()))
     with pytest.raises(StoreUnavailableError, match="lookup"):
@@ -218,7 +264,6 @@ async def test_sqlalchemy_store_maps_database_outages() -> None:
         await store.record_last_used("credential", used_at_epoch=0, minimum_interval=0)
 
 
-@pytest.mark.asyncio
 async def test_sqlalchemy_store_maps_corrupt_identity_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Result:
         def one_or_none(self) -> tuple[object, object, object]:

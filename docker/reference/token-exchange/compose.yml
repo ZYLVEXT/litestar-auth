@@ -1,0 +1,103 @@
+services:
+  certificates:
+    image: alpine/openssl:3.5.4@sha256:42c7389ef077aed0eb4e96d0abbd094083d701bbaff1313073b061c0c9cd8278
+    entrypoint: ["/bin/sh"]
+    command: ["/app/generate-pki.sh"]
+    volumes:
+      - certificates:/certs
+      - ./client.ext:/app/client.ext:ro
+      - ./generate-pki.sh:/app/generate-pki.sh:ro
+      - ./server.ext:/app/server.ext:ro
+
+  token-exchange:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - token-exchange
+      - --with
+      - uvicorn
+      - uvicorn
+      - authorization_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8443"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/sts-venv
+    ports:
+      - "127.0.0.1:18444:8443"
+    volumes:
+      - ../../..:/workspace:ro
+      - ./authorization_server.py:/app/authorization_server.py:ro
+      - certificates:/certs:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8443),2); s.close()\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+  token-exchange-mtls:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - token-exchange
+      - --with
+      - uvicorn
+      - uvicorn
+      - authorization_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8443"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+      - --ssl-ca-certs
+      - /certs/ca.crt
+      - --ssl-cert-reqs
+      - "2"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/sts-venv
+    ports:
+      - "127.0.0.1:18445:8443"
+    volumes:
+      - ../../..:/workspace:ro
+      - ./authorization_server.py:/app/authorization_server.py:ro
+      - certificates:/certs:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8443),2); s.close()\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+volumes:
+  certificates:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -19,7 +18,12 @@ from authweave_core import (
     Unavailable,
 )
 
-from authweave_workload.events import SecurityEvent, SecurityEventType
+from authweave_workload.events import (
+    EventDeliveryError,
+    SecurityEvent,
+    SecurityEventType,
+    deliver_security_event,
+)
 from authweave_workload.models import CredentialStatus, EntityStatus
 from authweave_workload.stores import StoreUnavailableError
 
@@ -80,7 +84,22 @@ class DirectMTLSProvider:
             return CredentialMatch.AMBIGUOUS
         return CredentialMatch.OWNED
 
-    async def authenticate(  # ruff: ignore[too-many-branches]
+    async def authenticate(
+        self,
+        request: RequestView,
+        runtime: AuthenticationRuntime,
+    ) -> AuthenticationDecision:
+        """Authenticate and fail closed if mandatory event delivery fails (ADR 0001).
+
+        Returns:
+            A terminal typed authentication decision.
+        """
+        try:
+            return await self._authenticate(request, runtime)
+        except EventDeliveryError:
+            return Unavailable()
+
+    async def _authenticate(  # ruff: ignore[too-many-branches]
         self,
         request: RequestView,
         runtime: AuthenticationRuntime,
@@ -213,10 +232,7 @@ class DirectMTLSProvider:
         )
 
     async def _emit(self, event: SecurityEvent) -> None:
-        if self.event_callback is not None:
-            result = self.event_callback(event)
-            if inspect.isawaitable(result):
-                await result
+        await deliver_security_event(self.event_callback, event)
 
 
 __all__ = ("DirectMTLSPolicy", "DirectMTLSProvider")

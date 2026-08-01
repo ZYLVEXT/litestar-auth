@@ -1,0 +1,123 @@
+services:
+  certificates:
+    image: alpine/openssl:3.5.4@sha256:42c7389ef077aed0eb4e96d0abbd094083d701bbaff1313073b061c0c9cd8278
+    command:
+      - req
+      - -x509
+      - -newkey
+      - ec
+      - -pkeyopt
+      - ec_paramgen_curve:P-256
+      - -nodes
+      - -days
+      - "1"
+      - -subj
+      - /CN=authorization-server
+      - -addext
+      - subjectAltName=DNS:authorization-server,IP:127.0.0.1
+      - -keyout
+      - /certs/server.key
+      - -out
+      - /certs/server.crt
+    volumes:
+      - certificates:/certs
+
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  authorization-server:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - introspection
+      - --with
+      - uvicorn
+      - uvicorn
+      - authorization_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8443"
+      - --ssl-keyfile
+      - /certs/server.key
+      - --ssl-certfile
+      - /certs/server.crt
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/as-venv
+    ports:
+      - "127.0.0.1:18443:8443"
+    volumes:
+      - ../../..:/workspace:ro
+      - ./authorization_server.py:/app/authorization_server.py:ro
+      - certificates:/certs:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8443),2); s.close()\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+  resource-server:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      authorization-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - introspection
+      - --extra
+      - redis
+      - --with
+      - uvicorn
+      - uvicorn
+      - resource_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --workers
+      - "4"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/rs-venv
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:18083:8080"
+    volumes:
+      - ../../..:/workspace:ro
+      - ./resource_server.py:/app/resource_server.py:ro
+      - certificates:/certs:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1',8080),2); s.close()\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+volumes:
+  certificates:

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
-from authweave_core import PrincipalRef
-from authweave_workload.events import SecurityEvent, SecurityEventType
+from authweave_core import PrincipalRef, SecurityOperation, SecurityOutcome, TraceCorrelation, observe_security
+from authweave_workload.events import SecurityEvent, SecurityEventType, deliver_security_event
 from authweave_workload.lifecycle import LifecycleConflictError, WorkloadLifecycleService
 from authweave_workload.models import (
     CertificateMetadata,
@@ -21,10 +22,13 @@ from authweave_workload.models import (
     _certificate_metadata,
     freeze_metadata,
 )
+from authweave_workload.stores import StoreConflictError, StoreOwnerStateConflictError
 
 from tests.test_lifecycle_provider import MemoryStore
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from authweave_workload.stores import WorkloadStore
 
 _THUMBPRINT = "A" * 43
@@ -81,6 +85,9 @@ def _credential(now: datetime, **changes: object) -> MachineCredential:
     }
     values.update(changes)
     return MachineCredential(**values)  # ty: ignore[invalid-argument-type]
+
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize(
@@ -171,9 +178,38 @@ def test_security_event_requires_aware_time() -> None:
         SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED, timestamp=datetime(2026, 1, 1))
     with pytest.raises(ValueError, match="correlation"):
         SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED, correlation_id=" ")
+    with pytest.raises(ValueError, match="together"):
+        SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED, trace_id="1" * 32)
+    with pytest.raises(ValueError, match="trace_id"):
+        SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED, trace_id="0" * 32, span_id="1" * 16)
+    event = SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED, trace_id="1" * 32, span_id="2" * 16)
+    assert event.trace_id == "1" * 32
 
 
-@pytest.mark.asyncio
+async def test_security_event_inherits_active_trace_correlation() -> None:
+    class _Observation:
+        @staticmethod
+        def set_outcome(outcome: SecurityOutcome, *, reason_code: str | None = None) -> None:
+            _ = outcome, reason_code
+
+    class _Observer:
+        @contextmanager
+        def observe(self, operation: SecurityOperation, **_kwargs: object) -> Iterator[_Observation]:
+            _ = operation
+            yield _Observation()
+
+        @staticmethod
+        def current_correlation() -> TraceCorrelation:
+            return TraceCorrelation("1" * 32, "2" * 16)
+
+    events: list[SecurityEvent] = []
+    with observe_security(_Observer(), SecurityOperation.AUTHENTICATE):  # type: ignore[arg-type]
+        await deliver_security_event(events.append, SecurityEvent(SecurityEventType.AUTHENTICATION_FAILED))
+
+    assert events[0].trace_id == "1" * 32
+    assert events[0].span_id == "2" * 16
+
+
 async def test_application_and_principal_lifecycle_transitions() -> None:
     store = MemoryStore()
     service = _service(store, issuer="urn:test")
@@ -218,7 +254,72 @@ async def test_application_and_principal_lifecycle_transitions() -> None:
     assert event.type is SecurityEventType.PRINCIPAL_ENABLED
 
 
-@pytest.mark.asyncio
+async def test_lifecycle_translates_owner_state_store_conflicts_and_preserves_other_conflicts() -> None:
+    """Concurrent owner-state rejection maps to lifecycle errors without hiding capacity conflicts."""
+    application = ServiceApplication("application", EntityStatus.ACTIVE, "sandbox", "team")
+    principal = MachinePrincipal(
+        "principal",
+        application.id,
+        PrincipalRef("urn:test", "subject", "service"),
+        EntityStatus.ACTIVE,
+    )
+    application_disabled_message = "custom application owner conflict"
+    credential_owner_disabled_message = "custom credential owner conflict"
+
+    class _DisabledApplicationStore(MemoryStore):
+        async def create_principal(self, principal: MachinePrincipal) -> None:
+            raise StoreOwnerStateConflictError(application_disabled_message)
+
+    disabled_application_store = _DisabledApplicationStore()
+    disabled_application_store.applications[application.id] = application
+    with pytest.raises(LifecycleConflictError, match=application_disabled_message):
+        await _service(disabled_application_store, issuer="urn:test").create_principal(
+            principal_id=principal.id,
+            application_id=application.id,
+            subject="subject",
+            kind="service",
+        )
+
+    class _DisabledCredentialStore(MemoryStore):
+        async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None:
+            raise StoreOwnerStateConflictError(credential_owner_disabled_message)
+
+    disabled_credential_store = _DisabledCredentialStore()
+    disabled_credential_store.applications[application.id] = application
+    disabled_credential_store.principals[principal.id] = principal
+    with pytest.raises(LifecycleConflictError, match=credential_owner_disabled_message):
+        await _service(disabled_credential_store, issuer="urn:test").register_credential(
+            principal_id=principal.id,
+            certificate=_certificate(datetime(2026, 1, 1, tzinfo=UTC)),
+            scopes=("read",),
+            audiences=("api",),
+            environment="sandbox",
+            now=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    capacity_store = MemoryStore()
+    capacity_store.applications[application.id] = application
+    capacity_store.principals[principal.id] = principal
+    capacity_service = _service(capacity_store, issuer="urn:test", active_credential_limit=1)
+    await capacity_service.register_credential(
+        principal_id=principal.id,
+        certificate=_certificate(datetime(2026, 1, 1, tzinfo=UTC)),
+        scopes=("read",),
+        audiences=("api",),
+        environment="sandbox",
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    with pytest.raises(StoreConflictError):
+        await capacity_service.register_credential(
+            principal_id=principal.id,
+            certificate=_certificate(datetime(2026, 1, 1, tzinfo=UTC), thumbprint="B" * 43),
+            scopes=("read",),
+            audiences=("api",),
+            environment="sandbox",
+            now=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
 async def test_credential_registration_rotation_and_revocation_matrix() -> None:  # ruff: ignore[too-many-statements]
     now = datetime(2026, 1, 1, tzinfo=UTC)
     store = MemoryStore()
@@ -379,7 +480,6 @@ async def test_credential_registration_rotation_and_revocation_matrix() -> None:
         await service.revoke_credential("missing", reason="operator_request")
 
 
-@pytest.mark.asyncio
 async def test_rotation_accepts_an_already_valid_replacement() -> None:
     """Normal certificate overlap completes without requiring future dating."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -426,7 +526,6 @@ async def test_rotation_accepts_an_already_valid_replacement() -> None:
     assert event.type is SecurityEventType.CREDENTIAL_ROTATION_COMPLETED
 
 
-@pytest.mark.asyncio
 async def test_lifecycle_safe_metadata_and_listing() -> None:
     store = MemoryStore()
     service = _service(store, issuer="urn:test")
@@ -460,7 +559,6 @@ async def test_lifecycle_safe_metadata_and_listing() -> None:
     assert await service.list_credentials(principal.id) == ()
 
 
-@pytest.mark.asyncio
 async def test_lifecycle_requires_attributed_recording_before_success() -> None:
     store = MemoryStore()
     events: list[SecurityEvent] = []

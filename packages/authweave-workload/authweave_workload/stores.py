@@ -25,6 +25,10 @@ class StoreConflictError(Exception):
     """Raised when a persistence uniqueness or lifecycle invariant is violated."""
 
 
+class StoreOwnerStateConflictError(StoreConflictError):
+    """Raised when a concurrently revalidated owner no longer permits a write."""
+
+
 @runtime_checkable
 class ServiceApplicationStore(Protocol):
     """Persistence operations for application registrations."""
@@ -42,7 +46,9 @@ class ServiceApplicationStore(Protocol):
 class MachinePrincipalStore(Protocol):
     """Persistence operations for machine principals."""
 
-    async def create_principal(self, principal: MachinePrincipal) -> None: ...
+    async def create_principal(self, principal: MachinePrincipal) -> None:
+        """Persist only when the owning application is active at write time."""
+        ...
 
     async def get_principal(self, principal_id: str) -> MachinePrincipal | None: ...
 
@@ -55,7 +61,9 @@ class MachinePrincipalStore(Protocol):
 class MachineCredentialStore(Protocol):
     """Persistence operations requiring atomic credential lifecycle semantics."""
 
-    async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None: ...
+    async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None:
+        """Recheck active application/principal state before enforcing the limit and inserting."""
+        ...
 
     async def get_credential(self, credential_id: str) -> MachineCredential | None: ...
 

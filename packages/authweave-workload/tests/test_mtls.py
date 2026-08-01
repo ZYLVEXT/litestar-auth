@@ -22,6 +22,9 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 _THUMBPRINT_LENGTH = 43
 
 
+pytestmark = pytest.mark.unit
+
+
 def test_valid_client_certificate_is_canonicalized_without_private_material() -> None:
     now = datetime.now(UTC)
     ca_key = ec.generate_private_key(ec.SECP256R1())

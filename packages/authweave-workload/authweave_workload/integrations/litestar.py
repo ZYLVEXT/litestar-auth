@@ -9,7 +9,7 @@ from datetime import datetime
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Never, cast
 
-from authweave_core import AuthenticationContext, TlsPeerEvidence
+from authweave_core import AuthenticationContext, ReplayStore, SpiffePeerEvidence, TlsPeerEvidence
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 from litestar.openapi.spec import SecurityScheme
 
@@ -28,10 +28,17 @@ if TYPE_CHECKING:
     from litestar.handlers.base import BaseRouteHandler
     from litestar.types import Scope
 
+    from authweave_workload.dpop import DPoPPolicy
+    from authweave_workload.introspection import (
+        BoundedIntrospectionClient,
+        IntrospectionIssuerProfile,
+    )
     from authweave_workload.jwt import DelegationPolicy
+    from authweave_workload.spiffe import SpiffePolicy, SpiffePrincipalResolver
 
 type SecurityEventCallback = Callable[[SecurityEvent], Awaitable[None] | None]
 type TlsPeerEvidenceFactory = Callable[[Scope], TlsPeerEvidence | None]
+type SpiffePeerEvidenceFactory = Callable[[Scope], SpiffePeerEvidence | None]
 type MachineGuard = Callable[[ASGIConnection[Any, Any, Any, Any], BaseRouteHandler], None]
 UNIX_SOCKET_PROXY = "unix"
 _ENVOY_SHA256_HEX_LENGTH = 64
@@ -43,6 +50,12 @@ _TLS_HEADER_NAMES = (
     b"x-auth-client-cert-not-before",
     b"x-auth-client-cert-not-after",
     b"x-auth-client-cert-trust-anchor",
+)
+
+_SPIFFE_HEADER_NAMES = (
+    b"x-auth-spiffe-id",
+    b"x-auth-spiffe-not-before",
+    b"x-auth-spiffe-not-after",
 )
 
 
@@ -67,14 +80,64 @@ class MTLSBoundJWTProviderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DPoPBoundJWTProviderConfig:
+    """One external DPoP-bound access-token provider contribution."""
+
+    name: str
+    issuer: TrustedIssuer
+    dpop: DPoPPolicy
+    replay_store: ReplayStore
+    event_callback: SecurityEventCallback | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SPIFFEProviderConfig:
+    """One SPIFFE X.509-SVID provider contribution (mesh or headless projection)."""
+
+    name: str
+    policy: SpiffePolicy
+    resolver: SpiffePrincipalResolver
+    event_callback: SecurityEventCallback | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MTLSBoundIntrospectionProviderConfig:
+    """One mTLS-bound opaque-token introspection provider contribution."""
+
+    name: str
+    client: BoundedIntrospectionClient
+    profile: IntrospectionIssuerProfile
+    tls_policy: DirectMTLSPolicy
+    event_callback: SecurityEventCallback | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DPoPBoundIntrospectionProviderConfig:
+    """One DPoP-bound opaque-token introspection provider contribution."""
+
+    name: str
+    client: BoundedIntrospectionClient
+    profile: IntrospectionIssuerProfile
+    dpop: DPoPPolicy
+    replay_store: ReplayStore
+    event_callback: SecurityEventCallback | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkloadAuthExtension:
     """Contribute workload providers to litestar-auth's single middleware."""
 
     tls_peer_evidence_factory: TlsPeerEvidenceFactory
     direct_mtls: tuple[DirectMTLSProviderConfig, ...] = ()
     mtls_bound_jwt: tuple[MTLSBoundJWTProviderConfig, ...] = ()
+    dpop_bound_jwt: tuple[DPoPBoundJWTProviderConfig, ...] = ()
+    spiffe: tuple[SPIFFEProviderConfig, ...] = ()
+    mtls_bound_introspection: tuple[MTLSBoundIntrospectionProviderConfig, ...] = ()
+    dpop_bound_introspection: tuple[DPoPBoundIntrospectionProviderConfig, ...] = ()
+    spiffe_peer_evidence_factory: SpiffePeerEvidenceFactory | None = None
     name: str = "authweave_workload"
     enabled: bool = True
+    allow_unaudited: bool = False
     requires_api: tuple[int, int] = EXTENSION_API_VERSION
 
     def validate(self, context: AuthExtensionValidationContext) -> None:
@@ -83,12 +146,30 @@ class WorkloadAuthExtension:
         Raises:
             ValueError: If the provider inventory is empty, duplicated, or conflicts.
         """
-        providers = (*self.direct_mtls, *self.mtls_bound_jwt)
+        providers = (
+            *self.direct_mtls,
+            *self.mtls_bound_jwt,
+            *self.dpop_bound_jwt,
+            *self.spiffe,
+            *self.mtls_bound_introspection,
+            *self.dpop_bound_introspection,
+        )
         if not providers:
             msg = "authweave-workload extension requires at least one provider"
             raise ValueError(msg)
-        if len(self.direct_mtls) > 1 or len(self.mtls_bound_jwt) > 1:
+        inventories = (
+            self.direct_mtls,
+            self.mtls_bound_jwt,
+            self.dpop_bound_jwt,
+            self.spiffe,
+            self.mtls_bound_introspection,
+            self.dpop_bound_introspection,
+        )
+        if any(len(inventory) > 1 for inventory in inventories):
             msg = "authweave-workload permits at most one provider for each machine profile"
+            raise ValueError(msg)
+        if self.spiffe and self.spiffe_peer_evidence_factory is None:
+            msg = "SPIFFE providers require spiffe_peer_evidence_factory"
             raise ValueError(msg)
         names = tuple(provider.name for provider in providers)
         if len(names) != len(set(names)):
@@ -97,13 +178,29 @@ class WorkloadAuthExtension:
         if set(names).intersection(context.backend_names):
             msg = "authweave-workload provider names conflict with human providers"
             raise ValueError(msg)
+        if not self.allow_unaudited:
+            unaudited = tuple(provider.name for provider in providers if provider.event_callback is None)
+            if unaudited:
+                joined = ", ".join(unaudited)
+                msg = (
+                    "authweave-workload production configuration requires a mandatory "
+                    f"authentication event_callback for provider(s): {joined}. "
+                    "Set allow_unaudited=True only for explicitly non-audited local fixtures (ADR 0001)."
+                )
+                raise ValueError(msg)
 
     def register(self, context: AuthExtensionRegistrationContext) -> None:
-        """Register typed providers, trusted TLS projection, and OpenAPI metadata."""
+        """Register typed providers, trusted TLS/SPIFFE projection, and OpenAPI metadata."""
         context.add_tls_peer_evidence_factory(
             self.name,
             lambda scope: self.tls_peer_evidence_factory(cast("Scope", scope)),
         )
+        if self.spiffe_peer_evidence_factory is not None:
+            spiffe_factory = self.spiffe_peer_evidence_factory
+            context.add_spiffe_peer_evidence_factory(
+                self.name,
+                lambda scope, factory=spiffe_factory: factory(cast("Scope", scope)),
+            )
         for settings in self.direct_mtls:
             context.add_authentication_provider(
                 self.name,
@@ -134,6 +231,72 @@ class WorkloadAuthExtension:
                     scheme="Bearer",
                     bearer_format="JWT",
                     description="RFC 8705 certificate-bound access token; trusted mTLS evidence is mandatory.",
+                ),
+            )
+        for settings in self.dpop_bound_jwt:
+            context.add_authentication_provider(
+                self.name,
+                name=settings.name,
+                profile="dpop_bound_access_token",
+                factory=lambda _session, settings=settings: _dpop_binding(settings),
+            )
+            context.add_openapi_security_scheme(
+                self.name,
+                settings.name,
+                SecurityScheme(
+                    type="http",
+                    scheme="DPoP",
+                    bearer_format="JWT",
+                    description="RFC 9449 DPoP-bound access token; DPoP proof JWT is mandatory.",
+                ),
+            )
+        for settings in self.spiffe:
+            context.add_authentication_provider(
+                self.name,
+                name=settings.name,
+                profile="spiffe_x509_svid",
+                factory=lambda _session, settings=settings: _spiffe_binding(settings),
+            )
+            context.add_openapi_security_scheme(
+                self.name,
+                settings.name,
+                SecurityScheme(
+                    type="mutualTLS",
+                    description="SPIFFE X.509-SVID identity projected by a single trusted validation boundary.",
+                ),
+            )
+        for settings in self.mtls_bound_introspection:
+            context.add_authentication_provider(
+                self.name,
+                name=settings.name,
+                profile="mtls_bound_introspection",
+                factory=lambda _session, settings=settings: _introspection_binding(settings),
+            )
+            context.add_openapi_security_scheme(
+                self.name,
+                settings.name,
+                SecurityScheme(
+                    type="http",
+                    scheme="Bearer",
+                    bearer_format="opaque",
+                    description="RFC 7662 introspection; cnf.x5t#S256 must match trusted mTLS evidence.",
+                ),
+            )
+        for settings in self.dpop_bound_introspection:
+            context.add_authentication_provider(
+                self.name,
+                name=settings.name,
+                profile="dpop_bound_introspection",
+                factory=lambda _session, settings=settings: _dpop_introspection_binding(settings),
+            )
+            context.add_openapi_security_scheme(
+                self.name,
+                settings.name,
+                SecurityScheme(
+                    type="http",
+                    scheme="DPoP",
+                    bearer_format="opaque",
+                    description="RFC 9449 DPoP proof bound to RFC 7662 or RFC 9701 introspection.",
                 ),
             )
 
@@ -194,6 +357,62 @@ class EnvoyTLSHeaderEvidence:
             raise NotAuthorizedException(detail="TLS client evidence is invalid.") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class MeshSPIFFEHeaderEvidence:
+    """Project SPIFFE peer identity from allowlisted mesh identity headers.
+
+    Only trust these headers when the connection arrives from an allowlisted
+    local mesh proxy that already validated the X.509-SVID chain (ADR 0006).
+    """
+
+    proxy_addresses: frozenset[str]
+    termination_boundary: str = "mesh-local"
+
+    def __post_init__(self) -> None:
+        """Require an explicit proxy allowlist and termination boundary.
+
+        Raises:
+            ValueError: If the proxy allowlist or boundary is empty.
+        """
+        if not self.proxy_addresses or not self.termination_boundary:
+            msg = "Mesh SPIFFE evidence requires proxy addresses and a termination boundary"
+            raise ValueError(msg)
+
+    def __call__(self, scope: Scope) -> SpiffePeerEvidence | None:
+        """Return SPIFFE peer evidence or reject forged/incomplete presentations.
+
+        Raises:
+            NotAuthorizedException: If presented SPIFFE evidence is untrusted or malformed.
+        """
+        values = _spiffe_headers(scope)
+        if not values:
+            return None
+        client = scope.get("client")
+        client_address = (
+            client[0]
+            if isinstance(client, tuple) and client and isinstance(client[0], str)
+            else UNIX_SOCKET_PROXY
+            if client is None
+            else None
+        )
+        if client_address not in self.proxy_addresses:
+            _reject_evidence("SPIFFE peer evidence is not trusted.")
+        if set(values) != set(_SPIFFE_HEADER_NAMES):
+            _reject_evidence("SPIFFE peer evidence is invalid.")
+        try:
+            spiffe_id = values[b"x-auth-spiffe-id"].decode("ascii")
+            parsed = import_module("authweave_workload.spiffe").parse_spiffe_id(spiffe_id)
+            return SpiffePeerEvidence(
+                spiffe_id=str(parsed),
+                trust_domain=parsed.trust_domain,
+                not_before=_parse_time(values[b"x-auth-spiffe-not-before"]),
+                not_after=_parse_time(values[b"x-auth-spiffe-not-after"]),
+                termination_boundary=self.termination_boundary,
+            )
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise NotAuthorizedException(detail="SPIFFE peer evidence is invalid.") from exc
+
+
 def _direct_binding(session: object, settings: DirectMTLSProviderConfig) -> LitestarProviderBinding:
     store_type = import_module("authweave_workload.sqlalchemy").SQLAlchemyWorkloadStore
     provider = DirectMTLSProvider(
@@ -216,6 +435,70 @@ def _jwt_binding(settings: MTLSBoundJWTProviderConfig) -> LitestarProviderBindin
     return LitestarProviderBinding(provider=provider, load_principal=_load_principal)
 
 
+def _dpop_binding(settings: DPoPBoundJWTProviderConfig) -> LitestarProviderBinding:
+    dpop_module = import_module("authweave_workload.dpop")
+    provider = dpop_module.DPoPBoundJWTProvider(
+        name=settings.name,
+        issuer=settings.issuer,
+        dpop=settings.dpop,
+        replay_store=settings.replay_store,
+        event_callback=settings.event_callback,
+    )
+    return LitestarProviderBinding(provider=provider, load_principal=_load_principal)
+
+
+def _spiffe_binding(settings: SPIFFEProviderConfig) -> LitestarProviderBinding:
+    spiffe_module = import_module("authweave_workload.spiffe")
+    provider = spiffe_module.SPIFFEProvider(
+        name=settings.name,
+        policy=settings.policy,
+        resolver=settings.resolver,
+        event_callback=settings.event_callback,
+    )
+    return LitestarProviderBinding(provider=provider, load_principal=_load_principal)
+
+
+def _introspection_binding(settings: MTLSBoundIntrospectionProviderConfig) -> LitestarProviderBinding:
+    intro_module = import_module("authweave_workload.introspection")
+    provider = intro_module.MTLSBoundIntrospectionProvider(
+        name=settings.name,
+        client=settings.client,
+        profile=settings.profile,
+        tls_policy=settings.tls_policy,
+        event_callback=settings.event_callback,
+    )
+    return LitestarProviderBinding(provider=provider, load_principal=_load_principal)
+
+
+def _dpop_introspection_binding(settings: DPoPBoundIntrospectionProviderConfig) -> LitestarProviderBinding:
+    intro_module = import_module("authweave_workload.introspection")
+    provider = intro_module.DPoPBoundIntrospectionProvider(
+        name=settings.name,
+        client=settings.client,
+        profile=settings.profile,
+        dpop=settings.dpop,
+        replay_store=settings.replay_store,
+        event_callback=settings.event_callback,
+    )
+    return LitestarProviderBinding(provider=provider, load_principal=_load_principal)
+
+
+def raise_dpop_nonce_challenge(nonce: str) -> Never:
+    """Raise a secret-free DPoP nonce challenge as HTTP 401.
+
+    Raises:
+        NotAuthorizedException: Always, with RFC 9449 challenge headers.
+    """
+    challenge = import_module("authweave_workload.dpop").DPoPNonceChallenge(nonce)
+    raise NotAuthorizedException(
+        detail="Authentication credentials are invalid.",
+        headers={
+            "WWW-Authenticate": challenge.www_authenticate(),
+            **challenge.response_headers(),
+        },
+    )
+
+
 def _load_principal(context: AuthenticationContext) -> object:
     return context.subject
 
@@ -228,6 +511,18 @@ def _tls_headers(scope: Scope) -> dict[bytes, bytes]:
             continue
         if name in relevant:
             raise NotAuthorizedException(detail="TLS client evidence is ambiguous.")
+        relevant[name] = value
+    return relevant
+
+
+def _spiffe_headers(scope: Scope) -> dict[bytes, bytes]:
+    relevant: dict[bytes, bytes] = {}
+    for raw_name, value in scope.get("headers", ()):
+        name = raw_name.lower()
+        if name not in _SPIFFE_HEADER_NAMES:
+            continue
+        if name in relevant:
+            raise NotAuthorizedException(detail="SPIFFE peer evidence is ambiguous.")
         relevant[name] = value
     return relevant
 
@@ -363,10 +658,16 @@ def _machine_context(connection: ASGIConnection[Any, Any, Any, Any]) -> Authenti
 
 __all__ = (
     "UNIX_SOCKET_PROXY",
+    "DPoPBoundIntrospectionProviderConfig",
+    "DPoPBoundJWTProviderConfig",
     "DirectMTLSProviderConfig",
     "EnvoyTLSHeaderEvidence",
+    "MTLSBoundIntrospectionProviderConfig",
     "MTLSBoundJWTProviderConfig",
+    "MeshSPIFFEHeaderEvidence",
+    "SPIFFEProviderConfig",
     "WorkloadAuthExtension",
+    "raise_dpop_nonce_challenge",
     "require_machine_audience",
     "require_machine_environment",
     "require_machine_kind",

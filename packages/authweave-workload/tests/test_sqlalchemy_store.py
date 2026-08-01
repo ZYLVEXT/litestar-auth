@@ -17,8 +17,9 @@ from authweave_workload.sqlalchemy import SQLAlchemyWorkloadStore, WorkloadBase
 from authweave_workload.stores import StoreConflictError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+pytestmark = pytest.mark.integration
 
-@pytest.mark.asyncio
+
 async def test_sqlalchemy_store_resolves_status_atomically_and_enforces_limit() -> None:
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as connection:

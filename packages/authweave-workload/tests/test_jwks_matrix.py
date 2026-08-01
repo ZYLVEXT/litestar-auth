@@ -25,6 +25,9 @@ def _ec_jwk(*, kid: str = _KID, algorithm: str = "ES256") -> dict[str, object]:
     return value
 
 
+pytestmark = pytest.mark.unit
+
+
 @pytest.mark.parametrize(
     "options",
     [
@@ -55,7 +58,6 @@ def test_jwks_client_requires_one_clean_https_source(options: dict[str, object])
         BoundedJWKSClient(**options)  # ty: ignore[invalid-argument-type]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kid", "algorithm", "message"),
     [
@@ -70,7 +72,6 @@ async def test_jwks_lookup_rejects_unbounded_identity(kid: str, algorithm: str, 
         await client.get_key(kid, algorithm)
 
 
-@pytest.mark.asyncio
 async def test_jwks_unknown_kids_cannot_force_unbounded_refreshes() -> None:
     calls = 0
 
@@ -89,7 +90,6 @@ async def test_jwks_unknown_kids_cannot_force_unbounded_refreshes() -> None:
     assert calls == _EXPECTED_PAIR
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "jwks",
     [
@@ -116,7 +116,6 @@ async def test_jwks_rejects_malformed_sets(jwks: object) -> None:
         await client.get_key(_KID, "ES256")
 
 
-@pytest.mark.asyncio
 async def test_jwks_enforces_algorithm_and_key_type_profiles() -> None:
     ec384 = ec.generate_private_key(ec.SECP384R1())
     bad_ec = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(ec384.public_key()))
@@ -190,7 +189,6 @@ class _Client:
         return self.response
 
 
-@pytest.mark.asyncio
 async def test_jwks_network_response_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     _Client.response = _Response(status_code=503)
@@ -218,7 +216,6 @@ async def test_jwks_network_response_matrix(monkeypatch: pytest.MonkeyPatch) -> 
         await jwks_module._fetch_jwks("https://issuer.test/jwks", 1, 100)
 
 
-@pytest.mark.asyncio
 async def test_jwks_optional_dependency_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     original_import = builtins.__import__
 

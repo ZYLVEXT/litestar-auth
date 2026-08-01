@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import inspect
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,10 +18,23 @@ from authweave_core import (
     Invalid,
     InvariantFailure,
     PrincipalRef,
+    SecurityOperation,
+    SecurityOutcome,
     Unavailable,
+    observe_security,
 )
 
-from authweave_workload.events import SecurityEvent, SecurityEventType
+from authweave_workload.authorization_details import (
+    PaymentAuthorizationError,
+    PaymentAuthorizationPolicy,
+    payment_authorization_evidence,
+)
+from authweave_workload.events import (
+    EventDeliveryError,
+    SecurityEvent,
+    SecurityEventType,
+    deliver_security_event,
+)
 from authweave_workload.jwks import BoundedJWKSClient, JWKSUnavailableError, JWKSValidationError
 
 if TYPE_CHECKING:
@@ -56,6 +68,7 @@ class TrustedIssuer:
     maximum_token_lifetime: timedelta = timedelta(minutes=10)
     allow_rfc8693_actor: bool = False
     maximum_delegation_depth: int = 4
+    payment_authorization: PaymentAuthorizationPolicy | None = None
 
     def __post_init__(self) -> None:
         """Reject broad or legacy issuer policy."""
@@ -111,8 +124,22 @@ class MTLSBoundJWTProvider:
         request: RequestView,
         runtime: AuthenticationRuntime,
     ) -> AuthenticationDecision:
+        """Authenticate and fail closed if mandatory event delivery fails (ADR 0001).
+
+        Returns:
+            A terminal typed authentication decision.
+        """
+        try:
+            return await self._authenticate(request, runtime)
+        except EventDeliveryError:
+            return Unavailable()
+
+    async def _authenticate(
+        self,
+        request: RequestView,
+        runtime: AuthenticationRuntime,
+    ) -> AuthenticationDecision:
         """Validate access-token semantics, signature, and certificate binding."""
-        _ = runtime
         token = _extract_token(request)
         if token is None:
             return Invalid(FailureCode.MALFORMED)
@@ -138,13 +165,17 @@ class MTLSBoundJWTProvider:
             return Invalid(FailureCode.ALGORITHM_MISMATCH)
         if not isinstance(kid, str):
             return Invalid(FailureCode.MALFORMED)
-        try:
-            key = await self.issuer.jwks.get_key(kid, algorithm)
-        except JWKSUnavailableError:
-            await self._emit_failure(request, FailureCode.PROVIDER_UNAVAILABLE)
-            return Unavailable()
-        except JWKSValidationError:
-            return Invalid(FailureCode.INVALID)
+        with observe_security(runtime.observer, SecurityOperation.KEY_REFRESH, profile=self.profile) as observation:
+            try:
+                key = await self.issuer.jwks.get_key(kid, algorithm)
+            except JWKSUnavailableError:
+                observation.set_outcome(SecurityOutcome.UNAVAILABLE)
+                await self._emit_failure(request, FailureCode.PROVIDER_UNAVAILABLE)
+                return Unavailable()
+            except JWKSValidationError:
+                observation.set_outcome(SecurityOutcome.ERROR)
+                return Invalid(FailureCode.INVALID)
+            observation.set_outcome(SecurityOutcome.SUCCESS)
         try:
             claims = jwt.decode(
                 token,
@@ -203,6 +234,15 @@ class MTLSBoundJWTProvider:
             if not self.delegation_policy(principal, actor, delegation_chain):
                 return Invalid(FailureCode.INVALID)
         try:
+            authorization_details = payment_authorization_evidence(
+                claims.get("authorization_details"),
+                policy=self.issuer.payment_authorization,
+                scopes=scopes,
+            )
+        except PaymentAuthorizationError:
+            await self._emit_failure(request, FailureCode.INVALID)
+            return Invalid(FailureCode.INVALID)
+        try:
             evidence = AuthenticationEvidence(
                 provider=self.name,
                 profile=self.profile,
@@ -216,6 +256,7 @@ class MTLSBoundJWTProvider:
                 token_id=token_id,
                 confirmation_thumbprint=thumbprint,
                 environment=self.issuer.environment,
+                authorization_details=authorization_details,
                 extensions={
                     "authweave-workload:application_id": client_id,
                     "authweave-workload:client_id": client_id,
@@ -260,10 +301,7 @@ class MTLSBoundJWTProvider:
         )
 
     async def _emit(self, event: SecurityEvent) -> None:
-        if self.event_callback is not None:
-            result = self.event_callback(event)
-            if inspect.isawaitable(result):
-                await result
+        await deliver_security_event(self.event_callback, event)
 
 
 def _extract_token(request: RequestView) -> str | None:
