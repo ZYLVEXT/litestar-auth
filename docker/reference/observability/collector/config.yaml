@@ -1,0 +1,79 @@
+# Non-production AuthWeave reference Collector.
+# Order: memory_limiter → attribute scrub → batch (recommended OTel processor order).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  attributes/scrub:
+    actions:
+      - key: http.url
+        action: delete
+      - key: http.target
+        action: delete
+      - key: http.route
+        action: delete
+      - key: url.full
+        action: delete
+      - key: url.path
+        action: delete
+      - key: url.query
+        action: delete
+      - key: user.id
+        action: delete
+      - key: enduser.id
+        action: delete
+      - key: db.statement
+        action: delete
+      - key: exception.message
+        action: delete
+      - key: exception.stacktrace
+        action: delete
+
+  batch:
+    send_batch_size: 256
+    timeout: 2s
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: ""
+    const_labels: {}
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlp/tempo, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [prometheus, debug]
+  telemetry:
+    logs:
+      level: info

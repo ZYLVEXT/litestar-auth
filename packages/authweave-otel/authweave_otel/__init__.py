@@ -1,0 +1,66 @@
+"""OpenTelemetry API-only security observability for the AuthWeave stack."""
+
+from authweave_otel.catalog import (
+    ERROR_OUTCOMES,
+    EXPECTED_OUTCOMES,
+    INSTRUMENTATION_SCOPE,
+    METRIC_CATALOG,
+    OTHER_REASON_CODE,
+    REASON_CODES,
+    SEMANTIC_CONVENTIONS_SCHEMA_URL,
+    AttributeKey,
+    Instrument,
+    MetricSpec,
+    Operation,
+    Outcome,
+    normalize_reason_code,
+    span_name,
+)
+from authweave_otel.privacy import (
+    ALLOWED_ATTRIBUTE_KEYS,
+    DEFAULT_BAGGAGE_KEYS_ALLOWLIST,
+    DEFAULT_TRACE_CONTEXT_POLICY,
+    MAX_ATTRIBUTE_COUNT,
+    MAX_ATTRIBUTE_VALUE_LENGTH,
+    REDACTED_ATTRIBUTE_VALUE,
+    SECRET_CANARY_FRAGMENTS,
+    TraceContextPolicy,
+    contains_secret_canary,
+    sanitize_attributes,
+    truncate_attribute_value,
+)
+from authweave_otel.telemetry import AuthWeaveTelemetry, KeyAgeCallback, OperationScope
+
+__version__ = "7.1.0"
+
+__all__ = (
+    "ALLOWED_ATTRIBUTE_KEYS",
+    "DEFAULT_BAGGAGE_KEYS_ALLOWLIST",
+    "DEFAULT_TRACE_CONTEXT_POLICY",
+    "ERROR_OUTCOMES",
+    "EXPECTED_OUTCOMES",
+    "INSTRUMENTATION_SCOPE",
+    "MAX_ATTRIBUTE_COUNT",
+    "MAX_ATTRIBUTE_VALUE_LENGTH",
+    "METRIC_CATALOG",
+    "OTHER_REASON_CODE",
+    "REASON_CODES",
+    "REDACTED_ATTRIBUTE_VALUE",
+    "SECRET_CANARY_FRAGMENTS",
+    "SEMANTIC_CONVENTIONS_SCHEMA_URL",
+    "AttributeKey",
+    "AuthWeaveTelemetry",
+    "Instrument",
+    "KeyAgeCallback",
+    "MetricSpec",
+    "Operation",
+    "OperationScope",
+    "Outcome",
+    "TraceContextPolicy",
+    "__version__",
+    "contains_secret_canary",
+    "normalize_reason_code",
+    "sanitize_attributes",
+    "span_name",
+    "truncate_attribute_value",
+)

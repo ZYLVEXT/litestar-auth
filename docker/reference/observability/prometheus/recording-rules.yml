@@ -1,0 +1,14 @@
+# Example recording rules only. Production multi-window/multi-burn-rate thresholds
+# are owned by the deployer and are not asserted by this reference stack.
+groups:
+  - name: authweave_reference_examples
+    interval: 15s
+    rules:
+      - record: authweave:authentication_attempts:rate5m
+        expr: sum by (service_name, authweave_profile, authweave_outcome) (rate(authweave_authentication_attempts_total[5m]))
+
+      - record: authweave:authentication_unavailable:rate5m
+        expr: sum by (service_name, authweave_profile) (rate(authweave_authentication_attempts_total{authweave_outcome="unavailable"}[5m]))
+
+      - record: authweave:integrity_duration:p99
+        expr: histogram_quantile(0.99, sum by (le, service_name, authweave_operation) (rate(authweave_integrity_duration_seconds_bucket[5m])))

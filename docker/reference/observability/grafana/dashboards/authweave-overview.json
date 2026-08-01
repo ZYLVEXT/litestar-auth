@@ -1,0 +1,430 @@
+{
+    "annotations": {
+        "list": []
+    },
+    "editable": false,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 1,
+    "id": null,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 0
+            },
+            "id": 1,
+            "targets": [
+                {
+                    "expr": "sum by (authweave_outcome) (rate(authweave_authentication_attempts_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m]))",
+                    "legendFormat": "{{authweave_outcome}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Authentication rate by outcome",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 0
+            },
+            "id": 2,
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum by (le) (rate(authweave_authentication_duration_seconds_bucket{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m])))",
+                    "legendFormat": "p50",
+                    "refId": "A"
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum by (le) (rate(authweave_authentication_duration_seconds_bucket{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m])))",
+                    "legendFormat": "p95",
+                    "refId": "B"
+                },
+                {
+                    "expr": "histogram_quantile(0.99, sum by (le) (rate(authweave_authentication_duration_seconds_bucket{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m])))",
+                    "legendFormat": "p99",
+                    "refId": "C"
+                }
+            ],
+            "title": "Authentication latency",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 8
+            },
+            "id": 3,
+            "targets": [
+                {
+                    "expr": "sum by (authweave_outcome) (rate(authweave_authentication_attempts_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_outcome=~\"unavailable|invariant_failure\"}[5m]))",
+                    "legendFormat": "{{authweave_outcome}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Fail-closed Unavailable / invariant failures",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 8
+            },
+            "id": 4,
+            "targets": [
+                {
+                    "expr": "sum by (authweave_outcome) (rate(authweave_replay_decisions_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m]))",
+                    "legendFormat": "{{authweave_outcome}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Replay / capacity / store decisions",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 16
+            },
+            "id": 5,
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.95, sum by (le, authweave_operation) (rate(authweave_remote_operation_duration_seconds_bucket{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_operation=~\"$authweave_operation\"}[5m])))",
+                    "legendFormat": "{{authweave_operation}} p95",
+                    "refId": "A"
+                },
+                {
+                    "expr": "sum by (authweave_operation, authweave_outcome) (rate(authweave_remote_operation_attempts_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_outcome=\"error\"}[5m]))",
+                    "legendFormat": "{{authweave_operation}} errors",
+                    "refId": "B"
+                }
+            ],
+            "title": "Remote dependency latency / errors",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 16
+            },
+            "id": 6,
+            "targets": [
+                {
+                    "expr": "sum by (authweave_outcome) (rate(authweave_cache_requests_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\"}[5m]))",
+                    "legendFormat": "{{authweave_outcome}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Cache hit / stale / error",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 24
+            },
+            "id": 7,
+            "targets": [
+                {
+                    "expr": "max by (authweave_profile) (authweave_key_age_seconds{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"})",
+                    "legendFormat": "{{authweave_profile}} age",
+                    "refId": "A"
+                }
+            ],
+            "title": "JWKS / webhook-key / SPIFFE bundle age",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 24
+            },
+            "id": 8,
+            "targets": [
+                {
+                    "expr": "sum by (authweave_outcome) (rate(authweave_webhook_delivery_attempts_total{service_namespace=~\"$service_namespace\",service_name=~\"$service_name\",deployment_environment_name=~\"$deployment_environment\",authweave_profile=~\"$authweave_profile\"}[5m]))",
+                    "legendFormat": "{{authweave_outcome}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Webhook attempt / success / failure",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "tempo",
+                "uid": "authweave-tempo"
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 32
+            },
+            "id": 9,
+            "targets": [
+                {
+                    "queryType": "traceqlSearch",
+                    "filters": [
+                        {
+                            "id": "service-name",
+                            "tag": "resource.service.name",
+                            "operator": "=",
+                            "value": "$service_name",
+                            "scope": "resource"
+                        }
+                    ],
+                    "limit": 20,
+                    "refId": "A"
+                }
+            ],
+            "title": "Recent AuthWeave traces",
+            "type": "traces"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "authweave-prometheus"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 32
+            },
+            "id": 10,
+            "targets": [
+                {
+                    "expr": "up{job=\"authweave-collector\"}",
+                    "legendFormat": "{{job}}",
+                    "refId": "A"
+                }
+            ],
+            "title": "Telemetry pipeline health",
+            "type": "timeseries"
+        }
+    ],
+    "refresh": "10s",
+    "schemaVersion": 39,
+    "tags": [
+        "authweave",
+        "authentication",
+        "reference"
+    ],
+    "templating": {
+        "list": [
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": ".*"
+                },
+                "datasource": {
+                    "type": "prometheus",
+                    "uid": "authweave-prometheus"
+                },
+                "definition": "label_values(authweave_authentication_attempts_total, service_namespace)",
+                "includeAll": true,
+                "allValue": ".*",
+                "name": "service_namespace",
+                "query": {
+                    "query": "label_values(authweave_authentication_attempts_total, service_namespace)",
+                    "refId": "PrometheusVariableQueryEditor-VariableQuery"
+                },
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": ".*"
+                },
+                "datasource": {
+                    "type": "prometheus",
+                    "uid": "authweave-prometheus"
+                },
+                "definition": "label_values(authweave_authentication_attempts_total, service_name)",
+                "includeAll": true,
+                "allValue": ".*",
+                "name": "service_name",
+                "query": {
+                    "query": "label_values(authweave_authentication_attempts_total, service_name)",
+                    "refId": "PrometheusVariableQueryEditor-VariableQuery"
+                },
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": ".*"
+                },
+                "datasource": {
+                    "type": "prometheus",
+                    "uid": "authweave-prometheus"
+                },
+                "definition": "label_values(authweave_authentication_attempts_total, deployment_environment_name)",
+                "includeAll": true,
+                "allValue": ".*",
+                "name": "deployment_environment",
+                "query": {
+                    "query": "label_values(authweave_authentication_attempts_total, deployment_environment_name)",
+                    "refId": "PrometheusVariableQueryEditor-VariableQuery"
+                },
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": ".*"
+                },
+                "datasource": {
+                    "type": "prometheus",
+                    "uid": "authweave-prometheus"
+                },
+                "definition": "label_values(authweave_authentication_attempts_total, authweave_profile)",
+                "includeAll": true,
+                "allValue": ".*",
+                "name": "authweave_profile",
+                "query": {
+                    "query": "label_values(authweave_authentication_attempts_total, authweave_profile)",
+                    "refId": "PrometheusVariableQueryEditor-VariableQuery"
+                },
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": ".*"
+                },
+                "datasource": {
+                    "type": "prometheus",
+                    "uid": "authweave-prometheus"
+                },
+                "definition": "label_values(authweave_remote_operation_attempts_total, authweave_operation)",
+                "includeAll": true,
+                "allValue": ".*",
+                "name": "authweave_operation",
+                "query": {
+                    "query": "label_values(authweave_remote_operation_attempts_total, authweave_operation)",
+                    "refId": "PrometheusVariableQueryEditor-VariableQuery"
+                },
+                "type": "query"
+            }
+        ]
+    },
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "timezone": "browser",
+    "title": "AuthWeave Overview",
+    "uid": "authweave-overview",
+    "version": 1
+}
