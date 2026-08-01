@@ -1,5 +1,11 @@
 ## 7.1.0 (2026-08-01)
 
+### Breaking
+
+- Removed the public `AsyncMessageSigner` and `LocalEd25519KeyringSigner` types. The local
+  `sign_payment_message` helper is now synchronous, so callers must drop `await`; production
+  KMS/HSM signing remains application-owned.
+
 ### Added
 
 - Added framework-neutral machine-authentication contracts, workload DPoP, SPIFFE, introspection,
@@ -14,17 +20,38 @@
 - Revalidated workload owners during lifecycle writes and serialized final-superuser demotion.
 - Required tag/version equality, publication of `authweave-core` before dependent distributions,
   and isolated installation smoke tests for every release wheel.
+- Kept production HTTP-signature keys in application-owned KMS/HSM boundaries and limited the
+  bundled private-key signing helper to local reference use.
+- Redacted credentials, TOTP/OAuth state, request bodies, headers, and query-bearing URIs from
+  object representations, logs, and replacement exception chains.
+- Required immutable full-SHA GitHub Actions and exact stable Docker image tags with manifest
+  digests through one public dependency-pin validator.
 
 ### Packaging
 
 - Expanded the lockstep workspace and release inventory from three to six distributions.
-- Declared the HTTP-signature profile's runtime `typing-extensions` dependency and restricted the
-  `litestar-auth` source distribution to its package and tests.
+- Restricted every source distribution to its owning runtime sources plus mandatory package
+  metadata, and declared the `typing-extensions` dependency missing from the current
+  `http-message-signatures` metadata.
+- Required every cross-workspace dependency to match the exact lockstep release version.
+- Raised dependency floors to the current verified release set, including `cryptography 50.0.0`,
+  locked all live-reference Python tooling, and refreshed every Docker reference image to its
+  latest stable exact release.
 
 ### CI
 
 - Installed and scanned all workspace packages in verification, narrowed CodeQL test exclusions,
   and made test markers consistent across the workspace.
+- Made publishing a draft-first, fail-closed sequence across reproducible assets, all six PyPI
+  projects, and documentation; replaced destructive rollback with yank-and-fix-forward guidance.
+- Reduced version publication to one reviewed, already-prepared release-commit path.
+- Added scheduled CodeQL, broader dependency review/Dependabot coverage, and public CI enforcement
+  for immutable Action and Docker pins.
+
+### Documentation
+
+- Corrected merchant vector/reference links and made portable workload examples fail closed for
+  rejected, unavailable, and invariant authentication decisions.
 
 ## 7.0.0 (2026-07-31)
 
