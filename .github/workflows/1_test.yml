@@ -25,26 +25,8 @@ on:
       - "uv.lock"
       - "zensical.toml"
   pull_request:
-    paths:
-      - ".gitignore"
-      - ".pre-commit-config.yaml"
-      - ".github/dependabot.yml"
-      - ".github/workflows/**"
-      - "docker/**"
-      - "docs/**"
-      - "examples/**"
-      - "litestar_auth/**"
-      - "packages/**"
-      - "scripts/**"
-      - "tests/**"
-      - "CHANGELOG.md"
-      - "LICENSE"
-      - "README.md"
-      - "codecov.yml"
-      - "justfile"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "zensical.toml"
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: check-${{ github.ref }}
@@ -63,8 +45,63 @@ env:
   VENV_PRECOMMIT_CACHE_VERSION: v1
 
 jobs:
+  changes:
+    name: Select verification scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      verify: ${{ steps.scope.outputs.verify }}
+    steps:
+      - name: Check out repository
+        if: github.event_name == 'pull_request' && github.event.repository.fork == false
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select verification scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$REPOSITORY_IS_FORK" = "true" ]; then
+            verify=false
+          elif [ "$EVENT_NAME" != "pull_request" ]; then
+            verify=true
+          elif git diff --quiet "$BASE_SHA...$HEAD_SHA" -- \
+            .gitignore \
+            .pre-commit-config.yaml \
+            .github/dependabot.yml \
+            .github/workflows \
+            docker \
+            docs \
+            examples \
+            litestar_auth \
+            packages \
+            scripts \
+            tests \
+            CHANGELOG.md \
+            LICENSE \
+            README.md \
+            codecov.yml \
+            justfile \
+            pyproject.toml \
+            uv.lock \
+            zensical.toml; then
+            verify=false
+          else
+            verify=true
+          fi
+          echo "verify=$verify" >> "$GITHUB_OUTPUT"
+
   prek:
-    if: github.event.repository.fork == false
+    needs: [changes]
+    if: needs.changes.outputs.verify == 'true'
     name: Prek
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -286,7 +323,9 @@ jobs:
         run: uv sync --frozen --group docs
 
       - name: Build documentation
-        run: uv run zensical build --clean
+        run: |
+          mkdir -p site
+          uv run zensical build --clean
 
   workspace-packages:
     name: ${{ matrix.package }} (${{ matrix.python-version }})
@@ -416,3 +455,61 @@ jobs:
 
       - name: Standard Webhooks Redis and non-Python reference smoke
         run: sh docker/reference/webhooks/verify.sh
+
+  required-checks:
+    name: Required checks
+    needs: [changes, prek, test, release-dry-run, docs, workspace-packages, docker-reference]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require successful verification
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          VERIFY: ${{ needs.changes.outputs.verify }}
+          PREK_RESULT: ${{ needs.prek.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RELEASE_DRY_RUN_RESULT: ${{ needs.release-dry-run.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
+          WORKSPACE_PACKAGES_RESULT: ${{ needs.workspace-packages.result }}
+          DOCKER_REFERENCE_RESULT: ${{ needs.docker-reference.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "Verification scope selection did not succeed." >&2
+            exit 1
+          fi
+          if [ "$VERIFY" != "true" ]; then
+            echo "No changed path requires the full verification matrix."
+            exit 0
+          fi
+          for result in \
+            "$PREK_RESULT" \
+            "$TEST_RESULT" \
+            "$RELEASE_DRY_RUN_RESULT" \
+            "$DOCS_RESULT" \
+            "$WORKSPACE_PACKAGES_RESULT" \
+            "$DOCKER_REFERENCE_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "A required verification job concluded: $result" >&2
+              exit 1
+            fi
+          done
+
+  dispatch-release:
+    name: Dispatch verified release
+    needs: [required-checks]
+    if: github.event_name == 'workflow_dispatch' && github.ref_type == 'tag' && needs.required-checks.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Run release workflow for the tested tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          TESTS_RUN_ID: ${{ github.run_id }}
+        run: gh workflow run 3_release.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f tests_run_id="$TESTS_RUN_ID"

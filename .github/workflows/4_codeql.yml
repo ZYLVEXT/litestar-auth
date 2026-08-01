@@ -12,11 +12,8 @@ on:
       - ".github/workflows/4_codeql.yml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "litestar_auth/**"
-      - "packages/**"
-      - ".github/codeql/**"
-      - ".github/workflows/4_codeql.yml"
+  merge_group:
+    types: [checks_requested]
 
 permissions: {}
 

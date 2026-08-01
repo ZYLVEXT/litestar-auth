@@ -3,9 +3,7 @@ name: Tag prepared release
 on:
   workflow_dispatch:
 
-permissions:
-  actions: write
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-operations
@@ -18,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release-operations
+    permissions:
+      actions: write
+      contents: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,14 +103,14 @@ jobs:
       - name: Push the exact branch and tag
         env:
           BRANCH: ${{ github.event.repository.default_branch }}
-          PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
           if ! git show-ref --verify --quiet "refs/tags/$VERSION"; then
             git tag "$VERSION"
           fi
-          remote="https://x-access-token:${PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          remote="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push --atomic "$remote" \
             "HEAD:refs/heads/$BRANCH" \
             "refs/tags/$VERSION:refs/tags/$VERSION"
@@ -140,4 +141,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.release.outputs.version }}
+        # workflow_dispatch is the documented GITHUB_TOKEN recursion exception.
         run: gh workflow run 1_test.yml --repo "$GITHUB_REPOSITORY" --ref "$VERSION"

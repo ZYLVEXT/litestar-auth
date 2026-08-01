@@ -1,24 +1,26 @@
 name: Release
 
-# The first job accepts only a successful immutable-tag dispatch before any privileged step or
-# untrusted checkout can execute; exact tag, protected-workflow provenance, and sole-draft checks follow.
-on: # zizmor: ignore[dangerous-triggers]
-  workflow_run:
-    workflows: ["Tests"]
-    types: [completed]
+# Tests dispatch this workflow on the exact immutable version tag. The first job independently
+# requires successful Tests and protected bump runs for that SHA before any privileged job starts.
+on:
+  workflow_dispatch:
+    inputs:
+      tests_run_id:
+        description: Successful tag-bound Tests workflow run ID
+        required: true
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_sha }}
+  group: release-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   check-tag:
     name: Verify release trigger
     runs-on: ubuntu-latest
-    timeout-minutes: 2
-    if: github.event.repository.fork == false && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch'
+    timeout-minutes: 3
     permissions:
       actions: read
       contents: read
@@ -29,7 +31,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify HEAD is tagged
@@ -38,20 +40,33 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_SHA: ${{ github.sha }}
+          TESTS_RUN_ID: ${{ inputs.tests_run_id }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_REF" != refs/tags/* ]]; then
+            echo "Release must be dispatched on an immutable tag, got $RELEASE_REF" >&2
+            exit 1
+          fi
+          if [[ ! "$TESTS_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "Tests run ID must be numeric" >&2
+            exit 1
+          fi
           mapfile -t tags < <(git tag --points-at HEAD)
           if [ "${#tags[@]}" -eq 0 ]; then
-            echo "is_tag=false" >> "$GITHUB_OUTPUT"
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "Release commit has no tag" >&2
+            exit 1
           fi
           if [ "${#tags[@]}" -ne 1 ]; then
             echo "Expected exactly one tag on the tested commit, found: ${tags[*]}" >&2
             exit 1
           fi
           T="${tags[0]}"
+          if [ "$RELEASE_REF" != "refs/tags/$T" ]; then
+            echo "Release ref $RELEASE_REF does not match tag $T" >&2
+            exit 1
+          fi
           VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           if [ "$T" != "$VERSION" ]; then
             echo "Tag $T does not match workspace version $VERSION" >&2
@@ -72,6 +87,29 @@ jobs:
             echo "No successful protected Tag prepared release run proves this exact commit" >&2
             exit 1
           fi
+          tests_workflow_id=$(gh api "repos/$GH_REPO/actions/workflows/1_test.yml" --jq .id)
+          test_run=
+          for _ in {1..12}; do
+            test_run=$(gh api "repos/$GH_REPO/actions/runs/$TESTS_RUN_ID")
+            if [ "$(jq -r .status <<< "$test_run")" = "completed" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if ! jq -e \
+            --arg sha "$RELEASE_SHA" \
+            --arg tag "$T" \
+            --argjson workflow_id "$tests_workflow_id" \
+            '.status == "completed" and
+             .conclusion == "success" and
+             .event == "workflow_dispatch" and
+             .head_sha == $sha and
+             .head_branch == $tag and
+             .workflow_id == $workflow_id' \
+            <<< "$test_run" >/dev/null; then
+            echo "Tests run $TESTS_RUN_ID does not prove this exact tagged commit" >&2
+            exit 1
+          fi
           draft_output=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
             --jq '.[] | select(.draft) | .tag_name')
           drafts=()
@@ -88,16 +126,18 @@ jobs:
   reproducible-build:
     name: Reproducible build verification
     needs: [check-tag]
-    timeout-minutes: 5
+    timeout-minutes: 10
     if: needs.check-tag.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -141,18 +181,133 @@ jobs:
           DIST1: ${{ runner.temp }}/dist1
         run: uv run --no-sync python scripts/release_artifacts.py smoke --dist-dir "$DIST1"
 
+      - name: Generate distribution SBOMs
+        env:
+          SBOM_DIR: ${{ runner.temp }}/sbom
+          SBOM_CHECK_DIR: ${{ runner.temp }}/sbom-check
+        run: |
+          set -euo pipefail
+          mkdir -p "$SBOM_DIR" "$SBOM_CHECK_DIR"
+          VERSION=$(uv run --no-sync python scripts/release_artifacts.py version)
+          RELEASE_TIMESTAMP=$(git show -s --format=%cI "$GITHUB_SHA")
+          packages=(
+            authweave-core
+            litestar-auth
+            authweave-workload
+            authweave-otel
+            authweave-webhooks
+            authweave-http-signatures
+          )
+          for output_dir in "$SBOM_DIR" "$SBOM_CHECK_DIR"; do
+            for package in "${packages[@]}"; do
+              raw=$(mktemp)
+              uv export --preview-features sbom-export --frozen \
+                --package "$package" \
+                --all-extras \
+                --no-default-groups \
+                --format cyclonedx1.5 \
+                --output-file "$raw"
+              serial_number=$(uv run --no-sync python -c \
+                'import sys; from uuid import NAMESPACE_URL, uuid5; print(f"urn:uuid:{uuid5(NAMESPACE_URL, sys.argv[1])}")' \
+                "https://github.com/$GITHUB_REPOSITORY/releases/tag/$VERSION#$package")
+              jq -cS \
+                --arg serial_number "$serial_number" \
+                --arg timestamp "$RELEASE_TIMESTAMP" \
+                '."$schema" = "https://cyclonedx.org/schema/bom-1.7.schema.json" |
+                 .specVersion = "1.7" |
+                 .serialNumber = $serial_number |
+                 .metadata.timestamp = $timestamp' \
+                "$raw" \
+                > "$output_dir/$package-$VERSION.cdx.json"
+              jq -e \
+                --arg package "$package" \
+                --arg version "$VERSION" \
+                '.bomFormat == "CycloneDX" and
+                 .specVersion == "1.7" and
+                 .metadata.component.name == $package and
+                 .metadata.component.version == $version' \
+                "$output_dir/$package-$VERSION.cdx.json" >/dev/null
+            done
+          done
+          for package in "${packages[@]}"; do
+            cmp \
+              "$SBOM_DIR/$package-$VERSION.cdx.json" \
+              "$SBOM_CHECK_DIR/$package-$VERSION.cdx.json"
+          done
+
+      - name: Attest distribution build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/**/*.whl
+            ${{ runner.temp }}/dist1/**/*.tar.gz
+
+      - name: Attest authweave-core SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/authweave-core/*.whl
+            ${{ runner.temp }}/dist1/authweave-core/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/authweave-core-${{ needs.check-tag.outputs.tag }}.cdx.json
+
+      - name: Attest litestar-auth SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/litestar-auth/*.whl
+            ${{ runner.temp }}/dist1/litestar-auth/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/litestar-auth-${{ needs.check-tag.outputs.tag }}.cdx.json
+
+      - name: Attest authweave-workload SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/authweave-workload/*.whl
+            ${{ runner.temp }}/dist1/authweave-workload/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/authweave-workload-${{ needs.check-tag.outputs.tag }}.cdx.json
+
+      - name: Attest authweave-otel SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/authweave-otel/*.whl
+            ${{ runner.temp }}/dist1/authweave-otel/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/authweave-otel-${{ needs.check-tag.outputs.tag }}.cdx.json
+
+      - name: Attest authweave-webhooks SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/authweave-webhooks/*.whl
+            ${{ runner.temp }}/dist1/authweave-webhooks/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/authweave-webhooks-${{ needs.check-tag.outputs.tag }}.cdx.json
+
+      - name: Attest authweave-http-signatures SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist1/authweave-http-signatures/*.whl
+            ${{ runner.temp }}/dist1/authweave-http-signatures/*.tar.gz
+          sbom-path: ${{ runner.temp }}/sbom/authweave-http-signatures-${{ needs.check-tag.outputs.tag }}.cdx.json
+
       - name: Upload dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: ${{ runner.temp }}/dist1/
 
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom/
+
   release-assets:
     name: Attach dist to GitHub Release
     needs: [check-tag, reproducible-build]
     if: needs.check-tag.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
@@ -162,7 +317,13 @@ jobs:
           name: dist
           path: dist
           merge-multiple: true
-      - name: Attach wheel and sdist to Release
+      - name: Download SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom
+          path: sbom
+          merge-multiple: true
+      - name: Attach distributions and SBOMs to Release
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -170,9 +331,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          assets=(dist/**/*.whl dist/**/*.tar.gz)
+          assets=(dist/**/*.whl dist/**/*.tar.gz sbom/*.cdx.json)
           if [ "${#assets[@]}" -eq 0 ]; then
-            echo "No wheel or sdist found under dist/"
+            echo "No release assets found."
             exit 1
           fi
           release_json=$(gh release view "$TAG" --repo "$GH_REPO" --json assets)
@@ -370,7 +531,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -393,7 +554,9 @@ jobs:
         run: uv sync --frozen --group docs
 
       - name: Build documentation
-        run: uv run zensical build --clean
+        run: |
+          mkdir -p site
+          uv run zensical build --clean
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

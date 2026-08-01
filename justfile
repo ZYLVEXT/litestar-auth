@@ -56,6 +56,7 @@ docs-serve:
 
 # Build static documentation site.
 docs-build:
+    mkdir -p site
     uv run --group docs zensical build --clean
 
 # Run all configured prek hooks.

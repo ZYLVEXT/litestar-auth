@@ -2,20 +2,14 @@ name: Dependency review
 
 on:
   pull_request:
-    paths:
-      - "pyproject.toml"
-      - "packages/*/pyproject.toml"
-      - "uv.lock"
-      - ".pre-commit-config.yaml"
-      - "docker/reference/**/compose.yml"
-      - ".github/dependabot.yml"
-      - ".github/workflows/**"
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
 
 concurrency:
-  group: dependency-review-${{ github.event.pull_request.number }}
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,7 +22,33 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Select dependency review scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            changed=true
+          elif git diff --quiet "$BASE_SHA...$HEAD_SHA" -- \
+            pyproject.toml \
+            'packages/*/pyproject.toml' \
+            uv.lock \
+            .pre-commit-config.yaml \
+            'docker/reference/**/compose.yml' \
+            .github/dependabot.yml \
+            .github/workflows; then
+            changed=false
+          else
+            changed=true
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
       - name: Dependency review
+        if: steps.scope.outputs.changed == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
