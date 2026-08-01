@@ -15,6 +15,6 @@ trap cleanup EXIT
 cd "${REPO_ROOT}"
 $COMPOSE up -d --wait
 $COMPOSE cp fapi-authorization-server:/certs/server.crt "${REFERENCE_CA}" >/dev/null
-SSL_CERT_FILE="${REFERENCE_CA}" uv run --extra oauth python docker/reference/fapi/verify_live.py
+SSL_CERT_FILE="${REFERENCE_CA}" uv run --frozen --group reference python docker/reference/fapi/verify_live.py
 
 echo "==> FAPI Message Signing authorization-code reference OK"

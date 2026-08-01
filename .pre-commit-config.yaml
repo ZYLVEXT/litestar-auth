@@ -34,13 +34,24 @@ repos:
         pass_filenames: false
     -   id: deptry
         name: deptry
-        entry: uv run deptry .
+        entry: just deptry-check
         language: system
         pass_filenames: false
     -   id: pip-audit
         name: pip-audit
         entry: uv run pip-audit
-        args: ["--ignore-vuln=CVE-2026-3219"]
+        language: system
+        pass_filenames: false
+    -   id: dependency-pins
+        name: Dependency pins
+        entry: uv run --no-sync python scripts/validate_dependency_pins.py
+        files: ^(\.github/.*\.ya?ml|docker/(?:.*/)?compose[^/]*\.ya?ml|scripts/validate_dependency_pins\.py)$
+        language: system
+        pass_filenames: false
+    -   id: reference-vectors
+        name: Reference vectors
+        entry: just vectors-check
+        files: ^(docs/vectors/|packages/authweave-(workload|webhooks|http-signatures)/)
         language: system
         pass_filenames: false
     -   id: commitizen
@@ -97,15 +108,12 @@ repos:
           - "--autofix"
           - "--indent=4"
           - "--no-sort-keys"
-      - id: requirements-txt-fixer
-        exclude: ^requirements\.txt$
       - id: sort-simple-yaml
       - id: trailing-whitespace
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     # uv version.
-    rev: 5900cba2cfe6d20f562458d4d308ac55569f92eb  # frozen: 0.12.0
+    rev: 8ff2449591c8de025b17661ba76d60237a1ae62b  # frozen: 0.12.1
     hooks:
       # Update the uv lockfile
       - id: uv-lock
-      - id: uv-export

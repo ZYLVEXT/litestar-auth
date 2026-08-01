@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol, Self, runtime_checkable
 import anyio
 from authweave_core import SecurityOperation, SecurityOutcome, observe_security
 from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.utils import CryptographyDeprecationWarning
 
 from authweave_workload.spiffe import (
     SpiffeBundleSnapshot,
@@ -367,7 +369,15 @@ class SpiffeWorkloadSnapshotManager:
 
 def _open_x509_source(*, socket_path: str | None, timeout_seconds: float) -> X509Source:
     try:
-        from spiffe import X509Source  # ruff: ignore[import-outside-top-level] - optional dependency
+        with warnings.catch_warnings():
+            # py-spiffe 0.3.0 evaluates this deprecated FFDH type alias while importing.
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Diffie-Hellman over finite fields .*",
+                category=CryptographyDeprecationWarning,
+                module=r"spiffe\.utils\.certificate_utils",
+            )
+            from spiffe import X509Source  # ruff: ignore[import-outside-top-level] - optional dependency
     except ImportError as exc:  # pragma: no cover - exercised by import-isolation tests
         msg = "Install authweave-workload[spiffe] to use the Workload API adapter"
         raise ImportError(msg) from exc

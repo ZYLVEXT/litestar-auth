@@ -1,6 +1,6 @@
 services:
   server:
-    image: ghcr.io/spiffe/spire-server:1.15.0@sha256:734433bd91b676acf1f8b5651c0e40028cab9381830db1ce364d91cfb27dec9c
+    image: ghcr.io/spiffe/spire-server:1.15.2@sha256:aa74ef1be86bc8e0684007d84a4d9859d294384d842c30425048d73429f3216e
     user: "0:0"
     command: ["-config", "/run/spire/config/server.conf"]
     volumes:
@@ -8,7 +8,7 @@ services:
       - server-socket:/run/spire/sockets
 
   agent:
-    image: ghcr.io/spiffe/spire-agent:1.15.0@sha256:cdf98ba3c8cbbfadef9e996bb70844eccc9a6ecaf2aca506430b08113aa68acd
+    image: ghcr.io/spiffe/spire-agent:1.15.2@sha256:1d042e4040466686e0ee46f74981ff2167c86adfadca19b3835946f4d6047536
     user: "0:0"
     command:
       - -config
@@ -23,14 +23,15 @@ services:
       - agent-socket:/run/spire/sockets
 
   verifier:
-    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    image: ghcr.io/astral-sh/uv:0.12.1-python3.14-trixie-slim@sha256:dfe4069fefc02ee4d6097c26f31d0784df09c9b6242fb4a25ad31fbae74ec6aa
     command:
       - uv
       - run
+      - --frozen
       - --project
-      - /workspace/packages/authweave-workload
-      - --extra
-      - spiffe
+      - /workspace
+      - --group
+      - reference
       - python
       - /run/reference/verify_spire.py
     environment:

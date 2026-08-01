@@ -17,16 +17,16 @@ echo "==> starting DPoP Redis + live RS reference"
 $COMPOSE up -d --wait
 
 echo "==> verifying language-neutral DPoP vectors"
-uv run --package authweave-workload --extra dpop python docs/vectors/dpop/rfc9449/verify_vectors.py
+uv run --frozen --group reference python docs/vectors/dpop/rfc9449/verify_vectors.py
 node docs/vectors/dpop/rfc9449/verify_vectors.mjs
 
 echo "==> verifying Redis replay store outcomes"
-uv run --package authweave-workload --extra dpop --extra redis python docker/reference/dpop/verify_redis.py
+uv run --frozen --group reference python docker/reference/dpop/verify_redis.py
 
 echo "==> flushing Redis before external-AS live HTTP checks"
 $COMPOSE exec -T redis redis-cli FLUSHDB >/dev/null
 
 echo "==> verifying external test AS/JWKS + multi-worker DPoP resource server"
-uv run --package authweave-workload --extra dpop --with httpx python docker/reference/dpop/verify_live.py
+uv run --frozen --group reference python docker/reference/dpop/verify_live.py
 
 echo "==> DPoP reference OK"

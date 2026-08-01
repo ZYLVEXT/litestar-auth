@@ -2,7 +2,7 @@ name: authweave-observability-reference
 
 services:
   collector:
-    image: otel/opentelemetry-collector-contrib:0.131.0@sha256:13b685dc9f68fbbb0fce06d3be84e9d70ba5b90085d79dcbd4c4c0d909ee2d6e
+    image: otel/opentelemetry-collector-contrib:0.157.0@sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6
     command: ["--config=/etc/otelcol/config.yaml"]
     ports:
       - "127.0.0.1:14317:4317"
@@ -19,7 +19,7 @@ services:
           cpus: "1.0"
 
   prometheus:
-    image: prom/prometheus:v3.4.2@sha256:3b1d5be5c3eef4f027665ddaa3b1a7de8a58d96a0a6de5dd45629afd267ecaf0
+    image: prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -45,7 +45,7 @@ services:
           cpus: "1.0"
 
   tempo:
-    image: grafana/tempo:2.8.1@sha256:bc9245fe3da4e63dc4c6862d9c2dad9bcd8be13d0ba4f7705fa6acda4c904d0e
+    image: grafana/tempo:3.0.2@sha256:cda87c212d8c584dc0b89e337e7ed648a5100feb657e5d528480ee4fa03dbbe3
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     ports:
       - "127.0.0.1:13200:3200"
@@ -60,7 +60,7 @@ services:
           cpus: "1.0"
 
   grafana:
-    image: grafana/grafana:12.1.0@sha256:6ac590e7cabc2fbe8d7b8fc1ce9c9f0582177b334e0df9c927ebd9670469440f
+    image: grafana/grafana:13.1.1@sha256:7cb8c64c4d57a57e734073f3cc94620adb24a0acb929bd80ba9f14017e3a975b
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer

@@ -26,7 +26,7 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
-    "authweave-core>=7.1.0,<8.0",
+    "authweave-core==7.1.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
     "idna>=3.18,<4.0",
@@ -41,10 +41,10 @@ source = "https://github.com/ZYLVEXT/litestar-auth"
 tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
-redis = ["redis>=8.1.0,<9.0.0"]
-oauth = ["httpx>=0.28.1,<1.0", "httpx-oauth>=0.17.0,<0.18.0", "cryptography>=49.0.0"]
-totp = ["cryptography>=49.0.0"]
-jwt = ["cryptography>=49.0.0"]
+redis = ["redis>=8.1.0,<9.0"]
+oauth = ["httpx>=0.28.1,<1.0", "httpx-oauth>=0.17.0,<0.18.0", "cryptography>=50.0.0,<51.0"]
+totp = ["cryptography>=50.0.0,<51.0"]
+jwt = ["cryptography>=50.0.0,<51.0"]
 all = ["litestar-auth[redis,oauth,totp,jwt]"]
 
 [dependency-groups]
@@ -59,6 +59,7 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
+    "pyyaml>=6.0.3,<7.0",
     "ruff>=0.16.1",
     "rust-just>=1.57.0",
     "ty>=0.0.65",
@@ -70,6 +71,16 @@ docs = [
     "mkdocstrings[python]>=1.0.6",
     "pymdown-extensions>=11.0.1",
     "zensical>=0.0.52",
+]
+reference = [
+    "asyncpg>=0.31.0,<0.32",
+    "authweave-http-signatures[redis]==7.1.0",
+    "authweave-otel==7.1.0",
+    "authweave-webhooks[redis]==7.1.0",
+    "authweave-workload[all]==7.1.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<2.0",
+    "opentelemetry-sdk>=1.44.0,<2.0",
+    "uvicorn>=0.52.1,<0.53",
 ]
 
 [tool.ty.environment]
@@ -86,7 +97,7 @@ exclude = [".uv-cache", ".venv", "dist", "docker", "docs/vectors", "examples", "
 
 [tool.deptry.per_rule_ignores]
 DEP001 = ["uvicorn"]
-DEP004 = ["dotenv"]
+DEP004 = ["dotenv", "yaml"]
 DEP002 = ["redis", "httpx-oauth", "litestar-auth", "cryptography"]
 DEP003 = ["msgspec", "sqlalchemy"]
 
@@ -95,6 +106,10 @@ default-groups = []
 
 [tool.uv.sources]
 authweave-core = {workspace = true}
+authweave-http-signatures = {workspace = true}
+authweave-otel = {workspace = true}
+authweave-webhooks = {workspace = true}
+authweave-workload = {workspace = true}
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -527,36 +542,13 @@ show_missing = true
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-tag_format = "$version"
-version_scheme = "semver"
-version_provider = "pep621"
-update_changelog_on_bump = false
-major_version_zero = true
-# Refresh lockfile after version files change so uv.lock matches pyproject (prek uv-lock hook).
-pre_bump_hooks = ["uv lock"]
-version_files = [
-    "pyproject.toml:version",
-    "litestar_auth/__init__.py:__version__",
-    "packages/authweave-core/pyproject.toml:version",
-    "packages/authweave-core/authweave_core/__init__.py:__version__",
-    "packages/authweave-workload/pyproject.toml:version",
-    "packages/authweave-workload/authweave_workload/__init__.py:__version__",
-    "packages/authweave-otel/pyproject.toml:version",
-    "packages/authweave-otel/authweave_otel/__init__.py:__version__",
-    "packages/authweave-otel/authweave_otel/telemetry.py:__version__",
-    "packages/authweave-webhooks/pyproject.toml:version",
-    "packages/authweave-webhooks/authweave_webhooks/__init__.py:__version__",
-    "packages/authweave-http-signatures/pyproject.toml:version",
-    "packages/authweave-http-signatures/authweave_http_signatures/__init__.py:__version__",
-]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["litestar_auth"]
-artifacts = ["litestar_auth/py.typed"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["litestar_auth", "tests"]
+only-include = ["litestar_auth"]

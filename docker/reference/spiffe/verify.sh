@@ -14,7 +14,7 @@ trap cleanup EXIT INT TERM
 cd "${REPO_ROOT}"
 
 echo "==> verifying language-neutral SPIFFE ID vectors"
-uv run --package authweave-workload --extra spiffe python docs/vectors/spiffe/x509-svid/verify_vectors.py
+uv run --frozen --group reference python docs/vectors/spiffe/x509-svid/verify_vectors.py
 
 echo "==> starting SPIRE server"
 $COMPOSE up -d server

@@ -17,22 +17,22 @@ trap cleanup EXIT
 cd "${REPO_ROOT}"
 
 echo "==> preparing Envoy rewrite key material"
-uv run --package authweave-http-signatures python "${ROOT}/prepare_keys.py" "${RUNTIME}"
+uv run --frozen --group reference python "${ROOT}/prepare_keys.py" "${RUNTIME}"
 
 echo "==> starting test AS + DPoP + Redis + Envoy signature reference"
 $COMPOSE up -d --wait
 
 echo "==> verifying language-neutral HTTP signature vectors"
-uv run --package authweave-http-signatures python docs/vectors/http-signatures/payment-v1/verify_vectors.py
+uv run --frozen --group reference python docs/vectors/http-signatures/payment-v1/verify_vectors.py
 node docs/vectors/http-signatures/payment-v1/verify_vectors.mjs
 
 echo "==> verifying trusted-target vs spoofed authority"
-uv run --package authweave-http-signatures python docker/reference/http-signatures/verify_proxy_target.py
+uv run --frozen --group reference python docker/reference/http-signatures/verify_proxy_target.py
 
 echo "==> verifying Redis nonce replay store outcomes"
-uv run --package authweave-http-signatures --extra redis python docker/reference/http-signatures/verify_redis.py
+uv run --frozen --group reference python docker/reference/http-signatures/verify_redis.py
 
 echo "==> verifying Envoy path rewrite + body integrity"
-uv run --package authweave-http-signatures --with httpx python docker/reference/http-signatures/verify_envoy_rewrite.py "${RUNTIME}"
+uv run --frozen --group reference python docker/reference/http-signatures/verify_envoy_rewrite.py "${RUNTIME}"
 
 echo "==> HTTP signature reference OK"

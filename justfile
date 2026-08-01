@@ -38,7 +38,12 @@ typecheck:
 # Audit dependencies for known vulnerabilities and dependency issues.
 audit:
     uv run pip-audit
+    just deptry-check
+
+# Check dependency declarations for the root project and every distribution.
+deptry-check:
     uv run deptry .
+    for project in packages/*; do (cd "$project" && uv run --no-sync deptry .) || exit; done
 
 # Build source and wheel distributions for the lockstep workspace release.
 build:
@@ -51,7 +56,7 @@ docs-serve:
 
 # Build static documentation site.
 docs-build:
-    uv run --group docs zensical build
+    uv run --group docs zensical build --clean
 
 # Run all configured prek hooks.
 prek:
@@ -62,6 +67,16 @@ check:
     uv run ruff check .
     uv run ruff format --check .
     uv run ty check
+    uv run --no-sync python scripts/validate_dependency_pins.py
+    just vectors-check
+
+# Validate immutable GitHub Action and Docker image pins.
+dependency-pins-check:
+    uv run --no-sync python scripts/validate_dependency_pins.py
+
+# Verify the published protocol vectors against their owning implementations.
+vectors-check:
+    for verifier in docs/vectors/*/*/verify_vectors.py; do uv run --no-sync python "$verifier" || exit; done
 
 # Alias for the dependency audit command.
 security: audit

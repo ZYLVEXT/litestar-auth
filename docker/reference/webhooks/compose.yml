@@ -2,7 +2,7 @@
 
 services:
   redis:
-    image: redis:8.0-alpine@sha256:5f61955be8ab2ccee9372b84ae4d4da2e2b156f87281e3f218544055e7ee04d4
+    image: redis:8.10.0-alpine@sha256:5cca2f8a01ef2264c52dac86f14ec6a5abe973a93331e1b62522cfc5e63e4691
     ports:
       - "127.0.0.1:16381:6379"
     healthcheck:

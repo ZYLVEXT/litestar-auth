@@ -25,8 +25,8 @@ classifiers = [
 ]
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
-    "authweave-core>=7.1.0,<8.0",
-    "opentelemetry-api>=1.30.0,<2.0",
+    "authweave-core==7.1.0",
+    "opentelemetry-api>=1.44.0,<2.0",
 ]
 
 [project.urls]
@@ -36,16 +36,18 @@ source = "https://github.com/ZYLVEXT/litestar-auth"
 tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["authweave_otel"]
-artifacts = ["authweave_otel/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["authweave_otel"]
 
 [dependency-groups]
 dev = [
-    "opentelemetry-sdk>=1.30.0,<2.0",
+    "opentelemetry-sdk>=1.44.0,<2.0",
 ]
 
 [tool.coverage.run]

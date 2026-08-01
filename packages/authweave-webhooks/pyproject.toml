@@ -24,14 +24,14 @@ classifiers = [
 ]
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
-    "authweave-core>=7.1.0,<8.0",
-    "cryptography>=49.0.0",
+    "authweave-core==7.1.0",
+    "cryptography>=50.0.0,<51.0",
 ]
 
 [project.optional-dependencies]
-redis = ["redis>=5.0.0"]
-httpx = ["httpx>=0.28.0"]
-litestar = ["litestar>=2.0.0"]
+redis = ["redis>=8.1.0,<9.0"]
+httpx = ["httpx>=0.28.1,<1.0"]
+litestar = ["litestar>=2.24.0,<3.0"]
 
 [project.urls]
 homepage = "https://github.com/ZYLVEXT/litestar-auth"
@@ -40,12 +40,14 @@ source = "https://github.com/ZYLVEXT/litestar-auth"
 tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["authweave_webhooks"]
-artifacts = ["authweave_webhooks/py.typed"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["authweave_webhooks"]
 
 [tool.coverage.run]
 source = ["authweave_webhooks"]
@@ -60,3 +62,9 @@ python-version = "3.12"
 
 [tool.ty.src]
 include = ["authweave_webhooks", "tests"]
+
+[tool.deptry]
+experimental_namespace_package = true
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["httpx", "litestar", "redis"]

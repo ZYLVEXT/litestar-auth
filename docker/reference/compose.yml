@@ -2,8 +2,9 @@ name: litestar-auth-v7-reference
 
 services:
   pki:
-    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
-    command: ["/bin/sh", "-c", "apk add --no-cache openssl && sh /config/generate-pki.sh"]
+    image: alpine/openssl:3.5.7@sha256:0a0b910a215ef38890e24526795f11d92c6f1016682fc4ef37fc5c44e23b758f
+    entrypoint: ["/bin/sh"]
+    command: ["/config/generate-pki.sh"]
     volumes:
       - pki-state:/state
       - pki-public:/public
@@ -11,8 +12,16 @@ services:
       - pki-clients:/clients
       - .:/config:ro
 
+  curl:
+    image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+    profiles: ["tools"]
+    user: "0:0"
+    volumes:
+      - pki-public:/public:ro
+      - pki-clients:/clients:ro
+
   postgres:
-    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
     environment:
       POSTGRES_DB: auth
       POSTGRES_PASSWORD: auth
@@ -25,7 +34,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    image: redis:8.10.0-alpine@sha256:5cca2f8a01ef2264c52dac86f14ec6a5abe973a93331e1b62522cfc5e63e4691
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports: ["127.0.0.1:16379:6379"]
     healthcheck:
@@ -35,20 +44,17 @@ services:
       retries: 30
 
   upstream:
-    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    image: ghcr.io/astral-sh/uv:0.12.1-python3.14-trixie-slim@sha256:dfe4069fefc02ee4d6097c26f31d0784df09c9b6242fb4a25ad31fbae74ec6aa
     depends_on:
       pki: {condition: service_completed_successfully}
     command:
       - uv
       - run
+      - --frozen
       - --project
-      - /workspace/packages/authweave-workload
-      - --extra
-      - litestar
-      - --extra
-      - mtls
-      - --with
-      - uvicorn
+      - /workspace
+      - --group
+      - reference
       - python
       - /app/upstream.py
     environment:
@@ -66,7 +72,7 @@ services:
       retries: 60
 
   envoy:
-    image: envoyproxy/envoy:v1.35-latest@sha256:a707c3821b4cecb5db43d8e86e983e0f57b81010fefbabc01feeb071fb8cc08e
+    image: envoyproxy/envoy:v1.39.0@sha256:d59f7f5fa10cff6d5892b6c5e7df5c9297ddfb2c3683e33fbfb82da24de4fa66
     depends_on:
       pki: {condition: service_completed_successfully}
       upstream: {condition: service_started}
@@ -78,7 +84,7 @@ services:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
 
   jwks:
-    image: python:3.14-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
+    image: python:3.14.6-alpine@sha256:26730869004e2b9c4b9ad09cab8625e81d256d1ce97e72df5520e806b1709f92
     command: ["python", "/app/jwks.py"]
     ports: ["127.0.0.1:18080:8080"]
     volumes:

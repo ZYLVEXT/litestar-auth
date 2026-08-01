@@ -1,6 +1,6 @@
 services:
   certificates:
-    image: alpine/openssl:3.5.4@sha256:42c7389ef077aed0eb4e96d0abbd094083d701bbaff1313073b061c0c9cd8278
+    image: alpine/openssl:3.5.7@sha256:0a0b910a215ef38890e24526795f11d92c6f1016682fc4ef37fc5c44e23b758f
     command:
       - req
       - -x509
@@ -23,7 +23,7 @@ services:
       - certificates:/certs
 
   redis:
-    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    image: redis:8.10.0-alpine@sha256:5cca2f8a01ef2264c52dac86f14ec6a5abe973a93331e1b62522cfc5e63e4691
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 1s
@@ -31,19 +31,18 @@ services:
       retries: 30
 
   fapi-authorization-server:
-    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    image: ghcr.io/astral-sh/uv:0.12.1-python3.14-trixie-slim@sha256:dfe4069fefc02ee4d6097c26f31d0784df09c9b6242fb4a25ad31fbae74ec6aa
     depends_on:
       certificates:
         condition: service_completed_successfully
     command:
       - uv
       - run
+      - --frozen
       - --project
       - /workspace
-      - --extra
-      - oauth
-      - --with
-      - uvicorn
+      - --group
+      - reference
       - uvicorn
       - authorization_server:app
       - --host
@@ -74,7 +73,7 @@ services:
       start_period: 25s
 
   resource-server:
-    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962268b4f120a7f5dccce4d947e6c1
+    image: ghcr.io/astral-sh/uv:0.12.1-python3.14-trixie-slim@sha256:dfe4069fefc02ee4d6097c26f31d0784df09c9b6242fb4a25ad31fbae74ec6aa
     depends_on:
       fapi-authorization-server:
         condition: service_healthy
@@ -84,7 +83,7 @@ services:
       - sh
       - -c
       - >-
-        uv run --project /workspace/packages/authweave-workload --extra dpop --extra redis --with uvicorn
+        uv run --frozen --project /workspace --group reference
         env SSL_CERT_FILE=/certs/server.crt
         uvicorn upstream_dpop:app --host 0.0.0.0 --port 8080 --workers 4 --log-level warning
     environment:

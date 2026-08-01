@@ -82,10 +82,7 @@ print("dashboard UIDs and variables ok")
 PY
 
 echo "==> emitting synthetic AuthWeave telemetry"
-uv run \
-  --package authweave-otel \
-  --with opentelemetry-sdk \
-  --with opentelemetry-exporter-otlp-proto-grpc \
+uv run --frozen --group reference \
   python "${ROOT}/emit_synthetic.py" --endpoint "${COLLECTOR_OTLP}" --cycles 8
 
 echo "==> waiting for Prometheus scrape"

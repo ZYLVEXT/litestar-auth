@@ -15,6 +15,6 @@ trap cleanup EXIT
 cd "${REPO_ROOT}"
 $COMPOSE up -d --wait
 $COMPOSE cp authorization-server:/certs/server.crt "${REFERENCE_CA}" >/dev/null
-SSL_CERT_FILE="${REFERENCE_CA}" uv run --package authweave-workload --extra introspection --with httpx python docker/reference/introspection/verify_live.py
+SSL_CERT_FILE="${REFERENCE_CA}" uv run --frozen --group reference python docker/reference/introspection/verify_live.py
 
 echo "==> signed sender-constrained introspection reference OK"

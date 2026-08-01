@@ -8,13 +8,16 @@ cleanup() {
 trap cleanup EXIT
 
 $compose up -d --wait
-uv run --with asyncpg --extra all python docker/reference/verify.py
+uv run --frozen --group reference python docker/reference/verify.py
 
 $compose run --rm --no-deps --entrypoint /bin/sh pki -c '
   set -eu
-  apk add --no-cache curl openssl >/dev/null
   openssl verify -CAfile /public/ca.crt -crl_check -CRLfile /public/ca.crl /clients/client.crt
   ! openssl verify -CAfile /public/ca.crt -crl_check -CRLfile /public/ca.crl /clients/revoked-client.crt
+'
+
+$compose run --rm --no-deps --entrypoint /bin/sh curl -c '
+  set -eu
   response=$(curl --silent --show-error --fail --cacert /public/ca.crt \
     --cert /clients/client.crt --key /clients/client.key \
     -H "x-auth-tls-verified: FORGED" \

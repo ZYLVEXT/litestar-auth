@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -411,7 +412,7 @@ def test_open_x509_source_forwards_configuration() -> None:
     def _sdk_source(*, socket_path: str | None, timeout_in_seconds: float) -> SimpleNamespace:
         return SimpleNamespace(socket_path=socket_path, timeout=timeout_in_seconds)
 
-    with patch("spiffe.X509Source", side_effect=_sdk_source):
+    with patch.dict(sys.modules, {"spiffe": SimpleNamespace(X509Source=_sdk_source)}):
         source = cast(
             "SimpleNamespace",
             _open_x509_source(socket_path="unix:///run/spire.sock", timeout_seconds=expected_timeout),

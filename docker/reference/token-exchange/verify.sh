@@ -18,6 +18,6 @@ $COMPOSE cp token-exchange-mtls:/certs/ca.crt "${CERT_DIR}/ca.crt"
 $COMPOSE cp token-exchange-mtls:/certs/client.crt "${CERT_DIR}/client.crt"
 $COMPOSE cp token-exchange-mtls:/certs/client.key "${CERT_DIR}/client.key"
 CA_CERT="${CERT_DIR}/ca.crt" CLIENT_CERT="${CERT_DIR}/client.crt" CLIENT_KEY="${CERT_DIR}/client.key" \
-  uv run --package authweave-workload --extra token-exchange python docker/reference/token-exchange/verify_live.py
+  uv run --frozen --group reference python docker/reference/token-exchange/verify_live.py
 
 echo "==> sender-constrained token exchange reference OK"
