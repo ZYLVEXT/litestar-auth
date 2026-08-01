@@ -1,89 +1,80 @@
 <svg xmlns="http://www.w3.org/2000/svg"
      width="1200" height="400" viewBox="0 0 1200 400"
      role="img" aria-labelledby="title desc">
-  <title id="title">litestar-auth 7 authentication stack</title>
+  <title id="title">litestar-auth and the AuthWeave authentication stack</title>
   <desc id="desc">
-    Human requests follow an opaque session path through litestar-auth. Machine requests follow
-    a sender-constrained path through authweave-workload. Both use authweave-core contracts.
+    Human requests use opaque sessions while machine requests use sender-constrained workload
+    credentials. Both produce typed, fail-closed decisions through AuthWeave core contracts.
   </desc>
 
-  <rect width="1200" height="400" rx="24" fill="#10162f"/>
+  <rect width="1200" height="400" rx="24" fill="#111318" />
 
-  <g id="identity" transform="translate(56 54)">
-    <text x="0" y="0" fill="#18b6d9"
+  <g id="identity" transform="translate(54 44)">
+    <g aria-hidden="true" transform="scale(.42)">
+      <path
+        d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
+        fill="none" stroke="#ff6b35" stroke-linecap="round" stroke-width="30"
+      />
+      <path
+        d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
+        fill="#4658ff" fill-rule="evenodd"
+      />
+    </g>
+
+    <text x="128" y="18" fill="#ff6b35"
           font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-          font-size="18" font-weight="700" letter-spacing="2">PYTHON AUTHENTICATION STACK · V7</text>
-    <text x="0" y="82" fill="#ffffff"
+          font-size="18" font-weight="700" letter-spacing="2">AUTHWEAVE · PYTHON AUTHENTICATION</text>
+    <text x="128" y="88" fill="#f4f1e8"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-          font-size="68" font-weight="750" letter-spacing="-2">litestar-auth</text>
-    <text x="0" y="132" fill="#b9c1da"
-          font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-          font-size="25">Human sessions and workload identity.</text>
-    <text x="0" y="166" fill="#b9c1da"
-          font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-          font-size="25">Separate trust paths. One typed core.</text>
+          font-size="64" font-weight="750" letter-spacing="-2">litestar-auth</text>
 
-    <g transform="translate(0 220)">
-      <path d="M0 0H472" stroke="#3346d3" stroke-width="2"/>
-      <text x="0" y="34" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="20">opaque cookies</text>
-      <text x="176" y="34" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="20">mTLS</text>
-      <text x="260" y="34" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="20">bound JWT</text>
+    <text x="0" y="160" fill="#b6bbc8"
+          font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="26">Human sessions and workload identity.</text>
+    <text x="0" y="197" fill="#b6bbc8"
+          font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="26">Separate trust paths. One typed core.</text>
+
+    <g transform="translate(0 248)"
+       font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+       font-size="19" font-weight="650">
+      <rect width="244" height="44" rx="22" fill="#1d2130" />
+      <text x="24" y="28" fill="#f4f1e8">Python 3.12–3.14</text>
+      <rect x="258" width="288" height="44" rx="22" fill="#1d2130" />
+      <text x="282" y="28" fill="#f4f1e8">six lockstep packages</text>
     </g>
   </g>
 
-  <g id="trust-paths" transform="translate(630 42)">
-    <rect x="0" y="0" width="514" height="316" rx="18" fill="#151e40" stroke="#3346d3"/>
+  <g id="trust-paths" transform="translate(650 42)">
+    <rect width="496" height="316" rx="20" fill="#191c24" stroke="#353a49" stroke-width="2" />
 
-    <g id="human-path" transform="translate(28 30)">
-      <circle cx="10" cy="12" r="7" fill="#18b6d9"/>
-      <text x="30" y="19" fill="#ffffff"
+    <g transform="translate(28 28)">
+      <text x="0" y="22" fill="#8d98ff"
+            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="18" font-weight="750" letter-spacing="1.5">HUMAN</text>
+      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111318" stroke="#4658ff" stroke-width="2" />
+      <circle cx="26" cy="69" r="7" fill="#4658ff" />
+      <text x="48" y="77" fill="#f4f1e8"
             font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-            font-size="23" font-weight="700">HUMAN</text>
-      <path d="M122 12H174" stroke="#18b6d9" stroke-width="3"/>
-      <path d="M166 5L175 12 166 19" fill="none" stroke="#18b6d9" stroke-width="3"/>
-      <rect x="190" y="-8" width="252" height="42" rx="8" fill="#10162f" stroke="#18b6d9"/>
-      <text x="208" y="20" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="20">litestar-auth · session</text>
+            font-size="21" font-weight="650">litestar-auth · opaque session</text>
     </g>
 
-    <g id="machine-path" transform="translate(28 112)">
-      <rect x="3" y="5" width="14" height="14" rx="2" fill="#f5a524"/>
-      <text x="30" y="20" fill="#ffffff"
+    <g transform="translate(28 142)">
+      <text x="0" y="22" fill="#ff8a61"
+            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="18" font-weight="750" letter-spacing="1.5">WORKLOAD</text>
+      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111318" stroke="#ff6b35" stroke-width="2" />
+      <rect x="19" y="62" width="14" height="14" rx="3" fill="#ff6b35" />
+      <text x="48" y="77" fill="#f4f1e8"
             font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-            font-size="23" font-weight="700">MACHINE</text>
-      <path d="M150 12H174" stroke="#f5a524" stroke-width="3"/>
-      <path d="M166 5L175 12 166 19" fill="none" stroke="#f5a524" stroke-width="3"/>
-      <rect x="190" y="-8" width="252" height="42" rx="8" fill="#10162f" stroke="#f5a524"/>
-      <text x="202" y="20" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="19">authweave-workload</text>
+            font-size="21" font-weight="650">mTLS · DPoP · SPIFFE · bound JWT</text>
     </g>
 
-    <path d="M218 162V207" stroke="#7782a8" stroke-width="2"/>
-    <path d="M408 162V207" stroke="#7782a8" stroke-width="2"/>
-    <path d="M218 207H408" stroke="#7782a8" stroke-width="2"/>
-    <path d="M313 207V224" stroke="#7782a8" stroke-width="2"/>
-    <path d="M306 216L313 225 320 216" fill="none" stroke="#7782a8" stroke-width="2"/>
-
-    <g id="core" transform="translate(58 238)">
-      <rect x="0" y="0" width="398" height="50" rx="10" fill="#3346d3"/>
-      <text x="24" y="32" fill="#ffffff"
-            font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
-            font-size="21" font-weight="700">authweave-core · fail closed</text>
-    </g>
-  </g>
-
-  <g id="shield" transform="translate(1120 350)">
-    <path d="M0-17 18-10V5C18 20 9 29 0 33-9 29-18 20-18 5V-10Z"
-          fill="none" stroke="#18b6d9" stroke-width="3"/>
-    <circle cx="0" cy="2" r="5" fill="#f5a524"/>
-    <path d="M0 7V17" stroke="#f5a524" stroke-width="4"/>
+    <path d="M140 238V258M356 238V258M140 258H356" fill="none" stroke="#6f7688" stroke-width="2" />
+    <path d="M248 258V272M241 264L248 272L255 264" fill="none" stroke="#6f7688" stroke-width="2" />
+    <rect x="46" y="276" width="404" height="50" rx="10" fill="#4658ff" />
+    <text x="72" y="308" fill="#ffffff"
+          font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="20" font-weight="750">typed decision · fail closed</text>
   </g>
 </svg>

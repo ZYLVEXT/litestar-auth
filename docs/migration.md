@@ -1,4 +1,4 @@
-# Migration from 6.x to 7.0
+# Migration from 6.x to 7
 
 Version 7 is a security-boundary release, not an in-place credential-format upgrade. Upgrade the
 six lockstep workspace distributions that your deployment uses, rehearse against a copy of
@@ -64,6 +64,14 @@ organizations, and session/device management. Re-run the full application regres
 
 Stored passwords outside the Argon2id baseline require a reset or a separately reviewed,
 one-time authenticated rehash process. Do not add a runtime legacy-hash fallback.
+
+Version 7.1 raises the built-in floor for newly chosen passwords from 12 to 15 characters. Built-in
+new-password request DTOs now enforce that floor with `422 REQUEST_BODY_INVALID`. For
+`POST /auth/reset-password` specifically, this replaces the previous manager-level `400`
+password-policy response and happens before token consumption, so the same token can be retried
+with a valid replacement. Keep current-password proof fields on
+`litestar_auth.schemas.CurrentPasswordField`; existing credentials remain valid for authentication
+and rotation.
 
 Before opening traffic:
 
@@ -185,6 +193,16 @@ The `authweave-webhooks` verifier now requires the complete onboarding binding:
 merchant owner to every `StandardWebhooksVerifier`; a key document for another
 owner fails with `WebhookFailureCode.OWNER_MISMATCH` even when environment and
 endpoint happen to match.
+
+From 7.1, pass a worker-shared `replay_store` directly to
+`StandardWebhooksVerifier`. Verification now claims the delivery atomically
+after signature validation and owns the complete replay TTL; repeated valid
+deliveries return `VerifiedWebhook.replay_detected=True`. Remove any separate
+`DuplicateDeliveryGuard` call and any handling of the removed
+`WebhookFailureCode.DUPLICATE_DELIVERY` member. After every successful
+verification, insert the full envelope into a durable inbox with a unique
+onboarding-namespace plus `webhook-id` key and acknowledge only after commit;
+never branch inbox insertion on `replay_detected`.
 
 `HttpxWebhookSender` now requires `allowed_endpoints` at construction and uses
 the HTTP client's streaming API. Supply the exact approved endpoints from the

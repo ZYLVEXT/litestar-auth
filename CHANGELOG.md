@@ -1,10 +1,13 @@
-## 7.1.0 (2026-08-01)
+## 7.1.0 (2026-08-02)
 
 ### Breaking
 
-- Removed the public `AsyncMessageSigner` and `LocalEd25519KeyringSigner` types. The local
-  `sign_payment_message` helper is now synchronous, so callers must drop `await`; production
-  KMS/HSM signing remains application-owned.
+- Raised the built-in password minimum and new-password schema/OpenAPI metadata from 12 to 15
+  characters for the single-factor baseline in final NIST SP 800-63B-4. Current-password proof
+  remains non-empty and bounded so existing credentials can be rotated; custom DTOs should use
+  the new public `litestar_auth.schemas.CurrentPasswordField` for that proof. New-password bodies
+  below the schema floor now fail with `422 REQUEST_BODY_INVALID` before manager hooks run; reset
+  tokens are not consumed by that rejection.
 
 ### Added
 
@@ -26,6 +29,12 @@
   object representations, logs, and replacement exception chains.
 - Required immutable full-SHA GitHub Actions and exact stable Docker image tags with manifest
   digests through one public dependency-pin validator.
+- Retained DPoP and webhook replay claims through their complete inclusive acceptance windows,
+  bound webhook claims to the full onboarding identity, and included the resolved principal in
+  successful SPIFFE audit events.
+- Made webhook verification own the atomic delivery claim and require a replay store; valid
+  retries are reported through `VerifiedWebhook.replay_detected`, while the documented durable
+  inbox contract closes the verification-to-processing crash window.
 
 ### Packaging
 
@@ -45,13 +54,20 @@
 - Made publishing a draft-first, fail-closed sequence across reproducible assets, all six PyPI
   projects, and documentation; replaced destructive rollback with yank-and-fix-forward guidance.
 - Reduced version publication to one reviewed, already-prepared release-commit path.
-- Added scheduled CodeQL, broader dependency review/Dependabot coverage, and public CI enforcement
-  for immutable Action and Docker pins.
+- Added scheduled and merge-queue CodeQL, broader dependency review/Dependabot coverage, and
+  public CI enforcement for immutable Action and Docker pins.
+- Added stable required-check aggregation, tag-bound release dispatch, short-lived release
+  credentials, reproducible per-distribution CycloneDX 1.7 SBOMs, and GitHub build/SBOM
+  attestations.
 
 ### Documentation
 
 - Corrected merchant vector/reference links and made portable workload examples fail closed for
   rejected, unavailable, and invariant authentication decisions.
+- Documented the application-owned password blocklist hook, the native stack's lack of phishing
+  resistance and NIST AAL claims, and the SHA256/SHA512-only TOTP interoperability contract.
+- Replaced the project identity and README presentation, restored explicit light/dark documentation
+  palettes, and published security response, coordinated-disclosure, and safe-harbor targets.
 
 ## 7.0.0 (2026-07-31)
 

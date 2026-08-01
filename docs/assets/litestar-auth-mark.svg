@@ -5,26 +5,17 @@
   viewBox="0 0 256 256"
 >
   <title id="title">litestar-auth mark</title>
-  <desc id="desc">A gradient star containing a shield and keyhole.</desc>
-  <defs>
-    <linearGradient id="mark-fill" x1="51" y1="43" x2="205" y2="214" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#18b6d9" />
-      <stop offset="0.58" stop-color="#3346d3" />
-      <stop offset="1" stop-color="#16213e" />
-    </linearGradient>
-  </defs>
+  <desc id="desc">A signal-orange thread passing through an ultramarine weaving shuttle.</desc>
   <path
-    fill="url(#mark-fill)"
-    d="M128 18 158.6 80l68.4 10-49.5 48.2 11.7 68.1-61.2-32.2-61.2 32.2 11.7-68.1L29 90l68.4-10L128 18Z"
+    d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
+    fill="none"
+    stroke="#ff6b35"
+    stroke-linecap="round"
+    stroke-width="30"
   />
   <path
-    fill="#ffffff"
-    d="M128 70 181 89.8v44.1c0 41.6-24.3 66.6-53 78.9-28.7-12.3-53-37.3-53-78.9V89.8L128 70Z"
+    d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
+    fill="#4658ff"
+    fill-rule="evenodd"
   />
-  <path
-    fill="#16213e"
-    d="m128 85 39 14.6v34.3c0 30.8-16.4 50.6-39 60.8-22.6-10.2-39-30-39-60.8V99.6L128 85Z"
-  />
-  <circle cx="128" cy="130" r="16" fill="#18b6d9" />
-  <path fill="#18b6d9" d="M122 143h12l7 34h-26l7-34Z" />
 </svg>

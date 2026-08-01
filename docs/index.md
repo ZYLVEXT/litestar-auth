@@ -16,7 +16,7 @@ observability, and message-integrity tooling:
   authentication.
 
 Start with the [quickstart](quickstart.md), review the [architecture](architecture.md) and
-[security posture](security.md), and use the [6.x → 7.0 migration guide](migration.md) before
+[security posture](security.md), and use the [6.x → 7 migration guide](migration.md) before
 upgrading an existing deployment. Optional profile readiness is tracked on the
 [roadmap](roadmap.md). Merchant onboarding notes for webhooks, DPoP, HTTP Message
 Signatures, SPIFFE, and introspection live under [merchant/webhooks](merchant/webhooks.md),

@@ -1,9 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ZYLVEXT/litestar-auth/main/assets/readme/hero.svg" width="100%" alt="litestar-auth 7 separates opaque human sessions from sender-constrained workload identity on a shared AuthWeave core">
-</p>
-
-<p align="center">
-  <strong>One Python authentication stack. Separate trust paths for people and machines.</strong>
+  <img src="https://raw.githubusercontent.com/ZYLVEXT/litestar-auth/main/assets/readme/hero.svg" width="100%" alt="litestar-auth keeps opaque human sessions and sender-constrained workload identity on separate fail-closed trust paths">
 </p>
 
 <p align="center">
@@ -25,22 +21,30 @@
 </p>
 
 `litestar-auth` 7 is the human-authentication layer in the six-distribution AuthWeave workspace for
-Python 3.12–3.14. Browser sessions, workload credentials, framework-neutral coordination,
-observability, webhooks, and payment-message integrity remain explicit package boundaries instead
-of one credential parser.
+Python 3.12–3.14. Browser sessions and machine credentials stay on separate trust paths while
+sharing typed, fail-closed AuthWeave decisions.
 
-## Choose the layer you need
+```bash
+uv add litestar-auth
+```
 
-| Package | Use it for | Install |
-| --- | --- | --- |
-| [`litestar-auth`](https://pypi.org/project/litestar-auth/) | Registration, login, OAuth + PKCE, TOTP, roles, organizations, and opaque database or Redis sessions in Litestar | `uv add litestar-auth` |
-| `authweave-core` | Typed principals, evidence, decisions, route policies, and fail-closed provider coordination | `uv add authweave-core` |
-| `authweave-workload` | X.509 workload lifecycle plus mTLS-, DPoP-, SPIFFE-, JWT-, and introspection-based Resource Server profiles | `uv add 'authweave-workload[all]'` |
-| `authweave-otel` | API-only security spans and metrics without installing an SDK or exporter | `uv add authweave-otel` |
-| `authweave-webhooks` | Ed25519 Standard Webhooks signing, verification, replay control, and bounded delivery | `uv add 'authweave-webhooks[httpx]'` |
-| `authweave-http-signatures` | RFC 9530/RFC 9421 payment-message integrity after machine authentication | `uv add authweave-http-signatures` |
+## Six packages, one version
 
-All six distributions use one exact lockstep version. The dependency direction stays one-way:
+- **`litestar-auth`** — Litestar registration, login, OAuth + PKCE, TOTP, roles,
+  organizations, and opaque database or Redis sessions. `uv add litestar-auth`
+- **`authweave-core`** — Typed principals, evidence, decisions, route policies, and fail-closed
+  provider coordination. `uv add authweave-core`
+- **`authweave-workload`** — X.509 lifecycle plus mTLS, DPoP, SPIFFE, bound JWT, and
+  introspection profiles. `uv add 'authweave-workload[all]'`
+- **`authweave-otel`** — API-only security spans and metrics without an SDK or exporter.
+  `uv add authweave-otel`
+- **`authweave-webhooks`** — Ed25519 Standard Webhooks integrity, replay control, and bounded
+  delivery. `uv add 'authweave-webhooks[redis,httpx]'`
+- **`authweave-http-signatures`** — RFC 9530/RFC 9421 payment-message integrity after machine
+  authentication. `uv add authweave-http-signatures`
+
+Install only the layer you need; optional integrations stay lazy. All six distributions use one
+exact lockstep version, and the dependency direction stays one-way:
 
 ```text
 authweave-core
@@ -59,8 +63,6 @@ uv add litestar-auth aiosqlite
 ```
 
 ```python
-from uuid import UUID
-
 from litestar import Litestar
 from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 
@@ -118,13 +120,25 @@ sh docker/reference/verify.sh
 
 ## Security boundary
 
-Authentication establishes a verified principal and constraints. Your application still owns
-tenant mapping, row-level security, resource ownership, and business authorization.
+> [!IMPORTANT]
+> Authentication establishes a verified principal and constraints. Your application still owns
+> tenant mapping, row-level security, resource ownership, and business authorization.
 
 Version 7 intentionally does **not** provide unconstrained bearer login, user-owned API keys,
 shared-secret machine or request-signing credentials, an OAuth Authorization Server or STS,
 generic IAM, or production rollout automation. Token exchange is a strict client for an external
 STS; it does not operate one.
+
+## Release evidence
+
+CI exercises Python 3.12–3.14 on Linux, macOS, and Windows. Every distribution has an independent
+100% branch-coverage gate, and the repository runs CodeQL, dependency review, pinned-action checks,
+reproducible builds, per-distribution CycloneDX 1.7 SBOMs and build-provenance attestations, isolated
+wheel imports, and live PostgreSQL/Redis/proxy reference stacks.
+
+That evidence establishes library readiness, not certification of a particular deployment. The
+[readiness roadmap](https://github.com/ZYLVEXT/litestar-auth/blob/main/docs/roadmap.md) lists the independent
+conformance, security-review, KMS, capacity, and operational gates required for production profiles.
 
 ## Documentation
 
