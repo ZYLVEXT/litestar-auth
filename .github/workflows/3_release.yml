@@ -1,17 +1,26 @@
 name: Release
 
-on:
+# The first job accepts only a successful immutable-tag dispatch before any privileged step or
+# untrusted checkout can execute; exact tag, protected-workflow provenance, and sole-draft checks follow.
+on: # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: ["Tests"]
     types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   check-tag:
     name: Verify release trigger
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    if: github.event.repository.fork == false && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: github.event.repository.fork == false && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch'
     permissions:
+      actions: read
       contents: read
     outputs:
       is_tag: ${{ steps.tag.outputs.is_tag }}
@@ -22,17 +31,55 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify HEAD is tagged
         id: tag
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if ! T=$(git describe --tags --exact-match HEAD 2>/dev/null); then
+          set -euo pipefail
+          mapfile -t tags < <(git tag --points-at HEAD)
+          if [ "${#tags[@]}" -eq 0 ]; then
             echo "is_tag=false" >> "$GITHUB_OUTPUT"
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ "${#tags[@]}" -ne 1 ]; then
+            echo "Expected exactly one tag on the tested commit, found: ${tags[*]}" >&2
+            exit 1
+          fi
+          T="${tags[0]}"
           VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           if [ "$T" != "$VERSION" ]; then
             echo "Tag $T does not match workspace version $VERSION" >&2
+            exit 1
+          fi
+          if ! is_draft=$(gh release view "$T" --repo "$GH_REPO" --json isDraft --jq .isDraft); then
+            echo "GitHub release $T is missing" >&2
+            exit 1
+          fi
+          if [ "$is_draft" != "true" ]; then
+            echo "GitHub release $T is not a draft" >&2
+            exit 1
+          fi
+          bump_run_count=$(gh api \
+            "repos/$GH_REPO/actions/workflows/2_bump.yml/runs?branch=$DEFAULT_BRANCH&event=workflow_dispatch&status=success&head_sha=$RELEASE_SHA&per_page=1" \
+            --jq '.total_count')
+          if [ "$bump_run_count" -lt 1 ]; then
+            echo "No successful protected Tag prepared release run proves this exact commit" >&2
+            exit 1
+          fi
+          draft_output=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            --jq '.[] | select(.draft) | .tag_name')
+          drafts=()
+          if [ -n "$draft_output" ]; then
+            mapfile -t drafts <<< "$draft_output"
+          fi
+          if [ "${#drafts[@]}" -ne 1 ] || [ "${drafts[0]}" != "$T" ]; then
+            echo "Expected $T to be the repository's only draft release, found: ${drafts[*]}" >&2
             exit 1
           fi
           echo "is_tag=true" >> "$GITHUB_OUTPUT"
@@ -52,11 +99,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           prune-cache: true
           cache-python: true
@@ -78,7 +126,6 @@ jobs:
           DIST2: ${{ runner.temp }}/dist2
           SOURCE_DATE_EPOCH: "0"
         run: |
-          rm -rf dist build src/*.egg-info *.egg-info 2>/dev/null || true
           uv sync --frozen --group dev --all-extras
           uv run --no-sync python scripts/release_artifacts.py build --dist-dir "$DIST2"
 
@@ -117,7 +164,9 @@ jobs:
           merge-multiple: true
       - name: Attach wheel and sdist to Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-tag.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
@@ -126,13 +175,41 @@ jobs:
             echo "No wheel or sdist found under dist/"
             exit 1
           fi
-          gh release upload "${{ needs.check-tag.outputs.tag }}" "${assets[@]}" \
-            --repo "${{ github.repository }}" \
-            --clobber
+          release_json=$(gh release view "$TAG" --repo "$GH_REPO" --json assets)
+          while IFS= read -r remote_name; do
+            found=false
+            for asset in "${assets[@]}"; do
+              if [ "${asset##*/}" = "$remote_name" ]; then
+                found=true
+                break
+              fi
+            done
+            if [ "$found" != "true" ]; then
+              echo "Unexpected existing release asset: $remote_name" >&2
+              exit 1
+            fi
+          done < <(jq -r '.assets[].name' <<< "$release_json")
+
+          for asset in "${assets[@]}"; do
+            name="${asset##*/}"
+            mapfile -t remote_digests < <(
+              jq -r --arg name "$name" '.assets[] | select(.name == $name) | (.digest // "")' <<< "$release_json"
+            )
+            if [ "${#remote_digests[@]}" -eq 0 ]; then
+              gh release upload "$TAG" "$asset" --repo "$GH_REPO"
+              continue
+            fi
+            local_digest="sha256:$(sha256sum "$asset" | cut -d ' ' -f 1)"
+            if [ "${#remote_digests[@]}" -ne 1 ] || [ "${remote_digests[0]}" != "$local_digest" ]; then
+              echo "Release asset $name exists with a different or unavailable digest" >&2
+              exit 1
+            fi
+            echo "Verified existing release asset: $name"
+          done
 
   pypi-core:
     name: Publish authweave-core to PyPI
-    needs: [check-tag, reproducible-build]
+    needs: [check-tag, reproducible-build, release-assets]
     timeout-minutes: 5
     if: needs.check-tag.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
@@ -140,7 +217,6 @@ jobs:
       name: pypi-core
       url: https://pypi.org/p/authweave-core
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -165,7 +241,6 @@ jobs:
       name: pypi
       url: https://pypi.org/p/litestar-auth
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -181,7 +256,7 @@ jobs:
 
   pypi-workload:
     name: Publish authweave-workload to PyPI
-    needs: [check-tag, reproducible-build, pypi-core]
+    needs: [check-tag, reproducible-build, pypi-core, pypi-litestar]
     timeout-minutes: 5
     if: needs.check-tag.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
@@ -189,7 +264,6 @@ jobs:
       name: pypi-workload
       url: https://pypi.org/p/authweave-workload
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -213,7 +287,6 @@ jobs:
       name: pypi-otel
       url: https://pypi.org/p/authweave-otel
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -237,7 +310,6 @@ jobs:
       name: pypi-webhooks
       url: https://pypi.org/p/authweave-webhooks
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -261,7 +333,6 @@ jobs:
       name: pypi-http-signatures
       url: https://pypi.org/p/authweave-http-signatures
     permissions:
-      contents: read
       id-token: write
     steps:
       - name: Download dist
@@ -277,7 +348,14 @@ jobs:
 
   docs:
     name: Deploy documentation
-    needs: [check-tag, reproducible-build]
+    needs:
+      - check-tag
+      - pypi-core
+      - pypi-litestar
+      - pypi-workload
+      - pypi-otel
+      - pypi-webhooks
+      - pypi-http-signatures
     if: needs.check-tag.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -294,6 +372,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
@@ -301,7 +380,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           enable-cache: true
           prune-cache: true
           cache-python: true
@@ -329,3 +408,28 @@ jobs:
         id: deployment
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - check-tag
+      - release-assets
+      - pypi-core
+      - pypi-litestar
+      - pypi-workload
+      - pypi-otel
+      - pypi-webhooks
+      - pypi-http-signatures
+      - docs
+    if: success() && needs.check-tag.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the verified draft
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-tag.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GH_REPO" --draft=false --latest

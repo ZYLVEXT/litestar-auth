@@ -4,35 +4,47 @@ on:
   workflow_dispatch:
   push:
     branches: ["main"]
-    tags:
-      - "*.*.*"
     paths:
+      - ".gitignore"
+      - ".pre-commit-config.yaml"
+      - ".github/dependabot.yml"
+      - ".github/workflows/**"
+      - "docker/**"
+      - "docs/**"
       - "examples/**"
       - "litestar_auth/**"
       - "packages/**"
-      - "docker/**"
-      - "README.md"
+      - "scripts/**"
       - "tests/**"
-      - ".pre-commit-config.yaml"
+      - "CHANGELOG.md"
+      - "LICENSE"
+      - "README.md"
       - "codecov.yml"
+      - "justfile"
       - "pyproject.toml"
       - "uv.lock"
-      - "justfile"
-      - ".github/workflows/**"
+      - "zensical.toml"
   pull_request:
     paths:
+      - ".gitignore"
+      - ".pre-commit-config.yaml"
+      - ".github/dependabot.yml"
+      - ".github/workflows/**"
+      - "docker/**"
+      - "docs/**"
       - "examples/**"
       - "litestar_auth/**"
       - "packages/**"
-      - "docker/**"
-      - "README.md"
+      - "scripts/**"
       - "tests/**"
-      - ".pre-commit-config.yaml"
+      - "CHANGELOG.md"
+      - "LICENSE"
+      - "README.md"
       - "codecov.yml"
+      - "justfile"
       - "pyproject.toml"
       - "uv.lock"
-      - "justfile"
-      - ".github/workflows/**"
+      - "zensical.toml"
 
 concurrency:
   group: check-${{ github.ref }}
@@ -55,6 +67,7 @@ jobs:
     if: github.event.repository.fork == false
     name: Prek
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       UV_PYTHON_PREFERENCE: only-managed
       # Same as prek: skip hooks that are CI-inappropriate on default branch / shared runners.
@@ -62,6 +75,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set uv Python install dir
         run: echo "UV_PYTHON_INSTALL_DIR=${RUNNER_TEMP}/uv-python-dir" >> "$GITHUB_ENV"
@@ -69,7 +84,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
           prune-cache: true
@@ -109,6 +124,7 @@ jobs:
     needs: [prek]
     runs-on: ${{ matrix.os }}
     if: github.event.repository.fork == false
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -128,11 +144,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           prune-cache: true
@@ -213,16 +230,19 @@ jobs:
     needs: [prek]
     runs-on: ubuntu-latest
     if: github.event.repository.fork == false
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
           prune-cache: true
@@ -238,11 +258,42 @@ jobs:
           uv run --no-sync python scripts/release_artifacts.py build --dist-dir "$RELEASE_DIST"
           uv run --no-sync python scripts/release_artifacts.py smoke --dist-dir "$RELEASE_DIST"
 
+  docs:
+    name: Documentation build
+    needs: [prek]
+    runs-on: ubuntu-latest
+    if: github.event.repository.fork == false
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+          prune-cache: true
+          cache-python: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install documentation dependencies
+        run: uv sync --frozen --group docs
+
+      - name: Build documentation
+        run: uv run zensical build --clean
+
   workspace-packages:
     name: ${{ matrix.package }} (${{ matrix.python-version }})
     needs: [prek]
     runs-on: ubuntu-latest
     if: github.event.repository.fork == false
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
@@ -262,11 +313,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           prune-cache: true
@@ -284,6 +337,7 @@ jobs:
           uv run --no-sync ruff check .
           uv run --no-sync ruff format --check --preview .
           uv run --no-sync ty check "$module" tests
+          uv run --no-sync deptry .
           COVERAGE_PROCESS_START=pyproject.toml uv run --no-sync pytest \
             --cov="$module" \
             --cov-branch \
@@ -323,11 +377,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.0"
+          version: "0.12.1"
           python-version: "3.14"
           enable-cache: true
           prune-cache: true

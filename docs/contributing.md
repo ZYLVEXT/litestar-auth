@@ -38,4 +38,4 @@ Grafana smoke and golden metric-name checks.
 Changes to authentication behavior require a negative test at the trust boundary. Do not add
 fallbacks, deprecated aliases, generic bearer authentication, user-owned shared secrets,
 proprietary request signing, or private-key ingestion. Publication and production rollout are
-separate operator actions. Maintainers use the [lockstep release and rollback procedure](releasing.md).
+separate operator actions. Maintainers use the [lockstep release and fix-forward procedure](releasing.md).

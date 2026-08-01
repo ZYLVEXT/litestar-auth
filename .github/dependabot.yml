@@ -1,6 +1,6 @@
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
+  - package-ecosystem: "github-actions" # zizmor: ignore[dependabot-cooldown]
     directory: "/"
     schedule:
       interval: "weekly"
@@ -16,8 +16,9 @@ updates:
           - "patch"
     commit-message:
       prefix: "chore(deps)"
-  - package-ecosystem: "uv"
+  - package-ecosystem: "uv" # zizmor: ignore[dependabot-cooldown]
     directory: "/"
+    versioning-strategy: "increase"
     schedule:
       interval: "weekly"
     labels:
@@ -30,5 +31,30 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "pre-commit" # zizmor: ignore[dependabot-cooldown]
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "docker-compose" # zizmor: ignore[dependabot-cooldown]
+    directories:
+      - "/docker/reference"
+      - "/docker/reference/*"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 5
+    groups:
+      docker-compose:
+        patterns:
+          - "*"
+        group-by: "dependency-name"
     commit-message:
       prefix: "chore(deps)"
