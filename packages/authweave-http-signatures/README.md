@@ -17,6 +17,10 @@ linked trace context never participates in authentication or key binding.
 Frozen/custom verifier clocks are request-local; the package does not mutate the
 process-global clock of the Structured Fields/signature implementation.
 
+`sign_payment_message` is a local reference/test helper and accepts an in-process
+`Ed25519PrivateKey`. Production producers keep non-exportable keys in their own KMS/HSM
+signer and emit the same documented RFC 9421 profile outside this verifier package.
+
 ```bash
 uv add authweave-http-signatures
 ```

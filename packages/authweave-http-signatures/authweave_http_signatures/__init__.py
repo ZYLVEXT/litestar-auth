@@ -17,7 +17,7 @@ from authweave_http_signatures.models import (
 )
 from authweave_http_signatures.nonce import SignatureNonceGuard
 from authweave_http_signatures.proxy_target import UNIX_SOCKET_PROXY, AllowlistedProxyExternalTarget
-from authweave_http_signatures.signer import AsyncMessageSigner, LocalEd25519KeyringSigner, sign_payment_message
+from authweave_http_signatures.signer import sign_payment_message
 from authweave_http_signatures.verify import PaymentHttpSignatureVerifier
 
 __version__ = "7.1.0"
@@ -33,11 +33,9 @@ __all__ = (
     "SIGNATURE_LABEL",
     "UNIX_SOCKET_PROXY",
     "AllowlistedProxyExternalTarget",
-    "AsyncMessageSigner",
     "HttpMessageView",
     "HttpSignatureFailureCode",
     "HttpSignatureVerificationError",
-    "LocalEd25519KeyringSigner",
     "PaymentHttpSignatureVerifier",
     "PaymentSignaturePolicy",
     "SignatureKeyBinding",

@@ -89,7 +89,7 @@ async def _issue_token(
     return token
 
 
-async def _signed_headers(
+def _signed_headers(
     payment_key: Ed25519PrivateKey,
     proof_key: ec.EllipticCurvePrivateKey,
     access_token: str,
@@ -109,7 +109,7 @@ async def _signed_headers(
         body=body,
     )
     now = datetime.now(tz=UTC)
-    signed = await sign_payment_message(
+    signed = sign_payment_message(
         view=view,
         policy=PaymentSignaturePolicy(require_authorization_component=True),
         key_id="merchant-key-1",
@@ -157,7 +157,7 @@ async def main() -> int:
         await _wait_for_stack(client)
         token = await _issue_token(client, proof_key)
 
-        valid = await _signed_headers(payment_key, proof_key, token, body=body, nonce="valid-1")
+        valid = _signed_headers(payment_key, proof_key, token, body=body, nonce="valid-1")
         accepted = await client.post(_ENVOY, content=body, headers=valid)
         if accepted.status_code != _HTTP_OK:
             raise RuntimeError(f"valid DPoP + signature request failed: {accepted.status_code} {accepted.text}")
@@ -166,27 +166,27 @@ async def main() -> int:
             raise RuntimeError("verified response did not retain authenticated identity and signing key")
         print("ok  DPoP authentication -> HTTP signature identity binding")
 
-        spoof = await _signed_headers(payment_key, proof_key, token, body=body, nonce="host-spoof")
+        spoof = _signed_headers(payment_key, proof_key, token, body=body, nonce="host-spoof")
         spoof["host"] = "evil.example"
         host_response = await client.post(_ENVOY, content=body, headers=spoof)
         if host_response.status_code != _HTTP_OK:
             raise RuntimeError(f"host spoof changed trusted target: {host_response.status_code}")
         print("ok  client Host ignored by trusted target projection")
 
-        forged = await _signed_headers(payment_key, proof_key, token, body=body, nonce="target-forgery")
+        forged = _signed_headers(payment_key, proof_key, token, body=body, nonce="target-forgery")
         forged["x-auth-external-target"] = "https://evil.example/v1/payments"
         forged_response = await client.post(_ENVOY, content=body, headers=forged)
         if forged_response.status_code != _HTTP_OK:
             raise RuntimeError(f"Envoy did not replace forged target: {forged_response.status_code}")
         print("ok  forged external-target header stripped by Envoy")
 
-        mutation = await _signed_headers(payment_key, proof_key, token, body=body, nonce="body-mutation")
+        mutation = _signed_headers(payment_key, proof_key, token, body=body, nonce="body-mutation")
         _expect_rejected(
             "raw body mutation",
             await client.post(_ENVOY, content=b'{"amount":"9.99","currency":"USD"}', headers=mutation),
         )
 
-        replay_headers = await _signed_headers(payment_key, proof_key, token, body=body, nonce="signature-replay")
+        replay_headers = _signed_headers(payment_key, proof_key, token, body=body, nonce="signature-replay")
         first = await client.post(_ENVOY, content=body, headers=replay_headers)
         if first.status_code != _HTTP_OK:
             raise RuntimeError("signature replay setup request failed")
@@ -197,12 +197,12 @@ async def main() -> int:
         )
 
         other_token = await _issue_token(client, proof_key, alternate_identity=True)
-        mismatched = await _signed_headers(payment_key, proof_key, other_token, body=body, nonce="identity-mismatch")
+        mismatched = _signed_headers(payment_key, proof_key, other_token, body=body, nonce="identity-mismatch")
         _expect_rejected(
             "authenticated identity/signing-key mismatch", await client.post(_ENVOY, content=body, headers=mismatched)
         )
 
-        missing_proof = await _signed_headers(payment_key, proof_key, token, body=body, nonce="missing-proof")
+        missing_proof = _signed_headers(payment_key, proof_key, token, body=body, nonce="missing-proof")
         del missing_proof["dpop"]
         _expect_rejected("missing DPoP proof", await client.post(_ENVOY, content=body, headers=missing_proof))
     return 0

@@ -31,7 +31,7 @@ wrong `target_uri` fails signature verification.
 
 ## Language-neutral vectors
 
-See [`../vectors/http-signatures/payment-v1/`](../vectors/http-signatures/payment-v1/).
+See the [payment-profile vector manifest](../vectors/http-signatures/payment-v1/manifest.json).
 Run:
 
 ```bash

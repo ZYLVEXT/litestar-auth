@@ -5,6 +5,10 @@ This runbook covers merchant-held Ed25519 keys for
 approved non-exportable keystore. AuthWeave stores public keys and their exact
 subject/application/environment bindings only.
 
+The bundled `sign_payment_message` function is limited to local reference tests because
+it accepts an in-process `Ed25519PrivateKey`. Production producers implement the same
+profile in their KMS/HSM signing boundary; AuthWeave does not wrap or retain that key.
+
 ## Ownership and prerequisites
 
 - Merchant security owns private-key generation, access policy and destruction.

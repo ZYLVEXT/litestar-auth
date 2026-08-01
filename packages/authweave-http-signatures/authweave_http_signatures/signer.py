@@ -1,10 +1,9 @@
-"""Ed25519 signer seam and payment-message signing helper."""
+"""Local Ed25519 payment-message signing helper."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from http_message_signatures import HTTPMessageSigner, HTTPSignatureKeyResolver, algorithms
@@ -13,54 +12,13 @@ from authweave_http_signatures.digest import content_digest_sha256
 from authweave_http_signatures.models import HttpMessageView, PaymentSignaturePolicy
 
 
-class AsyncMessageSigner(Protocol):
-    """Sign bounded bytes using an opaque key reference (never raw private keys)."""
-
-    async def sign(self, *, key_ref: str, message: bytes) -> bytes:
-        """Return a raw Ed25519 signature over ``message``."""
-        ...
-
-
-class LocalEd25519KeyringSigner:
-    """Reference signer for tests and single-process demos."""
-
-    __slots__ = ("_keys",)
-
-    def __init__(self, keys: dict[str, Ed25519PrivateKey]) -> None:
-        """Bind opaque key references to in-memory private keys."""
-        if not keys:
-            msg = "keyring must contain at least one key"
-            raise ValueError(msg)
-        self._keys = dict(keys)
-
-    def __repr__(self) -> str:
-        """List key references without private material."""
-        return f"LocalEd25519KeyringSigner(key_refs={sorted(self._keys)!r})"
-
-    async def sign(self, *, key_ref: str, message: bytes) -> bytes:
-        """Sign ``message`` with the referenced key.
-
-        Returns:
-            The raw Ed25519 signature.
-
-        Raises:
-            KeyError: If the key reference is unknown.
-        """
-        try:
-            private_key = self._keys[key_ref]
-        except KeyError as exc:
-            msg = "unknown key reference"
-            raise KeyError(msg) from exc
-        return private_key.sign(message)
-
-
 @dataclass
 class _MessageAdapter:
     """Minimal request shape accepted by ``http-message-signatures``."""
 
     method: str
-    url: str
-    headers: dict[str, str]
+    url: str = field(repr=False)
+    headers: dict[str, str] = field(repr=False)
 
 
 class _KeyResolver(HTTPSignatureKeyResolver):
@@ -74,7 +32,7 @@ class _KeyResolver(HTTPSignatureKeyResolver):
         return self._keys[key_id].public_key()
 
 
-async def sign_payment_message(  # ruff: ignore[unused-async] - stable async signer API
+def sign_payment_message(
     *,
     view: HttpMessageView,
     policy: PaymentSignaturePolicy,
@@ -84,7 +42,11 @@ async def sign_payment_message(  # ruff: ignore[unused-async] - stable async sig
     now: datetime | None = None,
     lifetime: timedelta | None = None,
 ) -> HttpMessageView:
-    """Attach ``Content-Digest`` and RFC 9421 signature headers for profile v1.
+    """Attach profile-v1 digest and signature headers with a local private key.
+
+    This reference helper is for tests and in-process signers. Production KMS/HSM
+    integrations should construct the same RFC 9421 profile outside AuthWeave so
+    private key material remains non-exportable.
 
     Returns:
         A new ``HttpMessageView`` with digest and signature headers applied.
@@ -92,7 +54,6 @@ async def sign_payment_message(  # ruff: ignore[unused-async] - stable async sig
     Raises:
         ValueError: If required application headers are missing.
     """
-    _ = AsyncMessageSigner  # protocol exported for application KMS adapters
     created = now or datetime.now(UTC)
     signature_lifetime = timedelta(seconds=policy.max_signature_lifetime_seconds) if lifetime is None else lifetime
     if not timedelta(0) < signature_lifetime <= timedelta(seconds=policy.max_signature_lifetime_seconds):

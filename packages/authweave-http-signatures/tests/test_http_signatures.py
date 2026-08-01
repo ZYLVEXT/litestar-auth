@@ -22,7 +22,6 @@ from authweave_http_signatures import (
     HttpMessageView,
     HttpSignatureFailureCode,
     HttpSignatureVerificationError,
-    LocalEd25519KeyringSigner,
     PaymentHttpSignatureVerifier,
     PaymentSignaturePolicy,
     SignatureKeyBinding,
@@ -85,7 +84,7 @@ def _binding() -> SignatureKeyBinding:
     )
 
 
-async def _signed(
+def _signed(
     *,
     private_key: Ed25519PrivateKey,
     body: bytes = b'{"amount":"10.00"}',
@@ -101,7 +100,7 @@ async def _signed(
     if require_authorization:
         headers.append(("authorization", "DPoP access-token"))
     view = HttpMessageView(method="POST", target_uri=target_uri, headers=tuple(headers), body=body)
-    signed = await sign_payment_message(
+    signed = sign_payment_message(
         view=view,
         policy=policy,
         key_id="merchant-key-1",
@@ -117,7 +116,7 @@ pytestmark = pytest.mark.unit
 
 async def test_sign_and_verify_happy_path_and_replay() -> None:
     private_key = Ed25519PrivateKey.generate()
-    signed, policy = await _signed(private_key=private_key)
+    signed, policy = _signed(private_key=private_key)
     store = InMemoryReplayStore(capacity=8, time_source=_Clock())
     verifier = PaymentHttpSignatureVerifier(
         policy=policy,
@@ -150,7 +149,7 @@ async def test_concurrent_verifiers_keep_time_policy_request_local() -> None:
             headers=(("content-type", "application/json"), ("idempotency-key", nonce)),
             body=b"{}",
         )
-        signed = await sign_payment_message(
+        signed = sign_payment_message(
             view=unsigned,
             policy=policy,
             key_id="merchant-key-1",
@@ -181,7 +180,7 @@ async def test_concurrent_verifiers_keep_time_policy_request_local() -> None:
 
 async def test_digest_and_query_and_binding_failures() -> None:
     private_key = Ed25519PrivateKey.generate()
-    signed, policy = await _signed(private_key=private_key)
+    signed, policy = _signed(private_key=private_key)
     digest = content_digest_sha256(b"x")
     verify_content_digest(header_value=digest, body=b"x")
     with pytest.raises(HttpSignatureVerificationError) as digest_exc:
@@ -205,7 +204,7 @@ async def test_digest_and_query_and_binding_failures() -> None:
         await verifier.verify(mutated, context=_context())
     assert exc.value.code is HttpSignatureFailureCode.DIGEST_MISMATCH
 
-    with_query, _ = await _signed(private_key=private_key, target_uri="https://api.example/v1/payments?x=1", nonce="n2")
+    with_query, _ = _signed(private_key=private_key, target_uri="https://api.example/v1/payments?x=1", nonce="n2")
     with pytest.raises(HttpSignatureVerificationError) as qexc:
         await verifier.verify(with_query, context=_context())
     assert qexc.value.code is HttpSignatureFailureCode.QUERY_REJECTED
@@ -226,15 +225,15 @@ async def test_digest_and_query_and_binding_failures() -> None:
     )
     wrong_principal = PrincipalRef("https://issuer.test", "payments-worker", "service")
     wrong_ctx = AuthenticationContext(subject=wrong_principal, actor=wrong_principal, evidence=wrong_evidence)
-    fresh, _ = await _signed(private_key=private_key, nonce="n3")
+    fresh, _ = _signed(private_key=private_key, nonce="n3")
     with pytest.raises(HttpSignatureVerificationError) as bexc:
         await verifier.verify(fresh, context=wrong_ctx)
     assert bexc.value.code is HttpSignatureFailureCode.KEY_BINDING_MISMATCH
 
 
-async def test_dpop_variant_and_local_signer_and_redis() -> None:
+async def test_dpop_variant_and_redis() -> None:
     private_key = Ed25519PrivateKey.generate()
-    signed, policy = await _signed(private_key=private_key, require_authorization=True, nonce="dpop-n1")
+    signed, policy = _signed(private_key=private_key, require_authorization=True, nonce="dpop-n1")
     assert "authorization" in policy.covered_components
     store = InMemoryReplayStore(capacity=8, time_source=_Clock())
     verifier = PaymentHttpSignatureVerifier(
@@ -245,15 +244,6 @@ async def test_dpop_variant_and_local_signer_and_redis() -> None:
     )
     verified = await verifier.verify(signed, context=_context())
     assert verified.idempotency_key == "idem-1"
-
-    signer = LocalEd25519KeyringSigner({"merchant-key-1": private_key})
-    assert "merchant-key-1" in repr(signer)
-    sig = await signer.sign(key_ref="merchant-key-1", message=b"abc")
-    assert len(sig) == 64
-    with pytest.raises(KeyError):
-        await signer.sign(key_ref="missing", message=b"abc")
-    with pytest.raises(ValueError):
-        LocalEd25519KeyringSigner({})
 
     class _Redis:
         def __init__(self) -> None:
@@ -308,6 +298,19 @@ async def test_litestar_raw_body_reader_and_policy_guards() -> None:
 
     err = HttpSignatureVerificationError(HttpSignatureFailureCode.MALFORMED)
     assert "malformed" in repr(err).lower()
+
+
+def test_http_message_view_repr_redacts_headers_and_body() -> None:
+    secret_canary = "SECRET_CANARY_http_message"
+    view = HttpMessageView(
+        method="POST",
+        target_uri=f"https://api.example/v1/payments?access_token={secret_canary}",
+        headers=(("authorization", f"Bearer {secret_canary}"),),
+        body=secret_canary.encode(),
+    )
+
+    assert secret_canary not in repr(view)
+    assert secret_canary not in str(view)
 
 
 async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -394,7 +397,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
     # signer validation paths
     bare = HttpMessageView(method="POST", target_uri="https://api.example/v1/payments", headers=(), body=b"{}")
     with pytest.raises(ValueError, match="content-type"):
-        await sign_payment_message(view=bare, policy=policy, key_id="k", private_key=private_key, nonce="n")
+        sign_payment_message(view=bare, policy=policy, key_id="k", private_key=private_key, nonce="n")
     typed = HttpMessageView(
         method="POST",
         target_uri="https://api.example/v1/payments",
@@ -402,9 +405,9 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
         body=b"{}",
     )
     with pytest.raises(ValueError, match="idempotency-key"):
-        await sign_payment_message(view=typed, policy=policy, key_id="k", private_key=private_key, nonce="n")
+        sign_payment_message(view=typed, policy=policy, key_id="k", private_key=private_key, nonce="n")
     with pytest.raises(ValueError, match="authorization"):
-        await sign_payment_message(
+        sign_payment_message(
             view=HttpMessageView(
                 method="POST",
                 target_uri="https://api.example/v1/payments",
@@ -424,7 +427,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
     )
     for invalid_lifetime in (timedelta(0), timedelta(seconds=-1), timedelta(seconds=301)):
         with pytest.raises(ValueError, match="lifetime"):
-            await sign_payment_message(
+            sign_payment_message(
                 view=signable,
                 policy=policy,
                 key_id="k",
@@ -499,7 +502,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
 
     # allow_query path
     q_policy = PaymentSignaturePolicy(allow_query=True)
-    signed_q, _ = await _signed(
+    signed_q, _ = _signed(
         private_key=private_key,
         target_uri="https://api.example/v1/payments?ok=1",
         nonce="q-n1",
@@ -549,7 +552,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
     assert _KeyResolver({"merchant-key-1": private_key}).resolve_public_key("merchant-key-1") is not None
 
     # unknown verify key id → malformed wrapper
-    signed_ok, _ = await _signed(private_key=private_key, nonce="cov-n1")
+    signed_ok, _ = _signed(private_key=private_key, nonce="cov-n1")
     other = Ed25519PrivateKey.generate()
     bad_key_verifier = PaymentHttpSignatureVerifier(
         policy=policy,
@@ -565,7 +568,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
         await bad_key_verifier.verify(signed_ok, context=_context())
 
     # lifetime too long for policy
-    long_signed = await sign_payment_message(
+    long_signed = sign_payment_message(
         view=HttpMessageView(
             method="POST",
             target_uri="https://api.example/v1/payments",
@@ -605,7 +608,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
             ttl_seconds=60,
         ),
     )
-    signed2, _ = await _signed(private_key=private_key, nonce="bind-n1")
+    signed2, _ = _signed(private_key=private_key, nonce="bind-n1")
     with pytest.raises(HttpSignatureVerificationError) as bindexc:
         await only_pub.verify(signed2, context=_context())
     assert bindexc.value.code is HttpSignatureFailureCode.KEY_BINDING_MISMATCH
@@ -626,7 +629,7 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
         await verifier.verify(dup, context=_context())
     assert dupexc.value.code is HttpSignatureFailureCode.MALFORMED
     # structured-fields single-label profile enforcement
-    signed_sf, _ = await _signed(private_key=private_key, nonce="sf-dup")
+    signed_sf, _ = _signed(private_key=private_key, nonce="sf-dup")
     si = signed_sf.header("signature-input")
     sig = signed_sf.header("signature")
     assert si is not None

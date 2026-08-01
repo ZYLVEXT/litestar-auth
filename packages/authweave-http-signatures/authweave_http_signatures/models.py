@@ -22,9 +22,9 @@ class HttpMessageView:
     """Exact raw HTTP request projection used for digest and signature checks."""
 
     method: str
-    target_uri: str
-    headers: tuple[tuple[str, str], ...] = ()
-    body: bytes = b""
+    target_uri: str = field(repr=False)
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    body: bytes = field(default=b"", repr=False)
 
     def __post_init__(self) -> None:
         """Reject empty method/target or oversized metadata."""
