@@ -1,6 +1,5 @@
 """Asymmetric Standard Webhooks toolkit for AuthWeave integrations."""
 
-from authweave_webhooks.duplicate import DuplicateDeliveryGuard
 from authweave_webhooks.errors import WebhookFailureCode, WebhookVerificationError
 from authweave_webhooks.headers import build_signing_input, format_signature_header, parse_headers
 from authweave_webhooks.keys import PublicKeyResolver, StaticPublicKeyResolver
@@ -35,7 +34,6 @@ __all__ = (
     "MAX_WEBHOOK_ID_LENGTH",
     "SIGNATURE_VERSION",
     "AsyncMessageSigner",
-    "DuplicateDeliveryGuard",
     "Ed25519PublicKey",
     "LocalEd25519KeyringSigner",
     "PublicKeyDocument",

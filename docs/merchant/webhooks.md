@@ -26,15 +26,27 @@ must stay in the approved configuration/KMS systems.
 ## Consumer checklist
 
 1. Read the **raw body bytes** before JSON parsing.
-2. Verify `webhook-id`, `webhook-timestamp`, `webhook-signature` with
-   `StandardWebhooksVerifier`.
-3. Claim immediate duplicate delivery (`environment` + endpoint/merchant +
-   `webhook-id`) via `DuplicateDeliveryGuard` / Redis helper.
-4. Enqueue an application inbox item for **business** idempotency (separate
-   from delivery duplicate claims).
-5. On retry, the application or scheduler must keep the same `webhook-id` and ask
-   AuthWeave to create a delivery with a fresh timestamp + signature; do not treat
-   a new timestamp as a new business event if the id already completed.
+2. Verify `webhook-id`, `webhook-timestamp`, and `webhook-signature` with
+   `StandardWebhooksVerifier`. Its mandatory shared replay store atomically
+   claims the delivery only after a valid signature, namespaced by environment,
+   owner, endpoint, and `webhook-id`; outage and capacity pressure fail closed.
+   A repeated valid delivery returns a verified envelope with
+   `replay_detected=True`.
+3. After **every** successful verification, atomically insert the complete raw
+   body and verified metadata into a durable inbox under a unique
+   environment/owner/endpoint/`webhook-id` key. Use insert-if-absent semantics;
+   never overwrite the first committed item. A retry therefore repairs the
+   claim-before-inbox crash window instead of losing the event.
+4. Return `2xx` only after the inbox transaction commits. Process and retry
+   business work from the inbox; `replay_detected` is telemetry and must not
+   replace durable idempotency.
+5. On sender retry, keep the same `webhook-id` and create a delivery with a fresh
+   timestamp + signature; do not treat a new timestamp as a new business event.
+
+The verifier owns the complete timestamp-window replay TTL. Consumers cannot
+shorten it. `InMemoryReplayStore` is only for tests or a documented single-worker
+process; production consumers use a worker-shared implementation such as
+`RedisReplayStore`. The durable inbox remains the authoritative delivery record.
 
 ## Key compromise / rotation
 

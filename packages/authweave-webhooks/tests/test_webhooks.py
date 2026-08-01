@@ -13,7 +13,6 @@ import pytest
 from authweave_core import InMemoryReplayStore, ReplayOutcome
 from authweave_webhooks import (
     MAX_BODY_BYTES,
-    DuplicateDeliveryGuard,
     Ed25519PublicKey,
     LocalEd25519KeyringSigner,
     PublicKeyDocument,
@@ -102,6 +101,10 @@ def clock() -> dict[str, int]:
     return {"now": _NOW}
 
 
+def _replay_store(clock: dict[str, int], *, capacity: int = 64) -> InMemoryReplayStore:
+    return InMemoryReplayStore(capacity=capacity, time_source=lambda: float(clock["now"]))
+
+
 async def _signed_delivery(
     private: Ed25519PrivateKey,
     *,
@@ -136,6 +139,7 @@ async def test_sign_and_verify_roundtrip(clock: dict[str, int]) -> None:
     delivery = await _signed_delivery(private)
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -164,6 +168,7 @@ async def test_rotation_overlap_accepts_next_key(clock: dict[str, int]) -> None:
     )
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(document),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -181,6 +186,7 @@ async def test_refresh_allows_one_controlled_retry(clock: dict[str, int]) -> Non
     resolver = StaticPublicKeyResolver(_document(old_pub), refresh_document=_document(new_pub, version="2"))
     verifier = StandardWebhooksVerifier(
         resolver,
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -203,8 +209,10 @@ async def test_concurrent_refresh_losers_re_resolve_winning_snapshot(clock: dict
         version="2",
         keys=(Ed25519PublicKey(old_public), Ed25519PublicKey(next_public)),
     )
-    delivery = await _signed_delivery(next_private, webhook_id="msg_rotation_race")
     callers = 16
+    deliveries = await asyncio.gather(
+        *(_signed_delivery(next_private, webhook_id=f"msg_rotation_race_{index}") for index in range(callers)),
+    )
 
     class _RacingResolver:
         def __init__(self) -> None:
@@ -235,13 +243,14 @@ async def test_concurrent_refresh_losers_re_resolve_winning_snapshot(clock: dict
     resolver = _RacingResolver()
     verifier = StandardWebhooksVerifier(
         resolver,
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
         time_source=lambda: clock["now"],
     )
     verified = await asyncio.gather(
-        *(verifier.verify(headers=delivery.headers(), body=delivery.body) for _ in range(callers)),
+        *(verifier.verify(headers=delivery.headers(), body=delivery.body) for delivery in deliveries),
     )
     assert {result.key_document_version for result in verified} == {"2"}
     del old_private
@@ -270,6 +279,7 @@ async def test_negative_matrix(clock: dict[str, int], mutate: Any, code: Webhook
     body, headers = mutate(delivery, delivery.headers())
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -286,6 +296,7 @@ async def test_environment_owner_and_endpoint_mismatch(clock: dict[str, int]) ->
     delivery = await _signed_delivery(private)
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public, environment="live")),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -297,6 +308,7 @@ async def test_environment_owner_and_endpoint_mismatch(clock: dict[str, int]) ->
 
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public, owner="merchant-2")),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -308,6 +320,7 @@ async def test_environment_owner_and_endpoint_mismatch(clock: dict[str, int]) ->
 
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public, endpoint="https://other.example/hook")),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -323,6 +336,7 @@ async def test_key_document_validity_window(clock: dict[str, int]) -> None:
     delivery = await _signed_delivery(private)
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public, not_before=_NOW + 10)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -334,6 +348,7 @@ async def test_key_document_validity_window(clock: dict[str, int]) -> None:
 
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public, retire_after=_NOW - 1)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -344,32 +359,119 @@ async def test_key_document_validity_window(clock: dict[str, int]) -> None:
     assert exc_info.value.code is WebhookFailureCode.KEY_UNAVAILABLE
 
 
-async def test_duplicate_delivery_guard() -> None:
-    store = InMemoryReplayStore(capacity=8, time_source=lambda: float(_NOW))
-    guard = DuplicateDeliveryGuard(
-        store,
-        environment="sandbox",
-        endpoint="https://merchant.example/hooks/payments",
-        ttl_seconds=60,
+async def test_replay_namespace_binds_full_onboarding_identity(clock: dict[str, int]) -> None:
+    private, public = _keypair()
+    delivery = await _signed_delivery(private)
+    store = _replay_store(clock, capacity=8)
+    bindings = (
+        ("sandbox", "merchant-1", "https://merchant.example/hooks/payments"),
+        ("live", "merchant-1", "https://merchant.example/hooks/payments"),
+        ("sandbox", "merchant-2", "https://merchant.example/hooks/payments"),
+        ("sandbox", "merchant-1", "https://merchant.example/hooks/refunds"),
     )
-    await guard.claim("msg_1")
-    with pytest.raises(WebhookVerificationError) as exc_info:
-        await guard.claim("msg_1")
-    assert exc_info.value.code is WebhookFailureCode.DUPLICATE_DELIVERY
+    verifiers = [
+        StandardWebhooksVerifier(
+            StaticPublicKeyResolver(
+                _document(public, environment=environment, owner=owner, endpoint=endpoint),
+            ),
+            replay_store=store,
+            expected_environment=environment,
+            expected_owner=owner,
+            expected_endpoint=endpoint,
+            time_source=lambda: clock["now"],
+        )
+        for environment, owner, endpoint in bindings
+    ]
+
+    for verifier in verifiers:
+        verified = await verifier.verify(headers=delivery.headers(), body=delivery.body)
+        assert verified.replay_detected is False
+
+    retry = await verifiers[0].verify(headers=delivery.headers(), body=delivery.body)
+    assert retry.replay_detected is True
+    assert retry.body == delivery.body
 
 
-async def test_duplicate_guard_maps_capacity() -> None:
-    store = InMemoryReplayStore(capacity=1, time_source=lambda: float(_NOW))
-    guard = DuplicateDeliveryGuard(
-        store,
-        environment="sandbox",
-        endpoint="https://merchant.example/hooks/payments",
-        ttl_seconds=60,
+@pytest.mark.parametrize("outcome", [ReplayOutcome.CAPACITY_EXCEEDED, ReplayOutcome.UNAVAILABLE])
+async def test_verifier_maps_replay_store_failure(outcome: ReplayOutcome, clock: dict[str, int]) -> None:
+    class _Store:
+        async def check_and_store(self, key: str, *, ttl_seconds: float) -> ReplayOutcome:
+            assert key.startswith("webhook:v1:")
+            assert ttl_seconds == 601
+            return outcome
+
+    private, public = _keypair()
+    delivery = await _signed_delivery(private)
+    verifier = StandardWebhooksVerifier(
+        StaticPublicKeyResolver(_document(public)),
+        replay_store=_Store(),
+        expected_environment="sandbox",
+        expected_owner="merchant-1",
+        expected_endpoint="https://merchant.example/hooks/payments",
+        time_source=lambda: clock["now"],
     )
-    await guard.claim("msg_a")
+
     with pytest.raises(WebhookVerificationError) as exc_info:
-        await guard.claim("msg_b")
+        await verifier.verify(headers=delivery.headers(), body=delivery.body)
     assert exc_info.value.code is WebhookFailureCode.STORE_UNAVAILABLE
+
+
+async def test_replay_ttl_covers_inclusive_timestamp_window(clock: dict[str, int]) -> None:
+    tolerance = 5
+    private, public = _keypair()
+    delivery = await _signed_delivery(private, timestamp=_NOW + tolerance)
+    verifier = StandardWebhooksVerifier(
+        StaticPublicKeyResolver(_document(public)),
+        replay_store=_replay_store(clock),
+        expected_environment="sandbox",
+        expected_owner="merchant-1",
+        expected_endpoint="https://merchant.example/hooks/payments",
+        timestamp_tolerance_seconds=tolerance,
+        time_source=lambda: clock["now"],
+    )
+    first = await verifier.verify(headers=delivery.headers(), body=delivery.body)
+    assert first.replay_detected is False
+
+    clock["now"] = _NOW + 2 * tolerance
+    duplicate = await verifier.verify(headers=delivery.headers(), body=delivery.body)
+    assert duplicate.replay_detected is True
+
+    clock["now"] += 1
+    with pytest.raises(WebhookVerificationError) as expired:
+        await verifier.verify(headers=delivery.headers(), body=delivery.body)
+    assert expired.value.code is WebhookFailureCode.TIMESTAMP_OUT_OF_TOLERANCE
+
+
+async def test_invalid_signature_does_not_claim_replay_key(clock: dict[str, int]) -> None:
+    class _Store:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def check_and_store(self, key: str, *, ttl_seconds: float) -> ReplayOutcome:
+            assert key.startswith("webhook:v1:")
+            assert ttl_seconds > 0
+            self.calls += 1
+            return ReplayOutcome.STORED
+
+    private, public = _keypair()
+    delivery = await _signed_delivery(private)
+    store = _Store()
+    verifier = StandardWebhooksVerifier(
+        StaticPublicKeyResolver(_document(public)),
+        replay_store=store,
+        expected_environment="sandbox",
+        expected_owner="merchant-1",
+        expected_endpoint="https://merchant.example/hooks/payments",
+        time_source=lambda: clock["now"],
+    )
+
+    with pytest.raises(WebhookVerificationError) as exc_info:
+        await verifier.verify(headers=delivery.headers(), body=delivery.body + b"forged")
+    assert exc_info.value.code is WebhookFailureCode.SIGNATURE_INVALID
+    assert store.calls == 0
+
+    await verifier.verify(headers=delivery.headers(), body=delivery.body)
+    assert store.calls == 1
 
 
 async def test_redis_store_outcomes() -> None:
@@ -429,6 +531,7 @@ async def test_litestar_adapter(clock: dict[str, int]) -> None:
     delivery = await _signed_delivery(private)
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -509,6 +612,7 @@ async def test_refresh_exhaustion_and_forged_signature(clock: dict[str, int]) ->
     delivery = await _signed_delivery(other, webhook_id="msg_forged")
     verifier = StandardWebhooksVerifier(
         StaticPublicKeyResolver(_document(public)),
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",
@@ -524,18 +628,12 @@ def test_constructor_guards() -> None:
     with pytest.raises(ValueError, match="positive"):
         StandardWebhooksVerifier(
             StaticPublicKeyResolver(_document(b"\x00" * 32)),
+            replay_store=InMemoryReplayStore(capacity=1, time_source=lambda: float(_NOW)),
             expected_environment="sandbox",
             expected_owner="merchant-1",
             expected_endpoint="https://merchant.example/hooks/payments",
             timestamp_tolerance_seconds=0,
             time_source=lambda: _NOW,
-        )
-    with pytest.raises(ValueError, match="positive"):
-        DuplicateDeliveryGuard(
-            InMemoryReplayStore(capacity=1, time_source=lambda: 0.0),
-            environment="sandbox",
-            endpoint="e",
-            ttl_seconds=0,
         )
 
     class _BrokenClient:
@@ -552,23 +650,6 @@ def test_constructor_guards() -> None:
         HttpxWebhookSender(_BrokenClient(), allowed_endpoints={"https://hooks.example/x"}, timeout_seconds=0)
     with pytest.raises(ValueError, match="at least one"):
         HttpxWebhookSender(_BrokenClient(), allowed_endpoints=set())
-
-
-async def test_duplicate_guard_maps_unavailable() -> None:
-    class _Store:
-        async def check_and_store(self, _key: str, *, ttl_seconds: float) -> ReplayOutcome:
-            assert ttl_seconds > 0
-            return ReplayOutcome.UNAVAILABLE
-
-    guard = DuplicateDeliveryGuard(
-        _Store(),  # ty: ignore[invalid-argument-type]
-        environment="sandbox",
-        endpoint="e",
-        ttl_seconds=10,
-    )
-    with pytest.raises(WebhookVerificationError) as exc_info:
-        await guard.claim("msg")
-    assert exc_info.value.code is WebhookFailureCode.STORE_UNAVAILABLE
 
 
 async def test_redis_ttl_guard() -> None:
@@ -688,6 +769,7 @@ async def test_refresh_then_still_invalid(clock: dict[str, int]) -> None:
     resolver = StaticPublicKeyResolver(_document(public), refresh_document=_document(public, version="2"))
     verifier = StandardWebhooksVerifier(
         resolver,
+        replay_store=_replay_store(clock),
         expected_environment="sandbox",
         expected_owner="merchant-1",
         expected_endpoint="https://merchant.example/hooks/payments",

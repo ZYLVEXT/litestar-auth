@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from authweave_core import InMemoryReplayStore
 from authweave_webhooks import (
     Ed25519PublicKey,
     PublicKeyDocument,
@@ -61,6 +62,10 @@ async def _run() -> int:
         )
         verifier = StandardWebhooksVerifier(
             resolver,
+            replay_store=InMemoryReplayStore(
+                capacity=1,
+                time_source=lambda now=case["now"]: float(now),
+            ),
             expected_environment=expected_document["environment"],
             expected_owner=expected_document["owner"],
             expected_endpoint=expected_document["endpoint"],

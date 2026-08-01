@@ -19,7 +19,6 @@ class WebhookFailureCode(StrEnum):
     OWNER_MISMATCH = "owner_mismatch"
     ENDPOINT_MISMATCH = "endpoint_mismatch"
     STORE_UNAVAILABLE = "store_unavailable"
-    DUPLICATE_DELIVERY = "duplicate_delivery"
 
 
 class WebhookVerificationError(Exception):

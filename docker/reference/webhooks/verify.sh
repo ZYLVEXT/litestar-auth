@@ -25,7 +25,7 @@ node docs/vectors/webhooks/v1a/verify_vectors.mjs
 echo "==> validating sandbox/live merchant environment packs"
 python3 docs/merchant/environment-packs/webhooks/verify_packs.py
 
-echo "==> exercising concurrent Redis refresh, rotation, and duplicate claims"
+echo "==> exercising concurrent Redis refresh, rotation, and fail-closed replay verification"
 uv run --frozen --group reference python "${ROOT}/verify_redis.py"
 
 echo "==> Standard Webhooks reference OK"

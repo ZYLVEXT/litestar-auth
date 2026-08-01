@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from hashlib import sha256
+from json import dumps
 from typing import TYPE_CHECKING
 
-from authweave_core import SecurityOperation, SecurityOutcome, observe_security
+from authweave_core import ReplayOutcome, SecurityOperation, SecurityOutcome, observe_security
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -19,7 +22,7 @@ from authweave_webhooks.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
-    from authweave_core import SecurityObserver, TraceCorrelation
+    from authweave_core import ReplayStore, SecurityObserver, TraceCorrelation
 
     from authweave_webhooks.keys import PublicKeyResolver
     from authweave_webhooks.models import PublicKeyDocument
@@ -34,6 +37,8 @@ class StandardWebhooksVerifier:
         "_expected_owner",
         "_max_body_bytes",
         "_observer",
+        "_replay_store",
+        "_replay_ttl_seconds",
         "_resolver",
         "_time_source",
         "_tolerance",
@@ -43,6 +48,7 @@ class StandardWebhooksVerifier:
         self,
         resolver: PublicKeyResolver,
         *,
+        replay_store: ReplayStore,
         expected_environment: str,
         expected_owner: str,
         expected_endpoint: str,
@@ -51,15 +57,18 @@ class StandardWebhooksVerifier:
         time_source: Callable[[], int],
         observer: SecurityObserver | None = None,
     ) -> None:
-        """Bind onboarding identity, clock, and key resolver."""
+        """Bind onboarding identity, clock, key resolver, and replay store."""
         if timestamp_tolerance_seconds <= 0:
             msg = "timestamp_tolerance_seconds must be positive"
             raise ValueError(msg)
         self._resolver = resolver
+        self._replay_store = replay_store
         self._expected_environment = expected_environment
         self._expected_owner = expected_owner
         self._expected_endpoint = expected_endpoint
         self._tolerance = timestamp_tolerance_seconds
+        # Both timestamp boundaries are inclusive; cover a proof first seen at the future boundary.
+        self._replay_ttl_seconds = timestamp_tolerance_seconds * 2 + 1
         self._max_body_bytes = max_body_bytes
         self._time_source = time_source
         self._observer = observer
@@ -88,6 +97,10 @@ class StandardWebhooksVerifier:
         ) as observation:
             try:
                 result = await self._verify(headers=headers, body=body)
+                result = replace(
+                    result,
+                    replay_detected=await self._claim_replay(result, links=links),
+                )
             except WebhookVerificationError as exc:
                 outcome = (
                     SecurityOutcome.UNAVAILABLE
@@ -137,6 +150,42 @@ class StandardWebhooksVerifier:
         if matched:
             return self._result(parsed.webhook_id, parsed.timestamp, body, candidate)
         raise WebhookVerificationError(WebhookFailureCode.SIGNATURE_INVALID)
+
+    async def _claim_replay(
+        self,
+        result: VerifiedWebhook,
+        *,
+        links: Sequence[TraceCorrelation],
+    ) -> bool:
+        namespace = dumps(
+            (result.environment, result.owner, result.endpoint, result.webhook_id),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        key = f"webhook:v1:{sha256(namespace).hexdigest()}"
+        with observe_security(
+            self._observer,
+            SecurityOperation.REPLAY_CHECK,
+            profile="standard_webhooks",
+            links=links,
+        ) as observation:
+            outcome = await self._replay_store.check_and_store(
+                key,
+                ttl_seconds=self._replay_ttl_seconds,
+            )
+            if outcome is ReplayOutcome.STORED:
+                observation.set_outcome(SecurityOutcome.STORED)
+            elif outcome is ReplayOutcome.REPLAY:
+                observation.set_outcome(SecurityOutcome.REPLAY)
+            elif outcome is ReplayOutcome.CAPACITY_EXCEEDED:
+                observation.set_outcome(SecurityOutcome.CAPACITY_EXCEEDED)
+            else:
+                observation.set_outcome(SecurityOutcome.UNAVAILABLE)
+        if outcome is ReplayOutcome.STORED:
+            return False
+        if outcome is ReplayOutcome.REPLAY:
+            return True
+        raise WebhookVerificationError(WebhookFailureCode.STORE_UNAVAILABLE)
 
     def _check_timestamp(self, timestamp: int) -> None:
         now = self._time_source()

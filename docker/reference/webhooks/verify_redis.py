@@ -11,11 +11,11 @@ import sys
 from typing import Any
 
 from authweave_webhooks import (
-    DuplicateDeliveryGuard,
     Ed25519PublicKey,
     LocalEd25519KeyringSigner,
     PublicKeyDocument,
     StandardWebhooksVerifier,
+    WebhookDelivery,
     WebhookFailureCode,
     WebhookVerificationError,
     create_delivery,
@@ -120,37 +120,46 @@ async def _publish_after_all_old_snapshots(redis: Redis, document: PublicKeyDocu
         await transaction.execute()
 
 
-async def _claim(guard: DuplicateDeliveryGuard, webhook_id: str) -> WebhookFailureCode | None:
+async def _verify(
+    verifier: StandardWebhooksVerifier,
+    delivery: WebhookDelivery,
+) -> bool | WebhookFailureCode:
     try:
-        await guard.claim(webhook_id)
+        verified = await verifier.verify(headers=delivery.headers(), body=delivery.body)
     except WebhookVerificationError as exc:
         return exc.code
-    return None
+    return verified.replay_detected
 
 
 async def main() -> int:
     retiring_private = _private(0)
     active_private = _private(32)
     next_private = _private(64)
-    retiring_public = retiring_private.public_key().public_bytes_raw()
-    active_public = active_private.public_key().public_bytes_raw()
-    next_public = next_private.public_key().public_bytes_raw()
-    old_document = _document("1", (retiring_public,))
-    rotated_document = _document("2", (active_public, next_public, retiring_public))
-    delivery = await create_delivery(
-        signer=LocalEd25519KeyringSigner({"active": active_private}),
-        key_refs=["active"],
-        webhook_id="msg_real_redis_rotation",
-        timestamp=NOW,
-        body=b'{"event":"payment.captured"}',
+    old_document = _document("1", (retiring_private.public_key().public_bytes_raw(),))
+    rotated_document = _document(
+        "2",
+        tuple(key.public_key().public_bytes_raw() for key in (active_private, next_private, retiring_private)),
     )
+    signer = LocalEd25519KeyringSigner({"active": active_private})
+    deliveries = [
+        await create_delivery(
+            signer=signer,
+            key_refs=["active"],
+            webhook_id=f"msg_real_redis_rotation_{index}",
+            timestamp=NOW,
+            body=b'{"event":"payment.captured"}',
+        )
+        for index in range(CALLERS)
+    ]
 
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
     try:
         await redis.flushdb()
+        replay_store = RedisReplayStore(redis)
         verifiers = [
             StandardWebhooksVerifier(
                 _RedisRotationResolver(redis, old_document),
+                replay_store=replay_store,
                 expected_environment="sandbox",
                 expected_owner="merchant-demo",
                 expected_endpoint=ENDPOINT,
@@ -160,25 +169,26 @@ async def main() -> int:
         ]
         publisher = asyncio.create_task(_publish_after_all_old_snapshots(redis, rotated_document))
         verified = await asyncio.gather(
-            *(verifier.verify(headers=delivery.headers(), body=delivery.body) for verifier in verifiers),
+            *(
+                verifier.verify(headers=delivery.headers(), body=delivery.body)
+                for verifier, delivery in zip(verifiers, deliveries, strict=True)
+            ),
         )
         await publisher
         if {result.key_document_version for result in verified} != {"2"}:
             sys.stderr.write("rotation race did not converge on version 2\n")
             return 1
 
-        guards = [
-            DuplicateDeliveryGuard(
-                RedisReplayStore(redis),
-                environment="sandbox",
-                endpoint=ENDPOINT,
-                ttl_seconds=300,
-            )
-            for _ in range(CALLERS)
-        ]
-        claims = await asyncio.gather(*(_claim(guard, delivery.webhook_id) for guard in guards))
-        if claims.count(None) != 1 or claims.count(WebhookFailureCode.DUPLICATE_DELIVERY) != CALLERS - 1:
-            sys.stderr.write(f"unexpected duplicate claims: {claims!r}\n")
+        duplicate_delivery = await create_delivery(
+            signer=signer,
+            key_refs=["active"],
+            webhook_id="msg_real_redis_duplicate",
+            timestamp=NOW,
+            body=b'{"event":"payment.captured"}',
+        )
+        outcomes = await asyncio.gather(*(_verify(verifier, duplicate_delivery) for verifier in verifiers))
+        if outcomes.count(False) != 1 or outcomes.count(True) != CALLERS - 1:
+            sys.stderr.write(f"unexpected duplicate verification outcomes: {outcomes!r}\n")
             return 1
 
         await redis.set(DOCUMENT_KEY, _encode_document(old_document))
@@ -190,7 +200,7 @@ async def main() -> int:
         await redis.aclose()
 
     sys.stdout.write(f"ok  {CALLERS} concurrent key refreshes converged on version 2\n")
-    sys.stdout.write(f"ok  exactly one of {CALLERS} Redis duplicate claims succeeded\n")
+    sys.stdout.write(f"ok  {CALLERS} verifications returned one fresh and {CALLERS - 1} replay observations\n")
     sys.stdout.write("ok  key-document rollback was rejected\n")
     return 0
 

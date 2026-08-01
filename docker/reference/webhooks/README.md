@@ -7,7 +7,8 @@ This reference exercises the `authweave-standard-webhooks-v1a` profile against:
 - checked sandbox/live merchant environment packs;
 - 32 simultaneous cold key snapshots converging on one atomically published
   Redis rotation document;
-- 32 simultaneous duplicate claims producing exactly one winner; and
+- 32 simultaneous Redis-backed verifications of one delivery producing one
+  fresh result and 31 replay observations; and
 - rejection of a Redis-published key-document rollback.
 
 Run:

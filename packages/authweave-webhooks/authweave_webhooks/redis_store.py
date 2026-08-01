@@ -1,4 +1,4 @@
-"""Optional Redis-backed duplicate-delivery helper."""
+"""Optional Redis-backed webhook replay store."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ class RedisReplayStore:
     """Thin Redis SET NX EX adapter satisfying authweave-core ``ReplayStore``.
 
     Requires the ``authweave-webhooks[redis]`` extra. Connection failures map to
-    ``Unavailable`` so protected consumers fail closed.
+    ``Unavailable`` so webhook verification fails closed.
     """
 
     __slots__ = ("_redis",)

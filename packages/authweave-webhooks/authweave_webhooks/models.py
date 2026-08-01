@@ -75,6 +75,7 @@ class VerifiedWebhook:
     owner: str
     endpoint: str
     key_document_version: str
+    replay_detected: bool = False
 
     def __repr__(self) -> str:
         """Omit raw body bytes from representations."""
@@ -83,7 +84,8 @@ class VerifiedWebhook:
             f"webhook_id={self.webhook_id!r}, timestamp={self.timestamp}, "
             f"body_len={len(self.body)}, environment={self.environment!r}, "
             f"owner={self.owner!r}, endpoint={self.endpoint!r}, "
-            f"key_document_version={self.key_document_version!r})"
+            f"key_document_version={self.key_document_version!r}, "
+            f"replay_detected={self.replay_detected!r})"
         )
 
 
