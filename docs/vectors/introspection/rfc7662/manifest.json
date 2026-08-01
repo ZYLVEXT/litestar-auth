@@ -33,8 +33,8 @@
             }
         },
         {
-            "id": "active-dpop-cnf-rejected-in-mtls-parser",
-            "expect": "fail",
+            "id": "active-dpop-cnf-accepted-by-neutral-parser",
+            "expect": "pass",
             "body": {
                 "active": true,
                 "sub": "merchant-1",

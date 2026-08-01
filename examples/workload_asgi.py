@@ -1,11 +1,14 @@
 """Minimal non-Litestar ASGI portability proof for authweave-core."""
 
 from authweave_core import (
+    Authenticated,
     AuthenticationCoordinator,
     AuthenticationRuntime,
+    InvariantFailure,
     RequestAuthenticationProvider,
     RequestView,
     RouteProviderPolicy,
+    Unavailable,
 )
 
 
@@ -21,7 +24,13 @@ def build_asgi_authenticator(provider: RequestAuthenticationProvider) -> object:
         )
         decision = await coordinator.authenticate(request, AuthenticationRuntime(), policy=policy)
         body = type(decision).__name__.encode()
-        await send({"type": "http.response.start", "status": 200, "headers": []})  # ty: ignore[call-non-callable]
+        if isinstance(decision, Authenticated):
+            status = 200
+        elif isinstance(decision, (Unavailable, InvariantFailure)):
+            status = 503
+        else:
+            status = 401
+        await send({"type": "http.response.start", "status": status, "headers": []})  # ty: ignore[call-non-callable]
         await send({"type": "http.response.body", "body": body})  # ty: ignore[call-non-callable]
 
     return app

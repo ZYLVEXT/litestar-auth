@@ -25,9 +25,7 @@ def main() -> int:
         except SpiffeValidationError:
             passed = False
         ok = passed if case["expect"] == "pass" else not passed
-        if ok:
-            pass
-        else:
+        if not ok:
             failures += 1
     return failures
 

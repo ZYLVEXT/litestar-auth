@@ -71,5 +71,6 @@ async def provision_and_authenticate(  # ruff: ignore[too-many-arguments]
             trust_anchors=frozenset({"production-ca"}),
             termination_boundaries=frozenset({"envoy"}),
         ),
+        event_callback=event_recorder,
     )
     return await provider.authenticate(RequestView("POST", timestamp=now, tls_peer=peer), AuthenticationRuntime())
