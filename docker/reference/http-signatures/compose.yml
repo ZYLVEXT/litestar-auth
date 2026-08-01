@@ -1,0 +1,129 @@
+# Payment HTTP Message Signature Docker reference
+#
+# External test AS + DPoP authentication + Redis nonce replay + Envoy trusted
+# target injection over a Unix-socket upstream (ADR 0003 / 0004 / 0005).
+
+services:
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    ports:
+      - "127.0.0.1:16380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  test-authorization-server:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace/packages/authweave-workload
+      - --extra
+      - dpop
+      - --with
+      - uvicorn
+      - uvicorn
+      - test_authorization_server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8082"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/as-venv
+      AS_ISSUER: https://as.example
+      AS_AUDIENCE: payments-api
+      AS_TOKEN_TARGET: https://as.example/oauth/token
+      AS_CLIENT_ID: payments-app
+      AS_SUBJECT: payments-worker
+      AS_ALTERNATE_TOKEN_TARGET: https://as.example/oauth/token/other
+      AS_ALTERNATE_CLIENT_ID: other-payments-app
+      AS_ALTERNATE_SUBJECT: other-payments-worker
+    ports:
+      - "127.0.0.1:18083:8082"
+    volumes:
+      - ../../..:/workspace:ro
+      - ../dpop/test_authorization_server.py:/app/test_authorization_server.py:ro
+    working_dir: /app
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8082),2); s.close()"
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 25s
+
+  upstream:
+    image: ghcr.io/astral-sh/uv:python3.14-bookworm-slim@sha256:7cf77f594be8042dab6daa9fe326f90962252268b4f120a7f5dccce4d947e6c1
+    depends_on:
+      redis:
+        condition: service_healthy
+      test-authorization-server:
+        condition: service_healthy
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - --package
+      - authweave-workload
+      - --extra
+      - dpop
+      - --extra
+      - redis
+      - --with-editable
+      - /workspace/packages/authweave-http-signatures
+      - --with
+      - uvicorn
+      - --with
+      - typing_extensions
+      - uvicorn
+      - upstream_payments:app
+      - --uds
+      - /shared/upstream.sock
+      - --workers
+      - "4"
+      - --log-level
+      - warning
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/upstream-venv
+      PAYMENT_PUBLIC_KEY: /shared/payment_public.der
+      REDIS_URL: redis://redis:6379/0
+      AS_INTERNAL_JWKS_URL: http://test-authorization-server:8082/.well-known/jwks.json
+      AS_ISSUER: https://as.example
+      AS_AUDIENCE: payments-api
+      EXTERNAL_TARGET: https://payments.example/v1/payments
+    volumes:
+      - ../../..:/workspace:ro
+      - shared:/shared
+      - ${HTTP_SIGNATURE_RUNTIME:?set HTTP_SIGNATURE_RUNTIME}/payment_public.der:/shared/payment_public.der:ro
+      - ./upstream_payments.py:/app/upstream_payments.py:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /shared/upstream.sock"]
+      interval: 1s
+      timeout: 3s
+      retries: 90
+      start_period: 20s
+
+  envoy:
+    image: envoyproxy/envoy:v1.35-latest@sha256:a707c3821b4cecb5db43d8e86e983e0f57b81010fefbabc01feeb071fb8cc08e
+    depends_on:
+      upstream:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:19911:9901"
+    volumes:
+      - shared:/shared
+      - ./envoy-rewrite.yaml:/etc/envoy/envoy.yaml:ro
+
+volumes:
+  shared:

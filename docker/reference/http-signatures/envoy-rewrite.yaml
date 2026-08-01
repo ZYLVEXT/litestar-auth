@@ -1,0 +1,60 @@
+# Envoy reverse-proxy rewrite for payment HTTP Message Signatures.
+#
+# External clients sign https://payments.example/v1/payments. Envoy rewrites the
+# path to /internal/payments, strips client-forged x-auth-external-target, and
+# re-injects the trusted public target over a Unix-socket upstream boundary.
+# The HTTP buffer filter keeps the exact raw body for Content-Digest.
+
+static_resources:
+  listeners:
+  - name: payments_http
+    address:
+      socket_address: {address: 0.0.0.0, port_value: 8080}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: payments_http_sig
+          http_filters:
+          - name: envoy.filters.http.buffer
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+              max_request_bytes: 65536
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+          route_config:
+            name: payments
+            virtual_hosts:
+            - name: payments
+              domains: ["*"]
+              routes:
+              - match: {prefix: /v1/payments}
+                route:
+                  cluster: application
+                  prefix_rewrite: /internal/payments
+              request_headers_to_remove:
+              - x-auth-external-target
+              - x-forwarded-host
+              - forwarded
+              request_headers_to_add:
+              - header:
+                  key: x-auth-external-target
+                  value: https://payments.example/v1/payments
+                append_action: OVERWRITE_IF_EXISTS_OR_ADD
+  clusters:
+  - name: application
+    connect_timeout: 1s
+    type: STATIC
+    load_assignment:
+      cluster_name: application
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              pipe: {path: /shared/upstream.sock}
+
+admin:
+  address:
+    socket_address: {address: 0.0.0.0, port_value: 9901}
