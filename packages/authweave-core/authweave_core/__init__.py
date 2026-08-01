@@ -7,6 +7,7 @@ from authweave_core.models import (
     AuthenticationDecision,
     AuthenticationEvidence,
     AuthenticationRuntime,
+    AuthorizationValue,
     CredentialMatch,
     EvidenceValue,
     FailureCode,
@@ -16,11 +17,30 @@ from authweave_core.models import (
     PrincipalRef,
     RequestView,
     RouteProviderPolicy,
+    SpiffePeerEvidence,
     TlsPeerEvidence,
     Unavailable,
+    freeze_authorization_details,
+)
+from authweave_core.observability import (
+    SecurityObservation,
+    SecurityObservationContext,
+    SecurityObserver,
+    SecurityOperation,
+    SecurityOutcome,
+    TraceCorrelation,
+    ambient_trace_correlation,
+    current_trace_correlation,
+    observe_security,
+)
+from authweave_core.replay import (
+    InMemoryReplayStore,
+    ReplayOutcome,
+    ReplayStore,
+    validate_replay_key,
 )
 
-__version__ = "7.0.0"
+__version__ = "7.1.0"
 
 __all__ = (
     "Authenticated",
@@ -29,17 +49,33 @@ __all__ = (
     "AuthenticationDecision",
     "AuthenticationEvidence",
     "AuthenticationRuntime",
+    "AuthorizationValue",
     "CredentialMatch",
     "EvidenceValue",
     "FailureCode",
+    "InMemoryReplayStore",
     "Invalid",
     "InvariantFailure",
     "NotApplicable",
     "PrincipalRef",
+    "ReplayOutcome",
+    "ReplayStore",
     "RequestAuthenticationProvider",
     "RequestView",
     "RouteProviderPolicy",
+    "SecurityObservation",
+    "SecurityObservationContext",
+    "SecurityObserver",
+    "SecurityOperation",
+    "SecurityOutcome",
+    "SpiffePeerEvidence",
     "TlsPeerEvidence",
+    "TraceCorrelation",
     "Unavailable",
     "__version__",
+    "ambient_trace_correlation",
+    "current_trace_correlation",
+    "freeze_authorization_details",
+    "observe_security",
+    "validate_replay_key",
 )

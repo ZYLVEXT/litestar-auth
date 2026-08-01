@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from authweave_core.observability import SecurityObserver
 
 _LABEL_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _EXTENSION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,62}:[a-z][a-z0-9_.-]{0,62}$")
@@ -19,12 +21,20 @@ _THUMBPRINT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _MAX_ISSUER_LENGTH = 2048
 _MAX_SUBJECT_LENGTH = 512
 _MAX_VALUE_LENGTH = 512
+_MAX_TARGET_URI_LENGTH = 2048
 _MAX_EXTENSIONS = 16
 _MAX_EVIDENCE_VALUES = 64
 _MAX_HEADERS = 128
 _MAX_HEADER_BYTES = 65_536
+_MAX_AUTHORIZATION_DETAILS = 16
+_MAX_AUTHORIZATION_FIELDS = 32
+_MAX_AUTHORIZATION_ARRAY = 64
+_MAX_AUTHORIZATION_DEPTH = 8
+_MAX_AUTHORIZATION_STRING = 512
+_MAX_AUTHORIZATION_BYTES = 8192
 
 type EvidenceValue = str | int | bool
+type AuthorizationValue = str | int | bool | tuple[AuthorizationValue, ...] | Mapping[str, AuthorizationValue] | None
 
 
 def _validate_text(value: str, *, name: str, max_length: int = _MAX_VALUE_LENGTH) -> None:
@@ -42,6 +52,41 @@ def _validate_label(value: str, *, name: str) -> None:
 def _validate_aware(value: datetime | None, *, name: str) -> None:
     if value is not None and value.utcoffset() is None:
         msg = f"{name} must be timezone-aware"
+        raise ValueError(msg)
+
+
+def _validate_target_uri(value: str | None, *, name: str = "target_uri") -> None:
+    """Validate a bounded, absolute HTTPS request-target URI.
+
+    The URI is validated structurally without normalization so that the raw
+    percent-encoding of the path and query is preserved for signature and
+    proof-of-possession comparisons. Adapters must build it from a trusted
+    external request target, never from unverified ``Forwarded`` headers.
+
+    Raises:
+        ValueError: If the URI is not a bounded, absolute, fragment-free HTTPS
+            URI with an authority and no userinfo.
+    """
+    if value is None:
+        return
+    if not value or len(value) > _MAX_TARGET_URI_LENGTH:
+        msg = f"{name} must be non-empty and at most {_MAX_TARGET_URI_LENGTH} characters"
+        raise ValueError(msg)
+    if not value.isascii() or not value.isprintable() or any(char.isspace() for char in value):
+        msg = f"{name} must be printable ASCII without whitespace or control characters"
+        raise ValueError(msg)
+    parts = urlsplit(value)
+    if parts.scheme != "https":
+        msg = f"{name} must use the https scheme"
+        raise ValueError(msg)
+    if not parts.hostname:
+        msg = f"{name} must include an authority host"
+        raise ValueError(msg)
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        msg = f"{name} must not contain userinfo"
+        raise ValueError(msg)
+    if parts.fragment or "#" in value:
+        msg = f"{name} must not contain a fragment"
         raise ValueError(msg)
 
 
@@ -111,6 +156,50 @@ class TlsPeerEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class SpiffePeerEvidence:
+    """Verified SPIFFE peer identity projected by a trusted validation boundary.
+
+    Identity is the SPIFFE ID alone. Short-lived SVIDs are never registered by
+    certificate thumbprint.
+    """
+
+    spiffe_id: str
+    trust_domain: str
+    not_before: datetime
+    not_after: datetime
+    termination_boundary: str
+
+    def __post_init__(self) -> None:
+        """Reject malformed SPIFFE peer projections.
+
+        Raises:
+            ValueError: If the SPIFFE ID, trust domain, or validity window is invalid.
+        """
+        _validate_text(self.spiffe_id, name="spiffe_id", max_length=2048)
+        _validate_text(self.trust_domain, name="trust_domain", max_length=255)
+        _validate_aware(self.not_before, name="not_before")
+        _validate_aware(self.not_after, name="not_after")
+        _validate_text(self.termination_boundary, name="termination_boundary")
+        if self.not_before >= self.not_after:
+            msg = "not_before must be earlier than not_after"
+            raise ValueError(msg)
+        if not self.spiffe_id.startswith("spiffe://"):
+            msg = "spiffe_id must use the spiffe scheme"
+            raise ValueError(msg)
+        remainder = self.spiffe_id.removeprefix("spiffe://")
+        if "/" not in remainder:
+            msg = "spiffe_id must include a trust domain and path"
+            raise ValueError(msg)
+        domain, path = remainder.split("/", 1)
+        if domain != self.trust_domain:
+            msg = "trust_domain must match the SPIFFE ID trust domain"
+            raise ValueError(msg)
+        if not path or path.startswith("/") or "//" in path or path.endswith("/"):
+            msg = "spiffe_id path must be a non-root workload path"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
 class RequestView:
     """Immutable, framework-neutral projection of authentication inputs."""
 
@@ -118,7 +207,9 @@ class RequestView:
     headers: tuple[tuple[bytes, bytes], ...] = field(default=(), repr=False)
     scheme: str | None = None
     authority: str | None = None
+    target_uri: str | None = None
     tls_peer: TlsPeerEvidence | None = None
+    spiffe_peer: SpiffePeerEvidence | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     correlation_id: str | None = None
 
@@ -154,6 +245,7 @@ class RequestView:
             _validate_text(self.scheme, name="scheme", max_length=32)
         if self.authority is not None:
             _validate_text(self.authority, name="authority", max_length=512)
+        _validate_target_uri(self.target_uri)
         _validate_aware(self.timestamp, name="timestamp")
         if self.correlation_id is not None:
             _validate_text(self.correlation_id, name="correlation_id")
@@ -182,9 +274,10 @@ class AuthenticationEvidence:
     confirmation_thumbprint: str | None = None
     environment: str | None = None
     extensions: Mapping[str, EvidenceValue] = field(default_factory=dict)
+    authorization_details: tuple[Mapping[str, AuthorizationValue], ...] = ()
 
     def __post_init__(self) -> None:
-        """Validate bounded evidence and freeze extension data."""
+        """Validate bounded evidence and freeze extension and authorization data."""
         _validate_label(self.provider, name="provider")
         _validate_label(self.profile, name="profile")
         _validate_label(self.method, name="method")
@@ -194,6 +287,11 @@ class AuthenticationEvidence:
         _validate_evidence_times(self)
         _validate_evidence_identifiers(self)
         object.__setattr__(self, "extensions", _freeze_extensions(self.extensions))
+        object.__setattr__(
+            self,
+            "authorization_details",
+            freeze_authorization_details(self.authorization_details),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,9 +374,10 @@ type AuthenticationDecision = NotApplicable | Authenticated | Invalid | Unavaila
 
 @dataclass(frozen=True, slots=True)
 class AuthenticationRuntime:
-    """Request-scoped execution limits for providers."""
+    """Request-scoped execution limits and optional operational telemetry."""
 
     deadline: float | None = None
+    observer: SecurityObserver | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,3 +454,106 @@ def _freeze_extensions(extensions: Mapping[str, EvidenceValue]) -> Mapping[str, 
             msg = f"extension {key!r} must contain a string, integer, or boolean"
             raise TypeError(msg)
     return MappingProxyType(frozen)
+
+
+def freeze_authorization_details(
+    details: object,
+) -> tuple[Mapping[str, AuthorizationValue], ...]:
+    """Freeze validated RFC 9396 authorization details into a bounded immutable form.
+
+    This helper enforces only neutral structural bounds and immutability. A
+    provider may use it to bound untrusted JSON, but must apply its type-specific
+    schema before constructing authentication evidence.
+
+    Returns:
+        The frozen, immutable authorization-details tuple.
+
+    Raises:
+        TypeError: If details are not an array or contain unsupported values.
+        ValueError: If the details exceed structural bounds.
+    """
+    if not isinstance(details, (list, tuple)):
+        msg = "authorization_details must be an array"
+        raise TypeError(msg)
+    entries = tuple(details)
+    if len(entries) > _MAX_AUTHORIZATION_DETAILS:
+        msg = f"authorization_details must contain at most {_MAX_AUTHORIZATION_DETAILS} objects"
+        raise ValueError(msg)
+    budget = [_MAX_AUTHORIZATION_BYTES]
+    frozen: list[Mapping[str, AuthorizationValue]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping) or not entry:
+            msg = "each authorization_details entry must be a non-empty object"
+            raise ValueError(msg)
+        frozen.append(
+            cast("Mapping[str, AuthorizationValue]", _freeze_authorization_value(entry, depth=1, budget=budget))
+        )
+    return tuple(frozen)
+
+
+def _freeze_authorization_value(value: object, *, depth: int, budget: list[int]) -> AuthorizationValue:
+    if depth > _MAX_AUTHORIZATION_DEPTH:
+        msg = f"authorization_details must not nest deeper than {_MAX_AUTHORIZATION_DEPTH} levels"
+        raise ValueError(msg)
+    if value is None or isinstance(value, bool):
+        budget[0] -= 1
+    elif isinstance(value, int):
+        budget[0] -= 8
+    elif isinstance(value, str):
+        _validate_authorization_string(value)
+        budget[0] -= len(value)
+    elif isinstance(value, Mapping):
+        return _freeze_authorization_object(cast("Mapping[str, object]", value), depth=depth, budget=budget)
+    elif isinstance(value, (list, tuple)):
+        return _freeze_authorization_array(cast("list[object] | tuple[object, ...]", value), depth=depth, budget=budget)
+    else:
+        msg = "authorization_details values must be JSON scalars, arrays, or objects"
+        raise TypeError(msg)
+    if budget[0] < 0:
+        _raise_authorization_budget()
+    return value
+
+
+def _freeze_authorization_object(
+    value: Mapping[str, object],
+    *,
+    depth: int,
+    budget: list[int],
+) -> Mapping[str, AuthorizationValue]:
+    if len(value) > _MAX_AUTHORIZATION_FIELDS:
+        msg = f"authorization_details objects must have at most {_MAX_AUTHORIZATION_FIELDS} fields"
+        raise ValueError(msg)
+    frozen: dict[str, AuthorizationValue] = {}
+    for key, member in value.items():
+        if not isinstance(key, str):
+            msg = "authorization_details object keys must be strings"
+            raise TypeError(msg)
+        _validate_authorization_string(key, name="authorization_details key")
+        budget[0] -= len(key)
+        if budget[0] < 0:
+            _raise_authorization_budget()
+        frozen[key] = _freeze_authorization_value(member, depth=depth + 1, budget=budget)
+    return MappingProxyType(frozen)
+
+
+def _freeze_authorization_array(
+    value: list[object] | tuple[object, ...],
+    *,
+    depth: int,
+    budget: list[int],
+) -> tuple[AuthorizationValue, ...]:
+    if len(value) > _MAX_AUTHORIZATION_ARRAY:
+        msg = f"authorization_details arrays must have at most {_MAX_AUTHORIZATION_ARRAY} items"
+        raise ValueError(msg)
+    return tuple(_freeze_authorization_value(item, depth=depth + 1, budget=budget) for item in value)
+
+
+def _validate_authorization_string(value: str, *, name: str = "authorization_details string") -> None:
+    if len(value) > _MAX_AUTHORIZATION_STRING:
+        msg = f"{name} must be at most {_MAX_AUTHORIZATION_STRING} characters"
+        raise ValueError(msg)
+
+
+def _raise_authorization_budget() -> None:
+    msg = f"authorization_details must decode to at most {_MAX_AUTHORIZATION_BYTES} bytes"
+    raise ValueError(msg)

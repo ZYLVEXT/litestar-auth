@@ -14,6 +14,7 @@ from authweave_core import (
     PrincipalRef,
     RequestView,
     RouteProviderPolicy,
+    SpiffePeerEvidence,
     TlsPeerEvidence,
 )
 
@@ -106,6 +107,31 @@ def test_request_requires_aware_timestamp() -> None:
         RequestView(method="GET", timestamp=datetime(2026, 7, 30))
 
 
+def test_request_accepts_bounded_target_uri_and_preserves_encoding() -> None:
+    raw_path = "https://api.example/v1/payments%2Fabc?cursor=a%20b"
+    request = RequestView(method="POST", target_uri=raw_path, timestamp=_NOW)
+
+    assert request.target_uri == raw_path
+
+
+@pytest.mark.parametrize(
+    "target_uri",
+    [
+        "http://api.example/v1",
+        "https:///v1",
+        "https://user:pass@api.example/v1",
+        "https://api.example/v1#section",
+        "https://api.example/pa th",
+        "https://api.example/café",
+        "",
+        "https://api.example/" + "a" * 2048,
+    ],
+)
+def test_request_rejects_invalid_target_uri(target_uri: str) -> None:
+    with pytest.raises(ValueError, match="target_uri must"):
+        RequestView(method="GET", target_uri=target_uri, timestamp=_NOW)
+
+
 def test_tls_peer_evidence_validates_thumbprint_and_times() -> None:
     evidence = TlsPeerEvidence(
         tls_version="TLSv1.3",
@@ -118,6 +144,57 @@ def test_tls_peer_evidence_validates_thumbprint_and_times() -> None:
     )
 
     assert evidence.certificate_thumbprint == _THUMBPRINT
+
+
+def test_spiffe_peer_evidence_requires_matching_trust_domain_and_path() -> None:
+    evidence = SpiffePeerEvidence(
+        spiffe_id="spiffe://example.org/payments/worker",
+        trust_domain="example.org",
+        not_before=_NOW,
+        not_after=_NOW + timedelta(hours=1),
+        termination_boundary="mesh-local",
+    )
+    assert evidence.spiffe_id.endswith("/payments/worker")
+    with pytest.raises(ValueError, match="trust_domain must match"):
+        SpiffePeerEvidence(
+            spiffe_id="spiffe://example.org/payments/worker",
+            trust_domain="other.org",
+            not_before=_NOW,
+            not_after=_NOW + timedelta(hours=1),
+            termination_boundary="mesh-local",
+        )
+    with pytest.raises(ValueError, match="non-root"):
+        SpiffePeerEvidence(
+            spiffe_id="spiffe://example.org/",
+            trust_domain="example.org",
+            not_before=_NOW,
+            not_after=_NOW + timedelta(hours=1),
+            termination_boundary="mesh-local",
+        )
+    with pytest.raises(ValueError, match="earlier"):
+        SpiffePeerEvidence(
+            spiffe_id="spiffe://example.org/payments/worker",
+            trust_domain="example.org",
+            not_before=_NOW + timedelta(hours=1),
+            not_after=_NOW,
+            termination_boundary="mesh-local",
+        )
+    with pytest.raises(ValueError, match="spiffe scheme"):
+        SpiffePeerEvidence(
+            spiffe_id="https://example.org/payments/worker",
+            trust_domain="example.org",
+            not_before=_NOW,
+            not_after=_NOW + timedelta(hours=1),
+            termination_boundary="mesh-local",
+        )
+    with pytest.raises(ValueError, match="trust domain and path"):
+        SpiffePeerEvidence(
+            spiffe_id="spiffe://example.org",
+            trust_domain="example.org",
+            not_before=_NOW,
+            not_after=_NOW + timedelta(hours=1),
+            termination_boundary="mesh-local",
+        )
 
 
 @pytest.mark.parametrize(
@@ -222,6 +299,85 @@ def test_authentication_evidence_rejects_invalid_data(
 
     with pytest.raises(exception):
         AuthenticationEvidence(**cast("dict[str, Any]", values))
+
+
+def test_authentication_evidence_freezes_authorization_details() -> None:
+    details = [
+        {
+            "type": "payment_initiation",
+            "actions": ["initiate"],
+            "instructed_amount": {"amount": "12.50", "currency": "EUR"},
+            "recurring": True,
+            "note": None,
+            "sequence": 3,
+        },
+    ]
+    evidence = AuthenticationEvidence(
+        provider="dpop",
+        profile="dpop_jwt",
+        method="dpop",
+        issuer="https://as.example",
+        authorization_details=cast("Any", details),
+    )
+    details[0]["type"] = "mutated"
+
+    detail = evidence.authorization_details[0]
+    assert detail["type"] == "payment_initiation"
+    assert detail["actions"] == ("initiate",)
+    assert detail["instructed_amount"] == {"amount": "12.50", "currency": "EUR"}
+    with pytest.raises(TypeError):
+        cast("dict[str, Any]", detail)["type"] = "mutated"
+    with pytest.raises(TypeError):
+        cast("dict[str, Any]", detail["instructed_amount"])["amount"] = "0"
+
+
+@pytest.mark.parametrize(
+    ("details", "exception"),
+    [
+        ("not-an-array", TypeError),
+        ([{}], ValueError),
+        (["not-an-object"], ValueError),
+        ([{"type": "x"} for _ in range(17)], ValueError),
+        ([{f"f{index}": index for index in range(33)}], ValueError),
+        ([{"items": list(range(65))}], ValueError),
+        ([{"amount": 12.5}], TypeError),
+        ([{"tag": object()}], TypeError),
+        ([{1: "x"}], TypeError),
+        ([{"note": "n" * 513}], ValueError),
+        ([{"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": 1}}}}}}}}}], ValueError),
+        ([{"blob": "x" * 8193}], ValueError),
+    ],
+)
+def test_authentication_evidence_rejects_invalid_authorization_details(
+    details: object,
+    exception: type[Exception],
+) -> None:
+    with pytest.raises(exception):
+        AuthenticationEvidence(
+            provider="dpop",
+            profile="dpop_jwt",
+            method="dpop",
+            issuer="https://as.example",
+            authorization_details=cast("Any", details),
+        )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        {f"k{index:02d}": "y" * 512 for index in range(20)},
+        {**{f"k{index:02d}": "y" * 512 for index in range(15)}, "z" * 500: 1},
+    ],
+)
+def test_authentication_evidence_rejects_oversized_authorization_details(detail: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="8192 bytes"):
+        AuthenticationEvidence(
+            provider="dpop",
+            profile="dpop_jwt",
+            method="dpop",
+            issuer="https://as.example",
+            authorization_details=cast("Any", [detail]),
+        )
 
 
 def test_authentication_evidence_rejects_reversed_time_window() -> None:

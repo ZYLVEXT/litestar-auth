@@ -10,5 +10,10 @@ The package models verified principals, authentication evidence, immutable reque
 typed authentication decisions, provider ownership, route policies, and deadline-aware
 coordination. It does not depend on a web framework, ORM, cache, or cryptography implementation.
 
+`AuthenticationRuntime(observer=...)` accepts the minimal `SecurityObserver`
+protocol. The observation boundary is a no-op when absent and isolates observer
+enter/outcome/exit failures with rate-limited warnings. Implementations such as
+`authweave-otel` remain optional; core never imports OpenTelemetry.
+
 `authweave-core` performs authentication orchestration only. Applications remain responsible for
 resource authorization.

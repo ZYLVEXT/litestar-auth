@@ -20,6 +20,7 @@ from authweave_core.models import (
     Unavailable,
     _validate_label,
 )
+from authweave_core.observability import SecurityOperation, SecurityOutcome, observe_security
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -82,11 +83,16 @@ class AuthenticationCoordinator:
             A terminal typed authentication decision.
         """
         selected = self._select_provider(request, policy)
-        if not isinstance(selected, RequestAuthenticationProvider):
-            return selected
+        profile = selected.profile if isinstance(selected, RequestAuthenticationProvider) else None
+        with observe_security(runtime.observer, SecurityOperation.AUTHENTICATE, profile=profile) as observation:
+            if not isinstance(selected, RequestAuthenticationProvider):
+                observation.set_outcome(_decision_outcome(selected), reason_code=_decision_reason(selected))
+                return selected
 
-        decision = await self._authenticate_with_deadline(selected, request, runtime)
-        return self._validate_decision(selected, decision)
+            decision = await self._authenticate_with_deadline(selected, request, runtime)
+            validated = self._validate_decision(selected, decision)
+            observation.set_outcome(_decision_outcome(validated), reason_code=_decision_reason(validated))
+            return validated
 
     def _select_provider(
         self,
@@ -146,3 +152,19 @@ class AuthenticationCoordinator:
         with anyio.move_on_after(remaining) as timeout_scope:
             decision = await provider.authenticate(request, runtime)
         return Unavailable() if timeout_scope.cancelled_caught else decision
+
+
+def _decision_outcome(decision: AuthenticationDecision) -> SecurityOutcome:
+    if isinstance(decision, Authenticated):
+        return SecurityOutcome.AUTHENTICATED
+    if isinstance(decision, NotApplicable):
+        return SecurityOutcome.NOT_APPLICABLE
+    if isinstance(decision, Invalid):
+        return SecurityOutcome.INVALID
+    if isinstance(decision, Unavailable):
+        return SecurityOutcome.UNAVAILABLE
+    return SecurityOutcome.INVARIANT_FAILURE
+
+
+def _decision_reason(decision: AuthenticationDecision) -> str | None:
+    return decision.code.value if isinstance(decision, (Invalid, Unavailable, InvariantFailure)) else None
