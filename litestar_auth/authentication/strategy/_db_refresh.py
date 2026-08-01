@@ -17,8 +17,6 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from advanced_alchemy.repository import SQLAlchemyAsyncRepository
-    from sqlalchemy.sql.base import Executable
     from sqlalchemy.sql.roles import InElementRole
 
     from litestar_auth.authentication.strategy._db_repositories import AsyncSessionT, TokenRepositoryType
@@ -45,28 +43,6 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
     _refresh_token_repository_type: TokenRepositoryType
     _access_token_repository_type: TokenRepositoryType
     consumed_refresh_token_digest_model: type[RefreshTokenConsumedDigest]
-
-    def _repository(self, repository_type: TokenRepositoryType) -> SQLAlchemyAsyncRepository[Any]:
-        """Create a repository bound to the current session."""
-        raise NotImplementedError
-
-    def _token_digest(self, token: str) -> str:
-        """Return the keyed digest stored for a raw token."""
-        raise NotImplementedError
-
-    async def _execute_delete(self, statement: Executable) -> int:
-        """Execute a delete/update statement and return its matched row count."""
-        raise NotImplementedError
-
-    async def _resolve_token(
-        self,
-        repository: SQLAlchemyAsyncRepository[Any],
-        raw_token: str,
-        *,
-        load: list[Any],
-    ) -> object | None:
-        """Look up a token row by digest."""
-        raise NotImplementedError
 
     @staticmethod
     def _refresh_session_from_row(row: _RefreshTokenRow) -> RefreshSession:

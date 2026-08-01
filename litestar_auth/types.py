@@ -14,9 +14,6 @@ Implement the narrowest protocol that matches the features you use:
 ``UserProtocol`` remains ``@runtime_checkable`` so runtime guard code can use ``isinstance(...)``.
 Use ``UserProtocolStrict`` for static-typing-only contracts where no runtime check is needed; avoiding
 ``@runtime_checkable`` keeps the protocol's stricter static intent clear and avoids protocol runtime-check overhead.
-
-The full decision table, guard cross-links, and a multi-protocol model example are in
-``docs/api/types.md`` (API → Types in the built docs).
 """
 
 from __future__ import annotations
@@ -128,9 +125,10 @@ class PermissionResolver(Protocol):
     """Extension point for resolving a user's effective permissions.
 
     Implement this protocol to supply ``LitestarAuthConfig.permission_resolver``
-    with a custom permission source (for example a database-backed resolver). The
-    optional ``context`` argument is reserved for future multi-tenancy support;
-    the bundled :class:`~litestar_auth.StaticRolePermissionResolver` ignores it.
+    with a custom permission source (for example a database-backed resolver).
+    ``context`` carries verified organization/tenant authorization state when
+    available; the bundled :class:`~litestar_auth.StaticRolePermissionResolver`
+    applies its configured organization-role precedence to that state.
     """
 
     def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:

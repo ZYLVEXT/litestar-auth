@@ -260,7 +260,7 @@ class ConfigurationError(LitestarAuthError):
 
 
 class UserAlreadyExistsError(AuthenticationError):
-    """Raised when creating a user that already exists.
+    """Raised when a create or identifier update conflicts with an existing user.
 
     Duplicate identifier context is stored on the exception instance for
     operator logging, but the generated default message stays generic. The
@@ -294,7 +294,7 @@ class UserNotExistsError(AuthenticationError):
 
 
 class InvalidPasswordError(AuthenticationError):
-    """Raised when a password does not match the stored credentials.
+    """Raised when a password fails validation or credential verification.
 
     Optional ``user_id`` context is stored on the instance for operator logging
     without changing the response message sent to clients.

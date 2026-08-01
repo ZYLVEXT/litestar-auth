@@ -18,8 +18,7 @@ import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.db import OAuthAccountData
 from litestar_auth.exceptions import AuthenticationError, ErrorCode, InactiveUserError, OAuthAccountAlreadyLinkedError
 from litestar_auth.oauth._client import OAuthClientAdapter
-from tests._helpers import ExampleUser
-from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+from tests._helpers import ExampleUser, load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 _PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.machinery
+import importlib.util
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from functools import partial
 from types import ModuleType
@@ -21,9 +24,11 @@ from litestar_auth.authentication.middleware import LitestarProviderBinding
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+    from pathlib import Path
     from uuid import UUID
 
     import fakeredis
+    import pytest
     from fakeredis import FakeAsyncRedis as AsyncFakeRedis
     from litestar.datastructures.state import State
     from litestar.types import ControllerRouterHandler, Middleware, Scope
@@ -35,6 +40,43 @@ type FakeRedisVersion = tuple[int, ...]
 type FakeRedisServerType = Literal["redis", "dragonfly", "valkey"]
 
 DEFAULT_FAKEREDIS_VERSION: FakeRedisVersion = (7,)
+
+
+def load_reloaded_test_alias(
+    *,
+    alias_name: str,
+    source_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after_exec: Callable[[ModuleType], None] | None = None,
+) -> ModuleType:
+    """Load one source file under an isolated alias for reload tests.
+
+    Returns:
+        The loaded alias module.
+    """
+
+    class _AliasFinder:
+        def find_spec(
+            self,
+            fullname: str,
+            path: object,
+            target: object = None,
+        ) -> importlib.machinery.ModuleSpec | None:
+            if fullname != alias_name:
+                return None
+            return importlib.util.spec_from_file_location(alias_name, source_path)
+
+    spec = importlib.util.spec_from_file_location(alias_name, source_path)
+    assert spec is not None
+    assert spec.loader is not None
+
+    alias_module = importlib.util.module_from_spec(spec)
+    monkeypatch.setattr(sys, "meta_path", [_AliasFinder(), *sys.meta_path])
+    monkeypatch.setitem(sys.modules, alias_name, alias_module)
+    spec.loader.exec_module(alias_module)
+    if after_exec is not None:
+        after_exec(alias_module)
+    return alias_module
 
 
 class AsyncFakeRedisFactory(Protocol):

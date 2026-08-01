@@ -427,6 +427,7 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
                 "require_shared_rate_limit_backends_for_multiworker",
                 "require_shared_account_lockout_store_for_multiworker",
                 "require_shared_account_token_replay_store_for_multiworker",
+                "require_shared_totp_stores_for_multiworker",
                 "require_refreshable_strategy_when_enable_refresh",
                 "warn_insecure_plugin_startup_defaults",
             ),
@@ -1101,6 +1102,7 @@ def test_warn_insecure_plugin_startup_defaults_ignores_reload_stale_inmemory_tot
         {"__module__": "litestar_auth.authentication.strategy._jwt_denylist"},
     )()
     config = _minimal_config()
+    config.rate_limit_config = None
     config.include_verify = False
     config.include_reset_password = False
     config.totp_config = TotpConfig(
@@ -1633,7 +1635,6 @@ def test_provider_helpers_return_startup_templates_for_database_token_preset() -
     assert provided_backends[0].name == "opaque-db"
 
 
-@pytest.mark.asyncio
 async def test_provide_user_manager_respects_custom_db_session_key() -> None:
     """Provider wrapper parameter names follow db_session_dependency_key."""
     config = _minimal_config()
@@ -1706,7 +1707,6 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     assert rebound_backends[0].strategy.session is active_session
 
 
-@pytest.mark.asyncio
 async def test_provide_user_manager_yields_request_scoped_manager() -> None:
     """Provider wrappers yield one session-bound manager for each injected session."""
     plugin = LitestarAuth(_minimal_config())
@@ -1721,7 +1721,6 @@ async def test_provide_user_manager_yields_request_scoped_manager() -> None:
         await gen.aclose()
 
 
-@pytest.mark.asyncio
 async def test_provide_oauth_associate_user_manager_yields_manager() -> None:
     """OAuth associate provider wrappers share the same request-scoped manager behavior."""
     plugin = LitestarAuth(_minimal_config())

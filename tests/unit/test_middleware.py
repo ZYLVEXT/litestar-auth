@@ -32,6 +32,7 @@ from litestar_auth.authentication.middleware import (
     LitestarAuthMiddlewareConfig,
     LitestarProviderBinding,
     _binding_for_authenticated_provider,
+    build_direct_request_target,
     route_provider_policy,
 )
 from tests._helpers import ExampleUser
@@ -159,6 +160,8 @@ def _middleware(  # ruff: ignore[too-many-arguments]
     tenant_resolver: object | None = None,
     deadline: float | None = None,
     correlation_id_factory: object | None = None,
+    external_request_target_factory: object | None = None,
+    observer: object | None = None,
 ) -> LitestarAuthMiddleware[ExampleUser, object]:
     """Build middleware with one request-scoped provider.
 
@@ -176,6 +179,8 @@ def _middleware(  # ruff: ignore[too-many-arguments]
         default_policy=RouteProviderPolicy((provider.name,)),
         authentication_deadline_seconds=deadline,
         correlation_id_factory=cast("Any", correlation_id_factory),
+        external_request_target_factory=cast("Any", external_request_target_factory),
+        observer=cast("Any", observer),
         organization_store_factory=cast("Any", organization_store_factory),
         tenant_resolver=cast("Any", tenant_resolver),
     )
@@ -236,6 +241,21 @@ async def test_not_applicable_request_remains_anonymous_and_preserves_raw_header
     assert provider.request.header_values(b"x-test") == (b"one", b"two")
 
 
+async def test_middleware_passes_request_scoped_observer_to_coordinator() -> None:
+    """Security instrumentation is nested in the active server context by the observer."""
+    observer = cast("Any", object())
+    provider = _Provider(Authenticated(_context()))
+    middleware = _middleware(
+        provider, loader=lambda _context: ExampleUser(id=uuid4(), email="a@example.com"), observer=observer
+    )
+
+    await middleware.authenticate_request(_connection())
+
+    assert provider.runtime is not None
+    assert provider.runtime.observer is observer
+    assert middleware.observer is observer
+
+
 async def test_middleware_projects_application_correlation_id() -> None:
     """Only the configured trusted scope projection supplies correlation metadata."""
     provider = _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE)
@@ -249,6 +269,71 @@ async def test_middleware_projects_application_correlation_id() -> None:
 
     assert provider.request is not None
     assert provider.request.correlation_id == "trace-123"
+
+
+async def test_middleware_projects_external_request_target() -> None:
+    """Only the configured trusted projection supplies the request-target URI."""
+    provider = _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE)
+    target = "https://api.example/resource"
+    middleware = _middleware(
+        provider,
+        loader=lambda _context: object(),
+        external_request_target_factory=lambda _scope: target,
+    )
+
+    await middleware.authenticate_request(_connection())
+
+    assert provider.request is not None
+    assert provider.request.target_uri == target
+
+
+def test_build_direct_request_target_preserves_raw_path_and_query() -> None:
+    """Direct projection keeps raw percent-encoding of path and query."""
+    scope = cast(
+        "Any",
+        {
+            "scheme": "https",
+            "server": ("api.example", 443),
+            "raw_path": b"/v1/payments%2Fabc",
+            "query_string": b"cursor=a%20b",
+        },
+    )
+
+    assert build_direct_request_target(scope) == "https://api.example/v1/payments%2Fabc?cursor=a%20b"
+
+
+def test_build_direct_request_target_falls_back_to_decoded_path() -> None:
+    """Without ``raw_path`` the already-decoded ASGI path is used."""
+    scope = cast(
+        "Any",
+        {"scheme": "https", "server": ("api.example", 443), "path": "/v1/status", "query_string": b""},
+    )
+
+    assert build_direct_request_target(scope) == "https://api.example/v1/status"
+
+
+def test_build_direct_request_target_includes_non_default_port() -> None:
+    """Non-default HTTPS port is reflected in the authority."""
+    scope = cast(
+        "Any",
+        {"scheme": "https", "server": ("api.example", 8443), "raw_path": b"/v1", "query_string": b""},
+    )
+
+    assert build_direct_request_target(scope) == "https://api.example:8443/v1"
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"scheme": "http", "server": ("api.example", 80), "raw_path": b"/v1"},
+        {"scheme": "https", "server": None, "raw_path": b"/v1"},
+        {"scheme": "https", "server": ("", 443), "raw_path": b"/v1"},
+        {"scheme": "https", "server": ("api.example", 443), "raw_path": b"/v1\xff"},
+    ],
+)
+def test_build_direct_request_target_returns_none_for_untrusted_scope(scope: dict[str, object]) -> None:
+    """Non-https, missing server, or non-ASCII path yields no trusted target."""
+    assert build_direct_request_target(cast("Any", scope)) is None
 
 
 async def test_route_policy_overrides_application_default() -> None:

@@ -11,6 +11,7 @@ from uuid import UUID
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import ForeignKey, String, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
@@ -53,6 +54,7 @@ class TrackingAsyncSession:
         self.commit_count = 0
         self.rollback_count = 0
         self.executed_statements: list[object] = []
+        self.scalar_statements: list[object] = []
 
     async def __aenter__(self) -> Self:
         """Enter the async session context.
@@ -81,6 +83,7 @@ class TrackingAsyncSession:
 
     async def scalar(self, statement: object) -> None:
         """Match ``AsyncSession.scalar()`` for contract validation."""
+        self.scalar_statements.append(statement)
 
     async def scalars(self, statement: object) -> None:
         """Match ``AsyncSession.scalars()`` for contract validation."""
@@ -866,6 +869,35 @@ async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_whe
 
     assert required_roles == ["billing"]
     assert update_calls == [[]]
+
+
+async def test_sqlalchemy_role_admin_locks_superuser_role_before_final_assignment_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final-superuser validation serializes concurrent demotions on the role row."""
+    session = TrackingAsyncSession()
+    role_admin = SQLAlchemyRoleAdmin.from_config(
+        _minimal_config(user_model=User, session_maker=TrackingSessionMaker(session)),
+    )
+
+    async def _fake_load_users_with_role(
+        self: SQLAlchemyRoleAdmin[User],
+        session: object,
+        *,
+        role_name: str,
+    ) -> list[User]:
+        await asyncio.sleep(0)
+        return [
+            User(email="admin-a@example.com", hashed_password="hash", roles=[role_name]),
+            User(email="admin-b@example.com", hashed_password="hash", roles=[role_name]),
+        ]
+
+    monkeypatch.setattr(SQLAlchemyRoleAdmin, "_load_users_with_role", _fake_load_users_with_role)
+
+    await role_admin._require_remaining_superuser(cast("Any", session))
+
+    statement = cast("Any", session.scalar_statements[0])
+    assert "FOR UPDATE" in str(statement.compile(dialect=postgresql.dialect()))
 
 
 async def test_sqlalchemy_role_admin_require_user_rejects_invalid_selector_combinations() -> None:

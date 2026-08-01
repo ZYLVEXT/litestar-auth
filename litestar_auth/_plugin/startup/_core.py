@@ -21,6 +21,7 @@ from litestar_auth._plugin.startup._requirements import (
     require_shared_account_lockout_store_for_multiworker,
     require_shared_account_token_replay_store_for_multiworker,
     require_shared_rate_limit_backends_for_multiworker,
+    require_shared_totp_stores_for_multiworker,
 )
 from litestar_auth._plugin.startup._warnings import (
     _collect_process_local_rate_limit_endpoint_names,
@@ -43,6 +44,7 @@ __all__ = (
     "has_configured_oauth_providers_for",
     "require_shared_account_lockout_store_for_multiworker",
     "require_shared_account_token_replay_store_for_multiworker",
+    "require_shared_totp_stores_for_multiworker",
 )
 
 
@@ -104,6 +106,7 @@ def _build_startup_hook_map(
         "require_shared_account_token_replay_store_for_multiworker": lambda: (
             require_shared_account_token_replay_store_for_multiworker(config)
         ),
+        "require_shared_totp_stores_for_multiworker": lambda: require_shared_totp_stores_for_multiworker(config),
         "require_refreshable_strategy_when_enable_refresh": lambda: require_refreshable_strategy_when_enable_refresh(
             config,
         ),

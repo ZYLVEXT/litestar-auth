@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -81,8 +82,21 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
         constructor_kwargs["password_validator"] = self.password_validator
         constructor_kwargs["unsafe_testing"] = self.config.unsafe_testing
         constructor_kwargs["superuser_role_name"] = self.config.superuser_role_name
-        if self.config.account_token_denylist_store is not None:
-            constructor_kwargs["account_token_denylist_store"] = self.config.account_token_denylist_store
+        replay_store = self.config.account_token_denylist_store
+        built_in_manager = (
+            self.config.user_manager_class is not None
+            and self.config.user_manager_class.__module__ == "litestar_auth.manager"
+            and self.config.user_manager_class.__name__ == "BaseUserManager"
+        )
+        if replay_store is not None and (
+            bool(getattr(replay_store, "revocation_is_durable", False))
+            or built_in_manager
+            or (
+                not hasattr(replay_store, "revocation_is_durable")
+                and _manager_accepts_account_token_store(self.config.user_manager_class)
+            )
+        ):
+            constructor_kwargs["account_token_denylist_store"] = replay_store
         return constructor_kwargs
 
     @staticmethod
@@ -95,6 +109,20 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
             f"{_DEFAULT_USER_MANAGER_ID_PARSER_FALLBACK_DESCRIPTION} "
             f"{_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE} Original error: {exc}"
         )
+
+
+def _manager_accepts_account_token_store(manager_class: type[Any] | None) -> bool:
+    """Return whether a custom manager accepts the optional replay-store keyword."""
+    if manager_class is None:
+        return False
+    try:
+        parameters = inspect.signature(manager_class).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == "account_token_denylist_store" or parameter.kind is parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](

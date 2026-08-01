@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+pytestmark = pytest.mark.unit
+
+
 def test_password_worker_thread_limit_defaults_to_eight() -> None:
     """Missing env input keeps the historical eight-operation cap."""
     assert _concurrency._resolve_password_worker_thread_limit(None) == EXPECTED_DEFAULT_PASSWORD_WORKER_LIMIT

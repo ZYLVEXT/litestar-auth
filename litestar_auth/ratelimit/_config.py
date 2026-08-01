@@ -454,7 +454,7 @@ class AuthRateLimitConfig:
         The provided backend should already be configured with the lower attempt
         budget you want to enforce. This preset wires that shared backend to the
         highest-risk credential entry points: login, change-password, register,
-        and TOTP verify.
+        TOTP verify, and TOTP recovery-code regeneration.
 
         Args:
             backend: Shared backend instance for the strict preset slots.

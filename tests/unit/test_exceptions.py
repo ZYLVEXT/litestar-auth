@@ -9,7 +9,7 @@ import pytest
 
 import litestar_auth._error_codes as error_codes_module
 import litestar_auth.exceptions as exceptions_module
-from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+from tests._helpers import load_reloaded_test_alias
 
 AuthenticationError = exceptions_module.AuthenticationError
 AuthErrorCode = error_codes_module.AuthErrorCode

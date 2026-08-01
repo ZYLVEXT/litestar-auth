@@ -1,4 +1,4 @@
-"""Authentication controller factory for backend-bound login/logout routes."""
+"""Authentication controller factory for login, logout, and optional refresh routes."""
 
 from __future__ import annotations
 
@@ -649,7 +649,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
             ``config``.
 
     Returns:
-        Controller subclass with backend-specific login and logout handlers.
+        Controller subclass with backend-specific login and logout handlers, plus refresh when enabled.
 
     Raises:
         ValueError: If ``config`` and keyword options are combined.

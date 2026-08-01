@@ -900,6 +900,7 @@ def _minimal_config(
         ),
         oauth_config=oauth_config,
         totp_config=totp_config,
+        rate_limit_config=None,
     )
 
 

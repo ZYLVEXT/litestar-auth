@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Collection
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
 
@@ -12,6 +12,7 @@ from litestar_auth._keyed_digest import normalize_login_identifier
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth._manager.user_policy import DEFAULT_CREATABLE_FIELDS, DEFAULT_UPDATABLE_FIELDS, UserFieldPolicy
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.config import _resolve_token_secret, validate_production_secret
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.types import LoginIdentifier, UserProtocol
@@ -97,7 +98,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     creatable_fields: Collection[str] = DEFAULT_CREATABLE_FIELDS
     updatable_fields: Collection[str] = DEFAULT_UPDATABLE_FIELDS
     unsafe_testing: bool = False
-    account_token_denylist_store: JWTReplayStore | None = None
+    account_token_denylist_store: JWTReplayStore | None = field(default_factory=InMemoryJWTDenylistStore)
 
     @property
     def field_policy(self) -> UserFieldPolicy:

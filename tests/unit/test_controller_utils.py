@@ -356,7 +356,6 @@ def test_account_state_policy_require_for_client_maps_domain_errors(
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_returns_decoded_struct() -> None:
     """Valid JSON is decoded into the configured struct."""
     request: Any = _MockRequest(b'{"value": 3}')
@@ -366,7 +365,6 @@ async def test_decode_request_body_returns_decoded_struct() -> None:
     assert decoded == _MinimalStruct(value=3)
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_malformed_json() -> None:
     """Malformed JSON surfaces as a 400 `ClientException`."""
     request: Any = _MockRequest(b"not-json")
@@ -379,7 +377,6 @@ async def test_decode_request_body_malformed_json() -> None:
     assert exc.detail == "Invalid request body."
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_schema_mismatch() -> None:
     """Schema-mismatched JSON surfaces as a 422 `ClientException`."""
     request: Any = _MockRequest(b'{"value": "not-an-int"}')
@@ -392,7 +389,6 @@ async def test_decode_request_body_schema_mismatch() -> None:
     assert exc.detail == "Invalid request payload."
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_uses_custom_validation_metadata() -> None:
     """Custom validation error details and codes are preserved."""
     request: Any = _MockRequest(b'{"value": "not-an-int"}')
@@ -413,7 +409,6 @@ async def test_decode_request_body_uses_custom_validation_metadata() -> None:
     assert exc.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_calls_error_callback_for_decode_errors() -> None:
     """The optional error callback runs before malformed-body errors are raised."""
     request: Any = _MockRequest(b"not-json")
@@ -429,7 +424,6 @@ async def test_decode_request_body_calls_error_callback_for_decode_errors() -> N
     on_error.assert_awaited_once_with(request)
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_calls_error_callback_for_validation_errors() -> None:
     """The optional error callback also runs before validation failures."""
     request: Any = _MockRequest(b'{"value": "not-an-int"}')
@@ -445,7 +439,6 @@ async def test_decode_request_body_calls_error_callback_for_validation_errors() 
     on_error.assert_awaited_once_with(request)
 
 
-@pytest.mark.asyncio
 async def test_decode_request_body_uses_custom_decode_metadata() -> None:
     """Custom decode error details and codes are preserved."""
     request: Any = _MockRequest(b"not-json")
@@ -537,7 +530,6 @@ def test_create_error_response_preserves_extra_payload() -> None:
     }
 
 
-@pytest.mark.asyncio
 async def test_map_domain_exceptions_maps_first_matching_error() -> None:
     """Mapped domain exceptions surface as client errors with configured metadata."""
     with pytest.raises(ClientException) as exc_info:
@@ -575,7 +567,6 @@ def test_domain_error_public_detail_redacts_token_backend_message() -> None:
     assert _domain_error_public_detail(error) == TokenError.default_message
 
 
-@pytest.mark.asyncio
 async def test_map_domain_exceptions_invokes_failure_callback_before_raising() -> None:
     """Mapped domain exceptions trigger the optional failure callback."""
     on_error = AsyncMock()
@@ -593,7 +584,6 @@ async def test_map_domain_exceptions_invokes_failure_callback_before_raising() -
     assert exc_info.value.extra == {"code": ErrorCode.RESET_PASSWORD_INVALID_PASSWORD}
 
 
-@pytest.mark.asyncio
 async def test_map_domain_exceptions_uses_public_detail_override() -> None:
     """A caller can collapse multiple domain errors to one public detail."""
     with pytest.raises(ClientException) as exc_info:
@@ -610,7 +600,6 @@ async def test_map_domain_exceptions_uses_public_detail_override() -> None:
     assert exc_info.value.extra == {"code": ErrorCode.REGISTER_FAILED}
 
 
-@pytest.mark.asyncio
 async def test_map_domain_exceptions_maps_later_matching_error() -> None:
     """Later mapping entries still resolve when earlier ones do not match."""
     with pytest.raises(ClientException) as exc_info:
@@ -627,7 +616,6 @@ async def test_map_domain_exceptions_maps_later_matching_error() -> None:
     assert exc_info.value.extra == {"code": ErrorCode.RESET_PASSWORD_INVALID_PASSWORD}
 
 
-@pytest.mark.asyncio
 async def test_map_domain_exceptions_ignores_unmapped_exceptions() -> None:
     """Unmapped exceptions propagate unchanged."""
     with pytest.raises(RuntimeError, match="boom"):
@@ -756,7 +744,6 @@ def test_resolve_domain_error_response_raises_for_unmapped_errors() -> None:
         _resolve_domain_error_response(RuntimeError("boom"), {})
 
 
-@pytest.mark.asyncio
 async def test_create_rate_limit_handlers_are_noops_without_rate_limit() -> None:
     """Missing rate-limit configuration produces no-op handlers."""
     increment, reset = _create_rate_limit_handlers(None)
@@ -766,7 +753,6 @@ async def test_create_rate_limit_handlers_are_noops_without_rate_limit() -> None
     await reset(request)
 
 
-@pytest.mark.asyncio
 async def test_create_rate_limit_handlers_delegate_to_rate_limit() -> None:
     """Increment and reset handlers delegate to the configured rate limit."""
     rate_limit = _MockRateLimit()
@@ -785,7 +771,6 @@ def test_create_before_request_handler_returns_none_without_rate_limit() -> None
     assert _create_before_request_handler(None) is None
 
 
-@pytest.mark.asyncio
 async def test_create_before_request_handler_delegates_to_rate_limit() -> None:
     """The generated before-request hook delegates to the configured limiter."""
     rate_limit = _MockRateLimit()
@@ -864,7 +849,6 @@ def test_require_account_state_from_attributes_raises_unverified_when_required()
         )
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_uses_manager_validator() -> None:
     """The shared helper delegates to an instance validator when available."""
 
@@ -883,7 +867,6 @@ async def test_require_account_state_uses_manager_validator() -> None:
     assert manager.calls == [(user, False)]
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_falls_back_when_manager_has_no_validator() -> None:
     """Managers without a callable validator use attribute-based validation."""
 
@@ -900,7 +883,6 @@ async def test_require_account_state_falls_back_when_manager_has_no_validator() 
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_falls_back_to_user_attributes_without_manager() -> None:
     """The shared helper still validates directly from user attributes when no validator is provided."""
     with pytest.raises(ClientException) as exc_info:
@@ -911,7 +893,6 @@ async def test_require_account_state_falls_back_to_user_attributes_without_manag
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_maps_inactive_manager_errors() -> None:
     """Inactive domain errors raised by a manager map to client errors."""
 
@@ -927,7 +908,6 @@ async def test_require_account_state_maps_inactive_manager_errors() -> None:
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_maps_unverified_manager_errors() -> None:
     """Unverified domain errors raised by a manager map to client errors."""
 
@@ -947,7 +927,6 @@ async def test_require_account_state_maps_unverified_manager_errors() -> None:
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_rejects_user_without_guarded_protocol_on_attribute_fallback() -> None:
     """Attribute fallback requires guarded account-state attributes."""
     with pytest.raises(PermissionDeniedException) as exc_info:
@@ -956,7 +935,6 @@ async def test_require_account_state_rejects_user_without_guarded_protocol_on_at
     assert "account state" in (exc_info.value.detail or "").lower()
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_invokes_failure_callback_before_raising() -> None:
     """Failure callbacks run before the mapped client error is raised."""
     on_failure = AsyncMock()
@@ -972,7 +950,6 @@ async def test_require_account_state_invokes_failure_callback_before_raising() -
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_invokes_failure_callback_for_unverified_errors() -> None:
     """Failure callbacks also run for unverified-account errors."""
     on_failure = AsyncMock()
@@ -988,7 +965,6 @@ async def test_require_account_state_invokes_failure_callback_for_unverified_err
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
-@pytest.mark.asyncio
 async def test_require_account_state_returns_inactive_client_error_for_dual_failure() -> None:
     """Dual account-state failures map to the inactive client error."""
     with pytest.raises(ClientException) as exc_info:

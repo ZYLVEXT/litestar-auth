@@ -65,9 +65,8 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
             Response mutated by the configured transport for logout.
 
         Raises:
-            ClientException: When token revocation cannot be recorded (for example, an
-                in-memory denylist at capacity), surfaced as HTTP 503 with the library
-                error ``code`` in the JSON body.
+            ClientException: When token invalidation fails, surfaced as HTTP 503 with
+                the library error ``code`` in the JSON body.
         """
         try:
             await self.strategy.destroy_token(token, user)

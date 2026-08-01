@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from litestar_auth.db.base import BaseUserStore
 
 if TYPE_CHECKING:
@@ -37,6 +39,9 @@ class _StructuralUserStore:
 
     async def delete(self, user_id: UUID) -> None:
         pass
+
+
+pytestmark = pytest.mark.unit
 
 
 def test_base_user_store_exposes_runtime_checkable_method_contract() -> None:

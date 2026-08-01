@@ -1,4 +1,4 @@
-"""Abstract persistence contracts for user and OAuth-account storage."""
+"""Abstract persistence contracts for user, OAuth-account, and organization storage."""
 
 from __future__ import annotations
 

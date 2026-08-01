@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import select
+
 from litestar_auth._plugin.role_admin_contracts import SystemManagedRoleError
 from litestar_auth.types import UserProtocol
 
@@ -34,6 +36,9 @@ class _RoleAdminInvariantMixin[UP: UserProtocol[Any]]:
             SystemManagedRoleError: If fewer than two users currently hold the
                 configured superuser role.
         """
+        await session.scalar(
+            select(self.role_model).where(self.role_model.name == self._superuser_role_name).with_for_update(),
+        )
         superusers = await self._load_users_with_role(session, role_name=self._superuser_role_name)
         if len(superusers) > 1:
             return

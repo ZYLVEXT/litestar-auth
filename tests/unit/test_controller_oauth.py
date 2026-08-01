@@ -39,7 +39,7 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.guards import is_authenticated, is_human_authenticated
 from litestar_auth.oauth.service import OAuthAuthorization
-from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+from tests._helpers import load_reloaded_test_alias
 
 _require_account_state = controller_utils_module._require_account_state
 OAuthAssociateControllerConfig = oauth_module.OAuthAssociateControllerConfig
@@ -307,7 +307,6 @@ def test_clear_state_cookie_uses_expected_cookie_settings() -> None:
     assert cookie.samesite == "lax"
 
 
-@pytest.mark.asyncio
 async def test_clear_state_cookie_on_callback_exit_without_success_marker() -> None:
     """Callback exit without a success marker leaves the response untouched."""
     response = Response(content=None)
@@ -322,7 +321,6 @@ async def test_clear_state_cookie_on_callback_exit_without_success_marker() -> N
     assert response.cookies == []
 
 
-@pytest.mark.asyncio
 async def test_clear_state_cookie_on_callback_exit_clears_cookie_on_success() -> None:
     """Successful callback exit clears the provider-scoped state cookie."""
     response = Response(content=None)
@@ -340,7 +338,6 @@ async def test_clear_state_cookie_on_callback_exit_clears_cookie_on_success() ->
     assert cookie.max_age == 0
 
 
-@pytest.mark.asyncio
 async def test_clear_state_cookie_on_callback_exit_attaches_header_on_http_exception() -> None:
     """Client-error callback exit attaches the state-cookie expiry header before re-raising.
 

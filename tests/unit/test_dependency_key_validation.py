@@ -11,7 +11,6 @@ from litestar_auth._plugin.dependencies import _make_user_manager_dependency_pro
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.asyncio
 async def test_make_user_manager_dependency_provider_accepts_valid_identifier() -> None:
     """Provider generation succeeds and yields a manager for valid DI keys."""
     marker = object()

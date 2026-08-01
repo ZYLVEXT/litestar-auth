@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import sys
 import types
 import uuid
@@ -28,7 +26,7 @@ import litestar_auth.models.mixins as model_mixins_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, load_reloaded_test_alias
 
 uuid4 = uuid.uuid4
 AccessTokenMixin = model_mixins_module.AccessTokenMixin
@@ -44,50 +42,10 @@ UserRoleAssociationMixin = model_mixins_module.UserRoleAssociationMixin
 UserRoleRelationshipMixin = model_mixins_module.UserRoleRelationshipMixin
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from types import ModuleType
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def load_reloaded_test_alias(
-    *,
-    alias_name: str,
-    source_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    after_exec: Callable[[ModuleType], None] | None = None,
-) -> ModuleType:
-    """Load and reload a source file under an isolated alias for coverage tests.
-
-    Returns:
-        The reloaded alias module.
-    """
-
-    class _AliasFinder:
-        """Meta path finder that makes the reload alias discoverable."""
-
-        def find_spec(
-            self,
-            fullname: str,
-            path: object,
-            target: object = None,
-        ) -> importlib.machinery.ModuleSpec | None:
-            if fullname != alias_name:
-                return None
-            return importlib.util.spec_from_file_location(alias_name, source_path)
-
-    spec = importlib.util.spec_from_file_location(alias_name, source_path)
-    assert spec is not None
-    assert spec.loader is not None
-
-    alias_module = importlib.util.module_from_spec(spec)
-    monkeypatch.setattr(sys, "meta_path", [_AliasFinder(), *sys.meta_path])
-    monkeypatch.setitem(sys.modules, alias_name, alias_module)
-    spec.loader.exec_module(alias_module)
-    if after_exec is not None:
-        after_exec(alias_module)
-    return alias_module
 
 
 def _load_reloaded_alias(

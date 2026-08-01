@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from contextvars import ContextVar
+
 _CLIENT_METADATA_USER_AGENT_KEY = "user_agent"
 _CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY = "totp_stepup_expires_at"
 _MAX_CLIENT_METADATA_VALUE_LENGTH = 255
@@ -10,7 +15,7 @@ _MAX_CLIENT_METADATA_VALUE_LENGTH = 255
 class _RefreshTokenMetadataMixin:
     """Capture bounded request metadata for server-side refresh sessions."""
 
-    _refresh_token_request_metadata: dict[str, str] | None
+    _refresh_token_request_metadata: ContextVar[dict[str, str] | None]
 
     @staticmethod
     def _bounded_client_metadata_value(value: object) -> str | None:
@@ -33,10 +38,10 @@ class _RefreshTokenMetadataMixin:
 
     def set_refresh_token_request_context(self, request: object) -> None:
         """Capture safe request metadata for the next refresh-token write or rotation."""
-        self._refresh_token_request_metadata = self._extract_refresh_token_client_metadata(request)
+        self._refresh_token_request_metadata.set(self._extract_refresh_token_client_metadata(request))
 
     def _consume_refresh_token_request_metadata(self) -> dict[str, str] | None:
         """Return captured request metadata and clear it from the strategy instance."""
-        metadata = self._refresh_token_request_metadata
-        self._refresh_token_request_metadata = None
+        metadata = self._refresh_token_request_metadata.get()
+        self._refresh_token_request_metadata.set(None)
         return metadata

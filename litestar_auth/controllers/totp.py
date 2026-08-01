@@ -1,4 +1,4 @@
-"""TOTP (2FA) controller factory for enable/verify/disable endpoints."""
+"""TOTP controller factory for enrollment, verification, disable, and recovery-code endpoints."""
 
 from __future__ import annotations
 

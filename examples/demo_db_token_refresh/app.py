@@ -18,8 +18,8 @@ Flow:
 2. ``GET /demo/db-token-profile`` with the issued access cookie.
 3. When the access token expires, ``POST /auth/refresh`` with the dedicated refresh cookie and CSRF header.
 
-Unlike JWT examples, revocation and rotation are backed by your database; configure retention and
-indexes for production workloads.
+Revocation and rotation are backed by your database; configure retention and indexes for production
+workloads.
 """
 
 from __future__ import annotations

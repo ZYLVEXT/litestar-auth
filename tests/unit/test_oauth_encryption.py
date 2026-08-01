@@ -21,7 +21,7 @@ from litestar_auth.oauth_encryption import (
     get_bound_oauth_token_encryption,
     require_oauth_token_encryption,
 )
-from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+from tests._helpers import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 

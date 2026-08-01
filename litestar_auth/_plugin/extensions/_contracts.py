@@ -180,6 +180,14 @@ class AuthExtensionRegistrationContext(AuthExtensionValidationContext, Protocol)
         """Contribute the single trusted TLS-evidence projection for the middleware."""
         ...
 
+    def add_spiffe_peer_evidence_factory(
+        self,
+        extension_name: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Contribute the single trusted SPIFFE-evidence projection for the middleware."""
+        ...
+
     def add_openapi_security_scheme(self, extension_name: str, name: str, scheme: SecurityScheme) -> None:
         """Accumulate an OpenAPI security scheme contribution."""
         ...

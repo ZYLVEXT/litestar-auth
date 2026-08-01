@@ -214,6 +214,11 @@ class RedisUsedTotpCodeStore:
         self._redis = redis
         self._key_prefix = key_prefix
 
+    @property
+    def is_shared_across_workers(self) -> bool:
+        """Redis-backed used-code state is visible across workers."""
+        return True
+
     def _key(self, user_id: Hashable, counter: int) -> str:
         """Return the Redis key for a (user_id, counter) pair."""
         return f"{self._key_prefix}{user_id!s}:{counter}"
@@ -272,6 +277,11 @@ class InMemoryUsedTotpCodeStore:
         self.max_entries = max_entries
         self._entries: dict[tuple[Hashable, int], float] = {}
         self._lock = asyncio.Lock()
+
+    @property
+    def is_shared_across_workers(self) -> bool:
+        """In-memory used-code state is process-local."""
+        return False
 
     async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Store a used code pair until its TTL elapses.

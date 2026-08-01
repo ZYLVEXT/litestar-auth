@@ -27,6 +27,8 @@ from tests.integration.test_orchestrator import (
 )
 
 if TYPE_CHECKING:
+    import inspect
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
@@ -94,6 +96,33 @@ def test_config_module_does_not_reexport_user_manager_builder_helpers() -> None:
         "resolve_user_manager_factory",
     ):
         assert not hasattr(plugin_config_module, name)
+
+
+def test_account_token_store_constructor_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replay-store injection accepts explicit/kwargs constructors and rejects unsupported shapes."""
+
+    class _ExplicitManager:
+        def __init__(self, *, account_token_denylist_store: object) -> None:
+            """Declare explicit replay-store support for signature inspection."""
+
+    class _KwargsManager:
+        def __init__(self, **kwargs: object) -> None:
+            """Declare catch-all constructor support for signature inspection."""
+
+    class _UnsupportedManager:
+        pass
+
+    accepts = user_manager_builder_module._manager_accepts_account_token_store
+    assert accepts(_ExplicitManager)
+    assert accepts(_KwargsManager)
+    assert not accepts(_UnsupportedManager)
+    assert not accepts(None)
+
+    def _raise_uninspectable(_manager_class: object) -> inspect.Signature:
+        raise ValueError
+
+    monkeypatch.setattr(user_manager_builder_module.inspect, "signature", _raise_uninspectable)
+    assert not accepts(_ExplicitManager)
 
 
 def test_default_builder_contract_materializes_canonical_kwargs() -> None:

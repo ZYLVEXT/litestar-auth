@@ -74,20 +74,74 @@ def require_shared_account_lockout_store_for_multiworker(config: LitestarAuthCon
 
 
 def require_shared_account_token_replay_store_for_multiworker(config: LitestarAuthConfig[Any, Any]) -> None:
-    """Fail closed when configured verify/reset replay state is process-local across declared workers.
+    """Require account-token replay protection and shared multi-worker state.
 
     Raises:
-        ConfigurationError: If a known multi-worker deployment configures a process-local replay store.
+        ConfigurationError: If replay protection is missing, or if a known
+            multi-worker deployment configures a process-local replay store.
     """
-    if config.unsafe_testing or config.deployment_worker_count is None or config.deployment_worker_count <= 1:
+    if config.unsafe_testing or (not config.include_verify and not config.include_reset_password):
         return
-    if config.account_token_denylist_store is None or not _has_process_local_account_token_replay_store(config):
+    if config.account_token_denylist_store is None:
+        msg = (
+            "Plugin-managed verify/reset routes require an atomic JWTReplayStore. "
+            "Configure InMemoryJWTDenylistStore for one process, RedisJWTDenylistStore for distributed "
+            "deployments, or disable both account-token routes."
+        )
+        raise ConfigurationError(msg)
+    if config.deployment_worker_count is None or config.deployment_worker_count <= 1:
+        return
+    if not _has_process_local_account_token_replay_store(config):
         return
 
     msg = (
         "Verify/reset account-token replay protection must use a shared JWTReplayStore when "
-        "deployment_worker_count is greater than 1. Configure RedisJWTDenylistStore, omit replay "
-        "storage with the documented weaker posture, or disable the plugin-managed account-token routes."
+        "deployment_worker_count is greater than 1. Configure RedisJWTDenylistStore or disable "
+        "the plugin-managed account-token routes."
+    )
+    raise ConfigurationError(msg)
+
+
+def require_shared_totp_stores_for_multiworker(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Fail closed when declared multi-worker deployments use process-local TOTP state.
+
+    Raises:
+        ConfigurationError: If TOTP is enabled with any process-local state store
+            in a known multi-worker deployment.
+    """
+    totp_config = config.totp_config
+    if (
+        config.unsafe_testing
+        or totp_config is None
+        or config.deployment_worker_count is None
+        or config.deployment_worker_count <= 1
+    ):
+        return
+
+    stores = {
+        "totp_used_tokens_store": totp_config.totp_used_tokens_store,
+        "totp_pending_jti_store": totp_config.totp_pending_jti_store,
+        "totp_enrollment_store": totp_config.totp_enrollment_store,
+    }
+    process_local = [
+        name
+        for name, store in stores.items()
+        if store is not None
+        and not bool(
+            getattr(
+                store,
+                "is_shared_across_workers",
+                getattr(store, "revocation_is_durable", False),
+            ),
+        )
+    ]
+    if not process_local:
+        return
+
+    msg = (
+        "TOTP state must use shared stores when deployment_worker_count is greater than 1. "
+        f"The following stores are process-local: {', '.join(process_local)}. "
+        "Use the Redis TOTP and JWT replay stores for multi-worker deployments."
     )
     raise ConfigurationError(msg)
 

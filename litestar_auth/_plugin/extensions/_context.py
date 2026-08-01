@@ -108,6 +108,14 @@ class ExtensionTLSEvidenceContribution:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionSPIFFEEvidenceContribution:
+    """Trusted SPIFFE peer evidence factory contributed by one extension."""
+
+    extension_name: str
+    factory: Callable[[object], object]
+
+
+@dataclass(frozen=True, slots=True)
 class ExtensionRegistrationContributions:
     """Accumulated extension contributions consumed by the later wiring phase."""
 
@@ -116,6 +124,7 @@ class ExtensionRegistrationContributions:
     middleware: list[object] = field(default_factory=list)
     authentication_providers: list[ExtensionAuthenticationProviderContribution] = field(default_factory=list)
     tls_evidence: ExtensionTLSEvidenceContribution | None = None
+    spiffe_evidence: ExtensionSPIFFEEvidenceContribution | None = None
     openapi_security_schemes: list[ExtensionOpenAPISecurityContribution] = field(default_factory=list)
     startup_hooks: list[Callable[[], object]] = field(default_factory=list)
     shutdown_hooks: list[Callable[[], object]] = field(default_factory=list)
@@ -397,6 +406,32 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
             tls_evidence=ExtensionTLSEvidenceContribution(extension_name, factory),
         )
 
+    def add_spiffe_peer_evidence_factory(
+        self,
+        extension_name: str,
+        factory: Callable[[object], object],
+    ) -> None:
+        """Contribute the single trusted SPIFFE-evidence projection for the middleware.
+
+        Raises:
+            TypeError: If the factory is not callable.
+            ValueError: If another extension already owns SPIFFE evidence projection.
+        """
+        if not callable(factory):
+            msg = "SPIFFE peer evidence factory must be callable."
+            raise TypeError(msg)
+        existing = self.contributions.spiffe_evidence
+        if existing is not None:
+            msg = (
+                f"SPIFFE peer evidence factory from extension {extension_name!r} conflicts with "
+                f"extension {existing.extension_name!r}."
+            )
+            raise ValueError(msg)
+        self.contributions = replace(
+            self.contributions,
+            spiffe_evidence=ExtensionSPIFFEEvidenceContribution(extension_name, factory),
+        )
+
     def add_openapi_security_scheme(self, extension_name: str, name: str, scheme: SecurityScheme) -> None:
         """Accumulate an OpenAPI security scheme contribution."""
         self.contributions.openapi_security_schemes.append(
@@ -485,6 +520,7 @@ __all__ = (
     "ExtensionOpenAPISecurityContribution",
     "ExtensionRegistrationContext",
     "ExtensionRegistrationContributions",
+    "ExtensionSPIFFEEvidenceContribution",
     "ExtensionTLSEvidenceContribution",
     "ExtensionValidationContext",
     "build_extension_registration_context",

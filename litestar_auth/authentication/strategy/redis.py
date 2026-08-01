@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -211,7 +212,10 @@ class RedisTokenStrategy(_RefreshTokenMetadataMixin, Strategy[UP, ID]):
         self.token_bytes = settings.token_bytes
         self.key_prefix = settings.key_prefix
         self.subject_decoder = settings.subject_decoder
-        self._refresh_token_request_metadata: dict[str, str] | None = None
+        self._refresh_token_request_metadata: ContextVar[dict[str, str] | None] = ContextVar(
+            "redis_refresh_token_request_metadata",
+            default=None,
+        )
 
     def _key(self, token: str) -> str:
         """Return the Redis key for a token."""

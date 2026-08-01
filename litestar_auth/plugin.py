@@ -360,6 +360,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
         tls_evidence = self._extension_contributions().tls_evidence
+        spiffe_evidence = self._extension_contributions().spiffe_evidence
         middleware = DefineMiddleware(
             LitestarAuthMiddleware[UP, ID],
             config=LitestarAuthMiddlewareConfig[UP, ID](
@@ -371,7 +372,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 provider_bindings_factory=self._build_provider_bindings,
                 default_policy=RouteProviderPolicy(tuple(backend.name for backend in startup_backends)),
                 tls_peer_evidence_factory=None if tls_evidence is None else cast("Any", tls_evidence.factory),
+                spiffe_peer_evidence_factory=(
+                    None if spiffe_evidence is None else cast("Any", spiffe_evidence.factory)
+                ),
+                external_request_target_factory=cast("Any", self.config.external_request_target_factory),
                 correlation_id_factory=cast("Any", self.config.correlation_id_factory),
+                observer=self.config.observer,
                 superuser_role_name=self.config.superuser_role_name,
                 permission_resolver=self.config.resolve_permission_resolver(),
                 organization_store_factory=(

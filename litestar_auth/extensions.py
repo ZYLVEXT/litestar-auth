@@ -59,8 +59,9 @@ if TYPE_CHECKING:
 # plugin-provided dependencies must carry an explicit ``NamedDependency`` annotation.
 # These aliases cover the dependency keys the plugin registers for extension-authored
 # handlers (``litestar_auth_user_manager``, ``litestar_auth_backends``,
-# ``litestar_auth_organization_store``, ``litestar_auth_permissions``). The user-manager
-# element type is ``Any`` because the concrete manager class is application-specific.
+# ``litestar_auth_organization_store``, ``litestar_auth_permissions``,
+# ``litestar_auth_current_principal``, and ``litestar_auth_authentication_context``).
+# The user-manager element type is ``Any`` because the concrete manager class is application-specific.
 UserManagerDependency = NamedDependency[Any]
 AuthBackendsDependency = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 OrganizationStoreDependency = NamedDependency[BaseOrganizationStore[Any, Any, Any, Any]]

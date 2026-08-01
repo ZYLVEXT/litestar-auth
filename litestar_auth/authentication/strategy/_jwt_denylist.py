@@ -1,4 +1,4 @@
-"""JWT denylist storage helpers."""
+"""Account-token replay and JWT denylist storage helpers."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ _SECURITY_LOGGER = logging.getLogger("litestar_auth.security")
 def denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
     """Return the denylist TTL (>=1s) for a decoded JWT ``exp`` claim.
 
-    Shared by the JWT access-token strategy and the account-token (verify/reset)
-    denylist so a revoked ``jti`` is retained exactly until the token would have
-    expired anyway. Non-finite or non-numeric ``exp`` values fall back to one second.
+    Used by verify/reset account-token replay handling so a consumed ``jti`` is
+    retained exactly until the token would have expired. Non-finite or non-numeric
+    ``exp`` values fall back to one second.
 
     Returns:
         Seconds the ``jti`` should remain denied, never below 1.
@@ -167,8 +167,8 @@ class InMemoryJWTDenylistStore:
 class RedisJWTDenylistStore:
     """Redis-backed denylist store keyed by `jti` with TTL."""
 
-    # Used by JWTRevocationPosture.from_denylist_store to derive durability without
-    # an isinstance() check, which is fragile under module-reload-style test fixtures.
+    # Read by startup durability checks without an isinstance() test, which is
+    # fragile under module-reload-style test fixtures.
     revocation_is_durable: ClassVar[bool] = True
 
     def __init__(

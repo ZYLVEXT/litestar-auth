@@ -33,6 +33,9 @@ def _cookie_backend(name: str = "cookie", cookie_name: str = "auth_token") -> St
     return StartupBackendTemplate.from_runtime_backend(backend)
 
 
+pytestmark = pytest.mark.unit
+
+
 class TestSecuritySchemeForTransport:
     """Test deriving SecurityScheme from transport types."""
 

@@ -75,7 +75,7 @@ class TokenErrorCode(_DocumentedErrorCode):
     VERIFY_USER_BAD_TOKEN = ("VERIFY_USER_BAD_TOKEN", "Emitted by InvalidVerifyTokenError.")
     VERIFY_USER_ALREADY_VERIFIED = (
         "VERIFY_USER_ALREADY_VERIFIED",
-        "Emitted by verify-user route when the account is already verified.",
+        "Retained in the public enum; the current verify route normalizes this case to VERIFY_USER_BAD_TOKEN.",
     )
     REFRESH_TOKEN_INVALID = ("REFRESH_TOKEN_INVALID", "Emitted by refresh-token validation and replay checks.")
     SESSION_MANAGEMENT_UNSUPPORTED = (
@@ -89,7 +89,7 @@ class TokenErrorCode(_DocumentedErrorCode):
 
 
 class RoleErrorCode(_DocumentedErrorCode):
-    """Role guard and bundled role-admin route error codes."""
+    """Role guard plus bundled role- and organization-admin route error codes."""
 
     INSUFFICIENT_ROLES = ("INSUFFICIENT_ROLES", "Emitted by InsufficientRolesError.")
     INSUFFICIENT_PERMISSIONS = ("INSUFFICIENT_PERMISSIONS", "Emitted by InsufficientPermissionsError.")

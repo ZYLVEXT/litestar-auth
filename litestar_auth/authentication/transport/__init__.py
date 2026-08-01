@@ -1,4 +1,4 @@
-"""Move opaque human sessions through HTTP-only cookies.
+"""Move opaque human sessions through HTTP cookies with an HttpOnly default.
 
 Transports are composed with a :class:`~litestar_auth.authentication.strategy.Strategy`
 inside an :class:`~litestar_auth.authentication.backend.AuthenticationBackend`.

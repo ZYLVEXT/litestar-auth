@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import msgspec
 import pytest
+from authweave_core import SecurityObserver
 from cryptography.fernet import Fernet
 
 import litestar_auth._plugin.config as plugin_config_module
@@ -57,6 +58,7 @@ from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
 )
 from litestar_auth.schemas import UserCreate
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from litestar_auth.types import LoginIdentifier, PermissionResolver
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -125,6 +127,8 @@ class _SharedAccountLockoutStore:
 
 class _CustomSharedJWTReplayStore:
     """Structural shared replay store without an optional durability marker."""
+
+    revocation_is_durable = True
 
     async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         """Record a revocation.
@@ -202,7 +206,9 @@ def _minimal_config(  # ruff: ignore[too-many-arguments]
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         include_users=include_users,
-        account_lockout_config=AccountLockoutConfig() if account_lockout_config is None else account_lockout_config,
+        account_lockout_config=(
+            AccountLockoutConfig(enabled=True) if account_lockout_config is None else account_lockout_config
+        ),
         organization_config=OrganizationConfig() if organization_config is None else organization_config,
         id_parser=id_parser,
         totp_config=totp_config,
@@ -277,13 +283,13 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
         oauth_config_type(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
 
 
-def test_litestar_auth_config_declares_disabled_account_lockout_config_field() -> None:
-    """Account lockout is exposed on plugin config but remains disabled by default."""
+def test_litestar_auth_config_enables_account_lockout_by_default() -> None:
+    """Account lockout is active unless callers explicitly disable it."""
     config = _minimal_config()
 
     assert "account_lockout_config" in LitestarAuthConfig.__dataclass_fields__
     assert isinstance(config.account_lockout_config, AccountLockoutConfig)
-    assert config.account_lockout_config.enabled is False
+    assert config.account_lockout_config.enabled is True
 
 
 def test_account_lockout_config_resolves_memoized_default_memory_store() -> None:
@@ -399,7 +405,7 @@ def test_warn_insecure_plugin_startup_defaults_skips_lockout_floor_warning_at_de
 
 def test_require_shared_account_lockout_store_for_multiworker_skips_disabled_config() -> None:
     """Disabled account lockout leaves the multi-worker startup guard inert."""
-    config = _minimal_config()
+    config = _minimal_config(account_lockout_config=AccountLockoutConfig(enabled=False))
     config.deployment_worker_count = 2
 
     startup_module.require_shared_account_lockout_store_for_multiworker(config)
@@ -426,9 +432,16 @@ def test_require_shared_account_lockout_store_for_multiworker_accepts_shared_sto
     startup_module.require_shared_account_lockout_store_for_multiworker(config)
 
 
-def test_plugin_config_defaults_to_no_account_token_replay_store() -> None:
-    """The portable default remains unset and is diagnosed at production startup."""
-    assert _minimal_config().account_token_denylist_store is None
+def test_plugin_config_defaults_to_secure_auth_controls() -> None:
+    """Rate limiting, lockout, and single-process replay protection are enabled by default."""
+    config = _minimal_config()
+
+    assert isinstance(config.account_token_denylist_store, InMemoryJWTDenylistStore)
+    assert config.account_lockout_config.enabled is True
+    assert config.rate_limit_config is not None
+    assert config.rate_limit_config.login is not None
+    assert config.rate_limit_config.reset_password is not None
+    assert config.rate_limit_config.totp_verify is not None
 
 
 def test_require_shared_account_token_replay_store_for_multiworker_rejects_process_local_store() -> None:
@@ -459,6 +472,53 @@ def test_account_token_replay_topology_guard_skips_disabled_routes() -> None:
     config.account_token_denylist_store = None
 
     startup_module.require_shared_account_token_replay_store_for_multiworker(config)
+
+
+def test_account_token_replay_topology_guard_rejects_missing_store() -> None:
+    """Enabled account-token routes cannot opt out of replay protection across workers."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+    config.account_token_denylist_store = None
+
+    with pytest.raises(ConfigurationError, match="atomic JWTReplayStore"):
+        startup_module.require_shared_account_token_replay_store_for_multiworker(config)
+
+
+def test_require_shared_totp_stores_for_multiworker_rejects_process_local_state() -> None:
+    """TOTP replay and enrollment state must be shared across declared workers."""
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret=TOTP_PENDING_SECRET,
+            totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+            totp_pending_jti_store=InMemoryJWTDenylistStore(),
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        ),
+    )
+    config.deployment_worker_count = 2
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        startup_module.require_shared_totp_stores_for_multiworker(config)
+
+    message = str(exc_info.value)
+    assert "totp_used_tokens_store" in message
+    assert "totp_pending_jti_store" in message
+    assert "totp_enrollment_store" in message
+
+
+def test_require_shared_totp_stores_for_multiworker_accepts_shared_state() -> None:
+    """Structurally shared TOTP stores satisfy the multi-worker requirement."""
+    shared_store = type("SharedStore", (), {"is_shared_across_workers": True})()
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret=TOTP_PENDING_SECRET,
+            totp_used_tokens_store=cast("Any", shared_store),
+            totp_pending_jti_store=cast("Any", shared_store),
+            totp_enrollment_store=cast("Any", shared_store),
+        ),
+    )
+    config.deployment_worker_count = 2
+
+    startup_module.require_shared_totp_stores_for_multiworker(config)
 
 
 def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None:
@@ -2833,11 +2893,13 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "AuthRateLimitConfig": AuthRateLimitConfig,
             "JWTDenylistStore": JWTDenylistStore,
             "JWTReplayStore": JWTReplayStore,
+            "SecurityObserver": SecurityObserver,
             "msgspec": msgspec,
         },
     )
 
     assert hints["session_maker"] == SessionFactory | None
+    assert hints["observer"] == SecurityObserver | None
 
 
 def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:

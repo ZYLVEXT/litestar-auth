@@ -29,6 +29,9 @@ from tests.unit.test_plugin_config import (
 _REQUEST_BACKEND_GUIDANCE = re.escape("LitestarAuthConfig.resolve_backends(session)")
 
 
+pytestmark = pytest.mark.unit
+
+
 def test_public_build_database_token_backend_uses_module_local_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -85,7 +88,6 @@ def test_build_database_token_backend_template_and_internal_builder() -> None:
     assert isinstance(cast("Any", bound.strategy), DatabaseTokenStrategy)
 
 
-@pytest.mark.asyncio
 async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
     """Startup-only strategies reject token operations until session binding."""
     auth = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from typing import cast
 from uuid import uuid4
 
 import pytest
 
-from litestar_auth._totp_stores import RedisUsedTotpCodeStore, UsedTotpCodeStore
+from litestar_auth._totp_stores import RedisUsedTotpCodeStore, RedisUsedTotpCodeStoreClient, UsedTotpCodeStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.totp import TotpRecoveryCodeUserManager
 from tests._helpers import ExampleUser
@@ -15,6 +16,13 @@ from tests.integration.conftest import InMemoryUserDatabase
 pytestmark = pytest.mark.unit
 
 ATOMIC_CONCURRENCY_CLAUSE = "MUST observe exactly one success and N-1 failures"
+
+
+def test_redis_totp_replay_store_reports_shared_state() -> None:
+    """Redis-backed TOTP replay state is marked safe for multi-worker topology checks."""
+    store = RedisUsedTotpCodeStore(redis=cast("RedisUsedTotpCodeStoreClient", object()))
+
+    assert store.is_shared_across_workers
 
 
 async def test_in_memory_user_database_round_trips_recovery_code_hashes() -> None:

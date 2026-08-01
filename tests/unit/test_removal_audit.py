@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
+import pytest
+
 from scripts.audit_v7_removals import audit
+
+pytestmark = pytest.mark.unit
 
 
 def test_removal_audit_finds_source_configuration_and_records(tmp_path: Path) -> None:

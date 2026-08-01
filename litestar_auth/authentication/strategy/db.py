@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import (
@@ -144,7 +145,10 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         self.refresh_max_age = settings.refresh_max_age
         self.token_bytes = settings.token_bytes
         self.unsafe_testing = settings.unsafe_testing
-        self._refresh_token_request_metadata: dict[str, str] | None = None
+        self._refresh_token_request_metadata: ContextVar[dict[str, str] | None] = ContextVar(
+            "database_refresh_token_request_metadata",
+            default=None,
+        )
 
     def with_session(self, session: AsyncSessionT) -> DatabaseTokenStrategy[UP, ID]:
         """Return a copy of the strategy bound to the provided async session."""

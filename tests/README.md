@@ -2,7 +2,6 @@
 
 This README is for contributors working in this repository.
 
-- For the canonical app-level recipe when testing a Litestar app that mounts `LitestarAuth`, start with [Testing plugin-backed apps](../docs/guides/testing.md).
 - For the mandatory release-quality verification block before claiming completion or opening a PR, use [Contributing](../docs/contributing.md).
 
 This repository keeps a strict test pyramid by convention **and** by pytest markers.
@@ -38,7 +37,7 @@ uv run pytest -m imports
 
 For whole-repo verification, run the full command block in [Contributing](../docs/contributing.md).
 
-### CI intent
+### CI
 
-CI should run unit/integration/e2e as separate steps (or jobs) and also include at least one `pytest-xdist`
-run to catch shared-state coupling early.
+The root CI runs the full suite under `pytest-xdist` with branch coverage on Python 3.12-3.14 across
+Ubuntu, macOS, and Windows. Markers remain local selection aids; they are not separate CI jobs.

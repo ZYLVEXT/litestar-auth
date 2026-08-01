@@ -1343,6 +1343,13 @@ def test_extension_registration_rejects_invalid_and_duplicate_security_contribut
     with pytest.raises(ValueError, match="conflicts with extension 'alpha'"):
         context.add_tls_peer_evidence_factory("beta", factory)
 
+    with pytest.raises(TypeError, match="SPIFFE peer evidence factory must be callable"):
+        context.add_spiffe_peer_evidence_factory("alpha", cast("Any", object()))
+
+    context.add_spiffe_peer_evidence_factory("alpha", factory)
+    with pytest.raises(ValueError, match="conflicts with extension 'alpha'"):
+        context.add_spiffe_peer_evidence_factory("beta", factory)
+
 
 def test_extension_openapi_security_registration_appends_to_component_lists() -> None:
     """Extension OpenAPI scheme wiring preserves existing component-list configs."""

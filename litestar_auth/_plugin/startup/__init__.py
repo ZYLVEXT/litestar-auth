@@ -47,6 +47,9 @@ from litestar_auth._plugin.startup._core import (
     require_shared_rate_limit_backends_for_multiworker as require_shared_rate_limit_backends_for_multiworker,
 )
 from litestar_auth._plugin.startup._core import (
+    require_shared_totp_stores_for_multiworker as require_shared_totp_stores_for_multiworker,
+)
+from litestar_auth._plugin.startup._core import (
     run_before_startup_wiring as run_before_startup_wiring,
 )
 from litestar_auth._plugin.startup._core import (

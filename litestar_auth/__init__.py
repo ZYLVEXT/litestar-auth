@@ -1,10 +1,11 @@
-"""Core Litestar authentication and authorization entry points.
+"""Stable Litestar human-authentication and authorization entry points.
 
-The root package exports the plugin, configuration dataclasses, primary backend
-and transport types, the base user manager, core guards, user protocols, and the
-base auth exception. Import controllers, strategies, token stores, TOTP helpers,
-payloads, schemas, ORM models, and optional Redis helpers from their dedicated
-submodules.
+The root package exports the plugin, configuration dataclasses, cookie transport,
+base user manager, core guards, user protocols, and base auth exception. Human
+request authentication uses opaque database or Redis sessions projected through
+the shared AuthWeave coordinator. Import controllers, strategies, token stores,
+TOTP helpers, payloads, schemas, ORM models, and optional Redis helpers from their
+dedicated submodules.
 
 Examples:
     Wire the database-backed cookie-session preset when building a Litestar application::
@@ -17,6 +18,7 @@ Examples:
         from litestar_auth.models import User
 
         database_token_hash_secret = os.environ["LITESTAR_AUTH_DATABASE_TOKEN_HASH_SECRET"]
+        csrf_secret = os.environ["LITESTAR_AUTH_CSRF_SECRET"]
         reset_password_token_secret = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
         verify_token_secret = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
 
@@ -24,6 +26,7 @@ Examples:
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret=database_token_hash_secret,
             ),
+            csrf_secret=csrf_secret,
             user_model=User,
             user_manager_class=YourUserManager,
             session_maker=session_maker,  # e.g. async_sessionmaker(...)
@@ -79,7 +82,7 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # ruff: ignore[non-empty-init-module]
 
-__version__ = "7.0.0"
+__version__ = "7.1.0"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",

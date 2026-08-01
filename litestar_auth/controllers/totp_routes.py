@@ -245,11 +245,11 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
-    """Build the TOTP controller with enable, confirm, verify, and disable routes (DI user manager).
+    """Build the TOTP controller with enrollment, verification, disable, and recovery-code routes.
 
     Returns:
         Controller subclass exposing ``/enable``, ``/enable/confirm``, ``/verify``,
-        and ``/disable`` routes.
+        ``/disable``, and ``/recovery-codes/regenerate`` routes.
     """
     controller_cls = _create_totp_controller_type(
         ctx,

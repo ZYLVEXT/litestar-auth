@@ -28,11 +28,12 @@ from litestar_auth._plugin.config._resolvers import (
 from litestar_auth._plugin.config._validation import _VALID_LOGIN_IDENTIFIERS, _ConfigValidationMixin
 from litestar_auth._plugin.scoped_session import SessionFactory  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.config import UnsetType
 from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
-from litestar_auth.ratelimit import AccountLockoutConfig
+from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig, InMemoryRateLimiter
 from litestar_auth.types import (
     DbSessionDependencyKey,
     LoginIdentifier,
@@ -44,13 +45,13 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import msgspec
+    from authweave_core import SecurityObserver
     from litestar.openapi.spec import SecurityRequirement, SecurityScheme
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy._jwt_denylist import JWTReplayStore
     from litestar_auth.extensions import AuthExtension
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
-    from litestar_auth.ratelimit import AuthRateLimitConfig
 
 __all__ = (
     "_VALID_LOGIN_IDENTIFIERS",
@@ -82,6 +83,8 @@ DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 DEFAULT_TOTP_STEPUP_TTL_SECONDS = _features.DEFAULT_TOTP_STEPUP_TTL_SECONDS
+DEFAULT_AUTH_RATE_LIMIT_MAX_ATTEMPTS = 5
+DEFAULT_AUTH_RATE_LIMIT_WINDOW_SECONDS = 60.0
 DatabaseTokenAuthConfig = _features.DatabaseTokenAuthConfig
 FeatureRegistry = _features.FeatureRegistry
 OAuthConfig = _features.OAuthConfig
@@ -94,6 +97,21 @@ ExceptionResponseHook = _plugin_hooks.ExceptionResponseHook
 MiddlewareHook = _plugin_hooks.MiddlewareHook
 StartupBackendInventory = _features.StartupBackendInventory
 StartupBackendTemplate = _features.StartupBackendTemplate
+
+
+def _default_auth_rate_limit_config() -> AuthRateLimitConfig:
+    """Return the secure single-process rate-limit baseline."""
+    return AuthRateLimitConfig.lenient(
+        backend=InMemoryRateLimiter(
+            max_attempts=DEFAULT_AUTH_RATE_LIMIT_MAX_ATTEMPTS,
+            window_seconds=DEFAULT_AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        ),
+    )
+
+
+def _default_account_token_denylist_store() -> InMemoryJWTDenylistStore:
+    """Return process-local atomic replay protection for the single-worker default."""
+    return InMemoryJWTDenylistStore()
 
 
 @dataclass(slots=True)
@@ -114,15 +132,16 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
-    # Optional atomic replay protection for verify/reset tokens. Known multi-worker
-    # deployments must configure a shared store while those routes are enabled.
-    account_token_denylist_store: JWTReplayStore | None = None
+    # Explicit atomic replay protection for verify/reset tokens. Startup fails closed
+    # when these routes are enabled without a store, and multi-worker deployments
+    # require a shared implementation.
+    account_token_denylist_store: JWTReplayStore | None = field(default_factory=_default_account_token_denylist_store)
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     # Advanced path: callable that fully constructs the manager per request. Use when the
     # constructor is not the default BaseUserManager surface or you need custom DI.
     user_manager_factory: UserManagerFactory[UP, ID] | None = None
     account_lockout_config: AccountLockoutConfig = field(default_factory=AccountLockoutConfig)
-    rate_limit_config: AuthRateLimitConfig | None = None
+    rate_limit_config: AuthRateLimitConfig | None = field(default_factory=_default_auth_rate_limit_config)
     exception_response_hook: ExceptionResponseHook | None = None
     middleware_hook: MiddlewareHook | None = None
     controller_hook: ControllerHook | None = None
@@ -172,6 +191,17 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     login_identifier: LoginIdentifier = "email"
     principal_issuer: str = "urn:litestar-auth:local"
     correlation_id_factory: Callable[[Any], str | None] | None = None
+    external_request_target_factory: Callable[[Any], str | None] | None = None
+    """Project the trusted absolute HTTPS request-target URI for sender-constrained profiles.
+
+    Receives the ASGI ``Scope`` and returns a bounded absolute HTTPS URI, or ``None``
+    when no trusted target can be established. For direct TLS termination pass
+    :func:`~litestar_auth.authentication.build_direct_request_target`. Deployments
+    behind a proxy must supply a factory built from an allowlisted proxy boundary and
+    reject incomplete or ambiguous forwarding metadata.
+    """
+    observer: SecurityObserver | None = field(default=None, repr=False)
+    """Optional operational telemetry observer; never used as an audit ledger."""
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
     role_permissions: Mapping[str, object] = field(default_factory=dict)
     permission_resolver: PermissionResolver | None = None

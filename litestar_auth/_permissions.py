@@ -226,9 +226,9 @@ def permission_grants_fixed_work(granted_permissions: frozenset[str], required_p
 def permissions_cover_delegated_grant(granted_permissions: object, delegated_permission: str) -> bool:
     """Return whether existing grants can safely delegate one permission token.
 
-    Unlike route requirements, delegated API-key grants may themselves contain
-    wildcards. A user permission covers a delegated wildcard only when it is at
-    least as broad as the delegated grant.
+    Unlike route requirements, a delegated grant may itself contain wildcards.
+    An existing permission covers a delegated wildcard only when it is at least
+    as broad as the delegated grant.
     """
     delegated = normalize_permission_name(delegated_permission)
     normalized_grants = normalize_permissions(granted_permissions)

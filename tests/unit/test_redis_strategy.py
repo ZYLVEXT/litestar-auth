@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -764,6 +766,34 @@ async def test_redis_authentication_maps_epoch_outage_and_missing_user() -> None
     redis.reset_mock()
     redis.get.side_effect = [strategy._encode_token_payload(epoch=0, user_id=str(user.id)), None]
     assert isinstance(await strategy.authenticate_token("token", ExampleUserManager(ExampleUser(id=uuid4()))), Invalid)
+
+
+async def test_redis_refresh_request_metadata_is_task_local() -> None:
+    """Concurrent refresh requests cannot consume each other's client metadata."""
+    strategy = _mock_strategy(AsyncMock())
+    first_set = asyncio.Event()
+    second_set = asyncio.Event()
+    first_consumed = asyncio.Event()
+
+    async def first_request() -> dict[str, str] | None:
+        strategy.set_refresh_token_request_context(SimpleNamespace(headers={"user-agent": "first"}))
+        first_set.set()
+        await second_set.wait()
+        metadata = strategy._consume_refresh_token_request_metadata()
+        first_consumed.set()
+        return metadata
+
+    async def second_request() -> dict[str, str] | None:
+        await first_set.wait()
+        strategy.set_refresh_token_request_context(SimpleNamespace(headers={"user-agent": "second"}))
+        second_set.set()
+        await first_consumed.wait()
+        return strategy._consume_refresh_token_request_metadata()
+
+    assert await asyncio.gather(first_request(), second_request()) == [
+        {"user_agent": "first"},
+        {"user_agent": "second"},
+    ]
 
 
 async def test_redis_session_access_issuance_rejects_stale_state() -> None:

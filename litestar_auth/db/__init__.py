@@ -1,4 +1,7 @@
-"""Database abstractions and implementations."""
+"""Public persistence contracts and create-payload dataclasses.
+
+Concrete SQLAlchemy adapters live in :mod:`litestar_auth.db.sqlalchemy`.
+"""
 
 from litestar_auth.db.base import (
     BaseOAuthAccountStore,

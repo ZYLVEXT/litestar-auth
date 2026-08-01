@@ -43,7 +43,7 @@ def _has_process_local_account_token_replay_store(config: LitestarAuthConfig[Any
     if not _account_token_routes_enabled(config):
         return False
     store = config.account_token_denylist_store
-    return store is None or not bool(getattr(store, "revocation_is_durable", True))
+    return store is None or not bool(getattr(store, "revocation_is_durable", False))
 
 
 def _warn_process_local_account_token_replay_store(config: LitestarAuthConfig[Any, Any]) -> None:

@@ -19,6 +19,7 @@ from authweave_core import (
     RequestAuthenticationProvider,
     RequestView,
     RouteProviderPolicy,
+    SpiffePeerEvidence,
     TlsPeerEvidence,
     Unavailable,
 )
@@ -41,6 +42,7 @@ from litestar_auth._superuser_role import (
 from litestar_auth.types import PermissionResolver, UserProtocol
 
 if TYPE_CHECKING:
+    from authweave_core import SecurityObserver
     from litestar.connection import ASGIConnection
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,8 +52,12 @@ else:  # pragma: no cover - optional dependency - import-time fallback
     AsyncSession = Any
 
 AUTHENTICATION_PROVIDERS_KEY = "authentication_providers"
+_ASGI_SERVER_PAIR = 2
+_HTTPS_DEFAULT_PORT = 443
 type PrincipalLoader = Callable[[AuthenticationContext], object | Awaitable[object]]
 type TlsPeerEvidenceFactory = Callable[[Scope], TlsPeerEvidence | None]
+type SpiffePeerEvidenceFactory = Callable[[Scope], SpiffePeerEvidence | None]
+type ExternalRequestTargetFactory = Callable[[Scope], str | None]
 type CorrelationIdFactory = Callable[[Scope], str | None]
 type RequestSessionProvider = Callable[[State, Scope], AsyncSession]
 type OrganizationStoreFactory = Callable[[AsyncSession], BaseOrganizationStore[Any, Any, Any, Any]]
@@ -76,7 +82,10 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     provider_bindings_factory: ProviderBindingsFactory
     default_policy: RouteProviderPolicy
     authentication_deadline_seconds: float | None = None
+    observer: SecurityObserver | None = None
     tls_peer_evidence_factory: TlsPeerEvidenceFactory | None = None
+    spiffe_peer_evidence_factory: SpiffePeerEvidenceFactory | None = None
+    external_request_target_factory: ExternalRequestTargetFactory | None = None
     correlation_id_factory: CorrelationIdFactory | None = None
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
     permission_resolver: PermissionResolver = DEFAULT_PERMISSION_RESOLVER
@@ -105,7 +114,10 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     provider_bindings_factory: Required[ProviderBindingsFactory]
     default_policy: Required[RouteProviderPolicy]
     authentication_deadline_seconds: NotRequired[float | None]
+    observer: NotRequired[SecurityObserver | None]
     tls_peer_evidence_factory: NotRequired[TlsPeerEvidenceFactory | None]
+    spiffe_peer_evidence_factory: NotRequired[SpiffePeerEvidenceFactory | None]
+    external_request_target_factory: NotRequired[ExternalRequestTargetFactory | None]
     correlation_id_factory: NotRequired[CorrelationIdFactory | None]
     superuser_role_name: NotRequired[str]
     permission_resolver: NotRequired[PermissionResolver]
@@ -157,7 +169,10 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.provider_bindings_factory = settings.provider_bindings_factory
         self.default_policy = settings.default_policy
         self.authentication_deadline_seconds = settings.authentication_deadline_seconds
+        self.observer = settings.observer
         self.tls_peer_evidence_factory = settings.tls_peer_evidence_factory
+        self.spiffe_peer_evidence_factory = settings.spiffe_peer_evidence_factory
+        self.external_request_target_factory = settings.external_request_target_factory
         self.correlation_id_factory = settings.correlation_id_factory
         self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
         self.permission_resolver = settings.permission_resolver
@@ -191,11 +206,26 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
                 if self.authentication_deadline_seconds is None
                 else _current_async_time() + self.authentication_deadline_seconds
             ),
+            observer=self.observer,
         )
         tls_peer = None if self.tls_peer_evidence_factory is None else self.tls_peer_evidence_factory(connection.scope)
+        spiffe_peer = (
+            None if self.spiffe_peer_evidence_factory is None else self.spiffe_peer_evidence_factory(connection.scope)
+        )
+        target_uri = (
+            None
+            if self.external_request_target_factory is None
+            else self.external_request_target_factory(connection.scope)
+        )
         correlation_id = None if self.correlation_id_factory is None else self.correlation_id_factory(connection.scope)
         decision = await coordinator.authenticate(
-            _request_view(connection.scope, tls_peer=tls_peer, correlation_id=correlation_id),
+            _request_view(
+                connection.scope,
+                tls_peer=tls_peer,
+                spiffe_peer=spiffe_peer,
+                target_uri=target_uri,
+                correlation_id=correlation_id,
+            ),
             runtime,
             policy,
         )
@@ -266,6 +296,8 @@ def _request_view(
     scope: Scope,
     *,
     tls_peer: TlsPeerEvidence | None = None,
+    spiffe_peer: SpiffePeerEvidence | None = None,
+    target_uri: str | None = None,
     correlation_id: str | None = None,
 ) -> RequestView:
     method = scope.get("method")
@@ -273,9 +305,46 @@ def _request_view(
         method=method if isinstance(method, str) else "GET",
         headers=tuple(scope.get("headers", ())),
         scheme=scope.get("scheme"),
+        target_uri=target_uri,
         tls_peer=tls_peer,
+        spiffe_peer=spiffe_peer,
         correlation_id=correlation_id,
     )
+
+
+def build_direct_request_target(scope: Scope) -> str | None:
+    """Reconstruct the absolute HTTPS request target for a direct deployment.
+
+    Intended for :attr:`LitestarAuthMiddlewareConfig.external_request_target_factory`
+    when the application terminates TLS itself with no intermediary proxy. The
+    authority is taken from the ASGI ``server`` tuple, never from the
+    client-controlled ``Host`` or ``Forwarded`` headers, and the raw path and
+    query string are preserved without normalization. Deployments behind a proxy
+    must supply their own factory built from an allowlisted proxy boundary.
+
+    Returns:
+        The absolute HTTPS request-target URI, or ``None`` when the scope does
+        not describe an ``https`` request with a resolvable server authority.
+    """
+    if scope.get("scheme") != "https":
+        return None
+    server = scope.get("server")
+    if not (isinstance(server, (tuple, list)) and len(server) == _ASGI_SERVER_PAIR):
+        return None
+    host, port = server
+    if not isinstance(host, str) or not host:
+        return None
+    authority = host if port in {None, _HTTPS_DEFAULT_PORT} else f"{host}:{port}"
+    raw_path = scope.get("raw_path") or scope.get("path", "")
+    query = scope.get("query_string", b"")
+    try:
+        path = raw_path.decode("ascii") if isinstance(raw_path, bytes) else str(raw_path)
+        target = f"https://{authority}{path}"
+        if query:
+            target = f"{target}?{query.decode('ascii') if isinstance(query, bytes) else query}"
+        return str(RequestView(method="GET", target_uri=target).target_uri)
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 def _current_async_time() -> float:
