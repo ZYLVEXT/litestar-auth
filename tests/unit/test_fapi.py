@@ -331,6 +331,7 @@ def test_profile_rejects_non_https_and_weak_algorithms() -> None:
             FAPIValidationError,
         ),
     ],
+    ids=("server-error", "wrong-content-type", "malformed-json", "oversized-body", "invalid-schema"),
 )
 async def test_par_response_is_bounded_and_exact(
     status: int,

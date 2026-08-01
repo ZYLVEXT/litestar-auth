@@ -126,10 +126,10 @@ def _invalid_action_pins(repository_root: Path, observed: dict[str, tuple[str, s
         errors.append("no .github/**/*.yml or .github/**/*.yaml files found")
     for github_file in github_files:
         for line_number, action in _mapping_values(github_file, "uses"):
-            location = f"{github_file.relative_to(repository_root)}:{line_number}"
+            location = f"{github_file.relative_to(repository_root).as_posix()}:{line_number}"
             _validate_action(action, location, observed, errors)
         for line_number, image in _mapping_values(github_file, "image"):
-            location = f"{github_file.relative_to(repository_root)}:{line_number}"
+            location = f"{github_file.relative_to(repository_root).as_posix()}:{line_number}"
             if not _is_pinned_image(image):
                 errors.append(f"{location}: {image}")
             else:
@@ -137,7 +137,7 @@ def _invalid_action_pins(repository_root: Path, observed: dict[str, tuple[str, s
         for line_number, image in _mapping_values(github_file, "container"):
             if image == "<non-scalar>":
                 continue
-            location = f"{github_file.relative_to(repository_root)}:{line_number}"
+            location = f"{github_file.relative_to(repository_root).as_posix()}:{line_number}"
             if not _is_pinned_image(image):
                 errors.append(f"{location}: {image}")
             else:
@@ -152,7 +152,7 @@ def _invalid_image_pins(repository_root: Path, observed: dict[str, tuple[str, st
         errors.append("no docker/**/compose*.yml or docker/**/compose*.yaml files found")
     for compose_file in compose_files:
         for line_number, image in _mapping_values(compose_file, "image"):
-            location = f"{compose_file.relative_to(repository_root)}:{line_number}"
+            location = f"{compose_file.relative_to(repository_root).as_posix()}:{line_number}"
             if not _is_pinned_image(image):
                 errors.append(f"{location}: {image}")
             else:
