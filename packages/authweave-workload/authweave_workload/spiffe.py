@@ -439,6 +439,8 @@ class SPIFFEProvider:
         await self._emit(
             SecurityEvent(
                 SecurityEventType.AUTHENTICATION_SUCCEEDED,
+                target_principal=resolved.principal,
+                actor=resolved.principal,
                 provider=self.name,
                 profile=self.profile,
                 correlation_id=request.correlation_id,

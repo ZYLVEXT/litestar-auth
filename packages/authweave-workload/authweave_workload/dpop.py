@@ -291,7 +291,7 @@ class DPoPBoundJWTProvider:
         subject, client_id, audiences, scopes, issued_at, not_before, expires_at, token_id, authorization_details = (
             token_result
         )
-        replay_ttl = (self.dpop.iat_window + self.dpop.clock_skew).total_seconds()
+        replay_ttl = _proof_replay_ttl_seconds(self.dpop)
         replay_key = f"dpop:{self.dpop.resource_server_id}:{jkt}:{proof_jti}"
         with observe_security(runtime.observer, SecurityOperation.REPLAY_CHECK, profile=self.profile) as observation:
             outcome = await self.replay_store.check_and_store(replay_key, ttl_seconds=replay_ttl)
@@ -530,6 +530,11 @@ def _replay_outcome(outcome: ReplayOutcome) -> SecurityOutcome:
     if outcome is ReplayOutcome.CAPACITY_EXCEEDED:
         return SecurityOutcome.CAPACITY_EXCEEDED
     return SecurityOutcome.UNAVAILABLE
+
+
+def _proof_replay_ttl_seconds(policy: DPoPPolicy) -> float:
+    """Cover the full acceptance window for a proof at the future-skew boundary."""
+    return (policy.iat_window + 2 * policy.clock_skew).total_seconds() + 1
 
 
 def _normalize_htu(target_uri: str | None) -> str | None:

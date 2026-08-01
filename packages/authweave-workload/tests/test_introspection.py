@@ -707,12 +707,13 @@ async def test_dpop_bound_opaque_token_is_verified_and_replay_rejected() -> None
     ).encode()
     jkt = base64.urlsafe_b64encode(hashlib.sha256(canonical).digest()).rstrip(b"=").decode()
     ath = base64.urlsafe_b64encode(hashlib.sha256(_TOKEN.encode()).digest()).rstrip(b"=").decode()
+    policy = DPoPPolicy(resource_server_id="payments-api")
     proof = jwt.encode(
         {
             "jti": "proof-1",
             "htm": "POST",
             "htu": "https://api.example/payments",
-            "iat": int(_NOW.timestamp()),
+            "iat": int((_NOW + policy.clock_skew).timestamp()),
             "ath": ath,
         },
         proof_key,
@@ -725,6 +726,7 @@ async def test_dpop_bound_opaque_token_is_verified_and_replay_rejected() -> None
         headers=((b"authorization", f"DPoP {_TOKEN}".encode()), (b"dpop", proof.encode())),
         timestamp=_NOW,
     )
+    replay_clock = [0.0]
     provider = DPoPBoundIntrospectionProvider(
         name="opaque-dpop",
         client=BoundedIntrospectionClient(
@@ -732,12 +734,14 @@ async def test_dpop_bound_opaque_token_is_verified_and_replay_rejected() -> None
             poster=_poster(_active_body(cnf={"jkt": jkt}, token_type="DPoP")),
         ),
         profile=IntrospectionIssuerProfile(issuer=_ISSUER, environment="sandbox"),
-        dpop=DPoPPolicy(resource_server_id="payments-api"),
-        replay_store=InMemoryReplayStore(capacity=8, time_source=_NOW.timestamp),
+        dpop=policy,
+        replay_store=InMemoryReplayStore(capacity=8, time_source=lambda: replay_clock[0]),
     )
     assert provider.match(request) is CredentialMatch.OWNED
     assert isinstance(await provider.authenticate(request, AuthenticationRuntime()), Authenticated)
-    replay = await provider.authenticate(request, AuthenticationRuntime())
+    elapsed = policy.iat_window + 2 * policy.clock_skew
+    replay_clock[0] = elapsed.total_seconds()
+    replay = await provider.authenticate(replace(request, timestamp=_NOW + elapsed), AuthenticationRuntime())
     assert isinstance(replay, Invalid)
     assert replay.code is FailureCode.INVALID
 

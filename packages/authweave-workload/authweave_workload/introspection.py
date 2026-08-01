@@ -37,7 +37,12 @@ from authweave_workload.authorization_details import (
     PaymentAuthorizationPolicy,
     payment_authorization_evidence,
 )
-from authweave_workload.dpop import DPoPPolicy, _extract_presentation, verify_dpop_proof
+from authweave_workload.dpop import (
+    DPoPPolicy,
+    _extract_presentation,
+    _proof_replay_ttl_seconds,
+    verify_dpop_proof,
+)
 from authweave_workload.events import (
     EventDeliveryError,
     SecurityEvent,
@@ -697,7 +702,7 @@ class DPoPBoundIntrospectionProvider:
         except PaymentAuthorizationError:
             return await self._failure(request, FailureCode.INVALID)
         replay_key = f"dpop-introspection:{self.dpop.resource_server_id}:{jkt}:{proof_jti}"
-        replay_ttl = (self.dpop.iat_window + self.dpop.clock_skew).total_seconds()
+        replay_ttl = _proof_replay_ttl_seconds(self.dpop)
         outcome = await self.replay_store.check_and_store(replay_key, ttl_seconds=replay_ttl)
         if outcome is ReplayOutcome.REPLAY:
             return await self._failure(request, FailureCode.INVALID)

@@ -214,9 +214,16 @@ def _provider(
 async def test_dpop_happy_path_and_replay() -> None:
     issuer_key, jwks = _issuer_keys()
     proof_key, proof_jwk, jkt = _proof_key()
-    now = datetime.now(UTC)
+    now = datetime.now(UTC).replace(microsecond=0)
     token = _access_token(issuer_key, jkt=jkt, now=now)
-    proof = _proof(proof_key, proof_jwk, access_token=token, now=now)
+    policy = DPoPPolicy(resource_server_id=_RS)
+    proof = _proof(
+        proof_key,
+        proof_jwk,
+        access_token=token,
+        now=now,
+        extra_claims={"iat": int((now + policy.clock_skew).timestamp())},
+    )
     clock = _Clock()
     provider = _provider(jwks, replay=InMemoryReplayStore(capacity=8, time_source=clock))
 
@@ -226,8 +233,10 @@ async def test_dpop_happy_path_and_replay() -> None:
     assert decision.context.evidence.method == "dpop"
     assert decision.context.evidence.extensions["authweave-workload:client_id"] == "client-1"
 
+    elapsed = policy.iat_window + 2 * policy.clock_skew
+    clock.now = elapsed.total_seconds()
     replayed = await provider.authenticate(
-        _request(access_token=token, proof=proof, now=now),
+        _request(access_token=token, proof=proof, now=now + elapsed),
         AuthenticationRuntime(),
     )
     assert replayed == Invalid(FailureCode.INVALID)

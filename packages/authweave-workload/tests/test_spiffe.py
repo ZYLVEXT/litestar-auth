@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from authweave_core import (
@@ -35,6 +35,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+
+if TYPE_CHECKING:
+    from authweave_workload.events import SecurityEvent
 
 _NOW = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
 _DOMAIN = "example.org"
@@ -807,9 +810,9 @@ async def test_spiffe_validation_failure_matrix() -> None:
     assert isinstance(decision, Invalid)
     assert decision.code is FailureCode.MALFORMED
 
-    events: list[object] = []
+    events: list[SecurityEvent] = []
 
-    async def _cb(event: object) -> None:
+    async def _cb(event: SecurityEvent) -> None:
         events.append(event)
 
     with_cb = SPIFFEProvider(
@@ -825,7 +828,8 @@ async def test_spiffe_validation_failure_matrix() -> None:
         RequestView(method="POST", timestamp=_NOW, spiffe_peer=_peer()), AuthenticationRuntime()
     )
     assert isinstance(ok, Authenticated)
-    assert events
+    assert events[-1].target_principal == ok.context.subject
+    assert events[-1].actor == ok.context.actor
 
     sync_events: list[object] = []
 
