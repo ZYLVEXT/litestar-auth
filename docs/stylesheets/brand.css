@@ -1,0 +1,37 @@
+:root {
+  --authweave-paper: #f7f6f2;
+  --authweave-ink: #18201e;
+  --authweave-primary: #007d6c;
+  --authweave-accent: #a24c78;
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--authweave-paper);
+  --md-default-fg-color: var(--authweave-ink);
+  --md-primary-fg-color: var(--authweave-ink);
+  --md-primary-fg-color--light: #2b3733;
+  --md-primary-fg-color--dark: #111615;
+  --md-primary-bg-color: var(--authweave-paper);
+  --md-primary-bg-color--light: rgb(247 246 242 / 70%);
+  --md-accent-fg-color: var(--authweave-accent);
+  --md-accent-fg-color--transparent: rgb(162 76 120 / 12%);
+  --md-typeset-a-color: var(--authweave-primary);
+  --md-code-fg-color: var(--authweave-ink);
+  --md-code-bg-color: #ecefeb;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 165;
+  --md-default-bg-color: #111615;
+  --md-default-fg-color: #f1f4ef;
+  --md-primary-fg-color: #18201e;
+  --md-primary-fg-color--light: #2b3733;
+  --md-primary-fg-color--dark: #0d1210;
+  --md-primary-bg-color: #f1f4ef;
+  --md-primary-bg-color--light: rgb(241 244 239 / 70%);
+  --md-accent-fg-color: #e78eb7;
+  --md-accent-fg-color--transparent: rgb(231 142 183 / 12%);
+  --md-typeset-a-color: #62cdb8;
+  --md-code-fg-color: #f1f4ef;
+  --md-code-bg-color: #19211f;
+}

@@ -7,73 +7,76 @@
     credentials. Both produce typed, fail-closed decisions through AuthWeave core contracts.
   </desc>
 
-  <rect width="1200" height="400" rx="24" fill="#111318" />
+  <rect width="1200" height="400" rx="24" fill="#111615" />
 
   <g id="identity" transform="translate(54 44)">
     <g aria-hidden="true" transform="scale(.42)">
-      <path
-        d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
-        fill="none" stroke="#ff6b35" stroke-linecap="round" stroke-width="30"
-      />
-      <path
-        d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
-        fill="#4658ff" fill-rule="evenodd"
-      />
+      <g
+        fill="none"
+        stroke="#62cdb8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="28"
+      >
+        <path d="M160 52H108C72 52 52 76 52 112S76 172 112 172H118" />
+        <path d="M96 204H148C184 204 204 180 204 144S180 84 144 84H138" />
+      </g>
+      <circle cx="128" cy="128" r="25" fill="#e78eb7" />
     </g>
 
-    <text x="128" y="18" fill="#ff6b35"
+    <text x="128" y="18" fill="#62cdb8"
           font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
           font-size="18" font-weight="700" letter-spacing="2">AUTHWEAVE · PYTHON AUTHENTICATION</text>
-    <text x="128" y="88" fill="#f4f1e8"
+    <text x="128" y="88" fill="#f1f4ef"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="64" font-weight="750" letter-spacing="-2">litestar-auth</text>
 
-    <text x="0" y="160" fill="#b6bbc8"
+    <text x="0" y="160" fill="#a5afab"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="26">Human sessions and workload identity.</text>
-    <text x="0" y="197" fill="#b6bbc8"
+    <text x="0" y="197" fill="#a5afab"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="26">Separate trust paths. One typed core.</text>
 
     <g transform="translate(0 248)"
        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
        font-size="19" font-weight="650">
-      <rect width="244" height="44" rx="22" fill="#1d2130" />
-      <text x="24" y="28" fill="#f4f1e8">Python 3.12–3.14</text>
-      <rect x="258" width="288" height="44" rx="22" fill="#1d2130" />
-      <text x="282" y="28" fill="#f4f1e8">six lockstep packages</text>
+      <rect width="244" height="44" rx="22" fill="#202a27" />
+      <text x="24" y="28" fill="#f1f4ef">Python 3.12–3.14</text>
+      <rect x="258" width="288" height="44" rx="22" fill="#202a27" />
+      <text x="282" y="28" fill="#f1f4ef">six lockstep packages</text>
     </g>
   </g>
 
   <g id="trust-paths" transform="translate(650 42)">
-    <rect width="496" height="316" rx="20" fill="#191c24" stroke="#353a49" stroke-width="2" />
+    <rect width="496" height="316" rx="20" fill="#19211f" stroke="#35423e" stroke-width="2" />
 
     <g transform="translate(28 28)">
-      <text x="0" y="22" fill="#8d98ff"
+      <text x="0" y="22" fill="#62cdb8"
             font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
             font-size="18" font-weight="750" letter-spacing="1.5">HUMAN</text>
-      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111318" stroke="#4658ff" stroke-width="2" />
-      <circle cx="26" cy="69" r="7" fill="#4658ff" />
-      <text x="48" y="77" fill="#f4f1e8"
+      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111615" stroke="#62cdb8" stroke-width="2" />
+      <circle cx="26" cy="69" r="7" fill="#62cdb8" />
+      <text x="48" y="77" fill="#f1f4ef"
             font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
             font-size="21" font-weight="650">litestar-auth · opaque session</text>
     </g>
 
     <g transform="translate(28 142)">
-      <text x="0" y="22" fill="#ff8a61"
+      <text x="0" y="22" fill="#e78eb7"
             font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
             font-size="18" font-weight="750" letter-spacing="1.5">WORKLOAD</text>
-      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111318" stroke="#ff6b35" stroke-width="2" />
-      <rect x="19" y="62" width="14" height="14" rx="3" fill="#ff6b35" />
-      <text x="48" y="77" fill="#f4f1e8"
+      <rect x="0" y="42" width="440" height="54" rx="10" fill="#111615" stroke="#e78eb7" stroke-width="2" />
+      <rect x="19" y="62" width="14" height="14" rx="3" fill="#e78eb7" />
+      <text x="48" y="77" fill="#f1f4ef"
             font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
             font-size="21" font-weight="650">mTLS · DPoP · SPIFFE · bound JWT</text>
     </g>
 
-    <path d="M140 238V258M356 238V258M140 258H356" fill="none" stroke="#6f7688" stroke-width="2" />
-    <path d="M248 258V272M241 264L248 272L255 264" fill="none" stroke="#6f7688" stroke-width="2" />
-    <rect x="46" y="276" width="404" height="50" rx="10" fill="#4658ff" />
-    <text x="72" y="308" fill="#ffffff"
+    <path d="M140 238V258M356 238V258M140 258H356" fill="none" stroke="#65716d" stroke-width="2" />
+    <path d="M248 258V272M241 264L248 272L255 264" fill="none" stroke="#65716d" stroke-width="2" />
+    <rect x="46" y="276" width="404" height="50" rx="10" fill="#007d6c" />
+    <text x="72" y="308" fill="#f7f6f2"
           font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
           font-size="20" font-weight="750">typed decision · fail closed</text>
   </g>

@@ -1,0 +1,4 @@
+---
+exclude_paths:
+  # MkDocs theme variables use names that Codacy's bundled Stylelint rules reject.
+  - "docs/stylesheets/brand.css"
