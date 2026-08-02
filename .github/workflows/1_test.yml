@@ -197,7 +197,8 @@ jobs:
           cache-dependency-glob: ""
           cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
-          cache-python: true
+          # Restored managed-Python junctions cannot be replaced reliably on Windows.
+          cache-python: ${{ runner.os != 'Windows' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add .local/bin to Windows PATH

@@ -1,3 +1,12 @@
+## 7.1.2 (2026-08-02)
+
+### CI
+
+- Kept uv's dependency cache on Windows while disabling only the managed-Python cache whose
+  restored junctions cannot be replaced reliably by `uv python install`.
+- Preserved the failed, unpublished `7.1.1` release as non-latest prerelease evidence and moved the
+  corrected publication to this patch version.
+
 ## 7.1.1 (2026-08-02)
 
 ### CI
@@ -8,8 +17,8 @@
   sleep a few microseconds early; the deterministic no-padding assertion remains.
 - Reused uv's content-addressed dependency and managed-Python caches across release-only lockfile
   changes, stopped deleting the restored Windows Python cache, and avoided duplicate matrix saves.
-- Preserved the failed, unpublished `7.1.0` release as non-latest prerelease evidence and moved the
-  corrected publication to this patch version.
+- Preserved the failed, unpublished `7.1.0` release as non-latest prerelease evidence and prepared
+  this patch as the corrected publication attempt.
 
 ## 7.1.0 (2026-08-02)
 

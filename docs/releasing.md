@@ -85,7 +85,7 @@ check also requires the exact release workflow and per-project environment:
 
 ```bash
 set -euo pipefail
-VERSION=7.1.1
+VERSION=7.1.2
 REPOSITORY=ZYLVEXT/litestar-auth
 TAG_SHA=$(gh api "repos/$REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha)
 verification_dir=$(mktemp -d)
