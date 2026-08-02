@@ -39,7 +39,7 @@ jobs:
             pyproject.toml \
             'packages/*/pyproject.toml' \
             uv.lock \
-            .pre-commit-config.yaml \
+            prek.toml \
             'docker/reference/**/compose.yml' \
             .github/dependabot.yml \
             .github/workflows; then

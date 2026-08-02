@@ -33,15 +33,6 @@ updates:
           - "patch"
     commit-message:
       prefix: "chore(deps)"
-  - package-ecosystem: "pre-commit" # zizmor: ignore[dependabot-cooldown]
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "chore(deps)"
   - package-ecosystem: "docker-compose" # zizmor: ignore[dependabot-cooldown]
     directories:
       - "/docker/reference"

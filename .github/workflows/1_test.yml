@@ -6,7 +6,7 @@ on:
     branches: ["main"]
     paths:
       - ".gitignore"
-      - ".pre-commit-config.yaml"
+      - "prek.toml"
       - ".github/dependabot.yml"
       - ".github/workflows/**"
       - "docker/**"
@@ -42,7 +42,7 @@ permissions:
 # https://docs.codecov.com/docs/codecov-tokens
 
 env:
-  VENV_PRECOMMIT_CACHE_VERSION: v1
+  VENV_PREK_CACHE_VERSION: v1
 
 jobs:
   changes:
@@ -75,7 +75,7 @@ jobs:
             verify=true
           elif git diff --quiet "$BASE_SHA...$HEAD_SHA" -- \
             .gitignore \
-            .pre-commit-config.yaml \
+            prek.toml \
             .github/dependabot.yml \
             .github/workflows \
             docker \
@@ -138,9 +138,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .venv
-          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
+          key: venv-prek-${{ env.VENV_PREK_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-
+            venv-prek-${{ env.VENV_PREK_CACHE_VERSION }}-${{ runner.os }}-3.12-
 
       - name: Install the project
         run: uv sync --frozen --all-packages --all-extras --group dev
@@ -149,7 +149,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .venv
-          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
+          key: venv-prek-${{ env.VENV_PREK_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run prek
         uses: j178/prek-action@4e14d07f9231acabce116ccfca13b13dd9755ece # v3.0.0

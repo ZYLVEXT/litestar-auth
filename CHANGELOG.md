@@ -59,6 +59,8 @@
 - Added stable required-check aggregation, tag-bound release dispatch, short-lived release
   credentials, reproducible per-distribution CycloneDX 1.7 SBOMs, and GitHub build/SBOM
   attestations.
+- Completed the hook-runner migration with a native `prek.toml` configuration and prek-only CI
+  cache and change-detection paths.
 
 ### Documentation
 
