@@ -82,7 +82,7 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # ruff: ignore[non-empty-init-module]
 
-__version__ = "7.1.0"
+__version__ = "7.1.1"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",

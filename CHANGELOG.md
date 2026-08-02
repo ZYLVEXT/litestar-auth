@@ -1,3 +1,16 @@
+## 7.1.1 (2026-08-02)
+
+### CI
+
+- Allowed the release trigger verification job to inspect draft releases with the push-level
+  repository access required by GitHub, while keeping publication in its existing protected jobs.
+- Removed a redundant wall-clock assertion that could fail when Windows resumed an asynchronous
+  sleep a few microseconds early; the deterministic no-padding assertion remains.
+- Reused uv's content-addressed dependency and managed-Python caches across release-only lockfile
+  changes, stopped deleting the restored Windows Python cache, and avoided duplicate matrix saves.
+- Preserved the failed, unpublished `7.1.0` release as non-latest prerelease evidence and moved the
+  corrected publication to this patch version.
+
 ## 7.1.0 (2026-08-02)
 
 ### Breaking
