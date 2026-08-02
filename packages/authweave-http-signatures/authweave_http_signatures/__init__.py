@@ -20,7 +20,7 @@ from authweave_http_signatures.proxy_target import UNIX_SOCKET_PROXY, Allowliste
 from authweave_http_signatures.signer import sign_payment_message
 from authweave_http_signatures.verify import PaymentHttpSignatureVerifier
 
-__version__ = "7.1.0"
+__version__ = "7.1.1"
 
 __all__ = (
     "CONTENT_DIGEST_SHA256",

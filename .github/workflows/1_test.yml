@@ -42,6 +42,9 @@ permissions:
 # https://docs.codecov.com/docs/codecov-tokens
 
 env:
+  # uv validates every lock entry before use; keep content-addressed downloads and managed Python
+  # across release-only lock changes. Bump this suffix to force a clean cache generation.
+  UV_CACHE_VERSION: v1
   VENV_PREK_CACHE_VERSION: v1
 
 jobs:
@@ -124,6 +127,8 @@ jobs:
           version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -189,6 +194,8 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -197,11 +204,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo "$USERPROFILE/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Clear Python install dir (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: rm -rf "${UV_PYTHON_INSTALL_DIR:-}" 2>/dev/null || true
 
       - name: Set up Python
         shell: bash
@@ -282,6 +284,8 @@ jobs:
           version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -315,6 +319,8 @@ jobs:
           version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -361,8 +367,12 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
+          # Five package jobs share one full workspace environment per Python version.
+          save-cache: ${{ matrix.package == 'authweave-core' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Test package
@@ -425,6 +435,8 @@ jobs:
           version: "0.12.1"
           python-version: "3.14"
           enable-cache: true
+          cache-dependency-glob: ""
+          cache-suffix: ${{ env.UV_CACHE_VERSION }}
           prune-cache: true
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}

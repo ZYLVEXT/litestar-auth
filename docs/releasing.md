@@ -39,8 +39,11 @@ tag on the unchanged commit.
 
 The bump job runs only from the default branch in the protected `release-operations` environment.
 It atomically pushes exactly that branch and the matching tag with its short-lived, job-scoped
-`GITHUB_TOKEN`, then creates a draft GitHub release. Only the release job receives `contents: write`
-and `actions: write`; no long-lived release credential is stored. Only one draft release may exist,
+`GITHUB_TOKEN`, then creates a draft GitHub release. The protected bump job, release trigger
+verifier, asset attachment job, and final release publisher receive `contents: write`; the verifier
+needs push-level access because GitHub omits draft releases from read-only API responses. Only the
+bump job receives `actions: write`, and no long-lived release credential is stored. Only one draft
+release may exist,
 so a second release cannot start until the first finishes. If a run fails after its atomic push,
 rerun the same workflow; it resumes only when the existing tag resolves to the unchanged
 default-branch commit. The explicit Tests `workflow_dispatch` still creates a run when authenticated
@@ -82,7 +85,7 @@ check also requires the exact release workflow and per-project environment:
 
 ```bash
 set -euo pipefail
-VERSION=7.1.0
+VERSION=7.1.1
 REPOSITORY=ZYLVEXT/litestar-auth
 TAG_SHA=$(gh api "repos/$REPOSITORY/git/ref/tags/$VERSION" --jq .object.sha)
 verification_dir=$(mktemp -d)
