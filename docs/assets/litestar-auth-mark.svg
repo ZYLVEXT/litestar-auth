@@ -5,17 +5,16 @@
   viewBox="0 0 256 256"
 >
   <title id="title">litestar-auth mark</title>
-  <desc id="desc">A signal-orange thread passing through an ultramarine weaving shuttle.</desc>
-  <path
-    d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
+  <desc id="desc">Two trust paths surrounding one verified identity decision.</desc>
+  <g
     fill="none"
-    stroke="#ff6b35"
+    stroke="#007d6c"
     stroke-linecap="round"
-    stroke-width="30"
-  />
-  <path
-    d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
-    fill="#4658ff"
-    fill-rule="evenodd"
-  />
+    stroke-linejoin="round"
+    stroke-width="28"
+  >
+    <path d="M160 52H108C72 52 52 76 52 112S76 172 112 172H118" />
+    <path d="M96 204H148C184 204 204 180 204 144S180 84 144 84H138" />
+  </g>
+  <circle cx="128" cy="128" r="25" fill="#a24c78" />
 </svg>

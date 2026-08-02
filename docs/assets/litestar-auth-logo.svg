@@ -5,24 +5,20 @@
   viewBox="0 0 960 280"
 >
   <title id="title">litestar-auth logo</title>
-  <desc id="desc">A weaving shuttle and thread beside the litestar-auth wordmark.</desc>
-  <style>
-    .wordmark { fill: #15171c; }
-    @media (prefers-color-scheme: dark) { .wordmark { fill: #f4f1e8; } }
-  </style>
+  <desc id="desc">Two trust paths surrounding one decision beside the litestar-auth wordmark.</desc>
+
   <g aria-hidden="true" transform="translate(24 12)">
-    <path
-      d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
+    <g
       fill="none"
-      stroke="#ff6b35"
+      stroke="#007d6c"
       stroke-linecap="round"
-      stroke-width="30"
-    />
-    <path
-      d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
-      fill="#4658ff"
-      fill-rule="evenodd"
-    />
+      stroke-linejoin="round"
+      stroke-width="28"
+    >
+      <path d="M160 52H108C72 52 52 76 52 112S76 172 112 172H118" />
+      <path d="M96 204H148C184 204 204 180 204 144S180 84 144 84H138" />
+    </g>
+    <circle cx="128" cy="128" r="25" fill="#a24c78" />
   </g>
 
   <g
@@ -31,9 +27,10 @@
     font-size="76"
     font-weight="750"
     letter-spacing="-1"
+    fill="#007d6c"
   >
-    <text class="wordmark" x="300" y="166">litestar</text>
-    <text x="578" y="166" fill="#ff6b35">-</text>
-    <text class="wordmark" x="612" y="166">auth</text>
+    <text x="300" y="166">litestar</text>
+    <text x="578" y="166" fill="#a24c78">-</text>
+    <text x="612" y="166">auth</text>
   </g>
 </svg>

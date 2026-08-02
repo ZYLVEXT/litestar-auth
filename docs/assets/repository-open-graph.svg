@@ -3,52 +3,55 @@
      role="img" aria-labelledby="title desc">
   <title id="title">litestar-auth and AuthWeave</title>
   <desc id="desc">
-    The litestar-auth weaving-shuttle mark beside the promise: separate trust paths for human
-    sessions and workload identity, producing typed fail-closed decisions.
+    The litestar-auth trust-path mark beside the promise: separate paths for human sessions and
+    workload identity, producing typed fail-closed decisions.
   </desc>
 
-  <rect width="1280" height="640" fill="#111318" />
-  <rect x="54" y="54" width="1172" height="532" rx="30" fill="none" stroke="#353a49" stroke-width="2" />
+  <rect width="1280" height="640" fill="#111615" />
+  <rect x="54" y="54" width="1172" height="532" rx="30" fill="none" stroke="#35423e" stroke-width="2" />
 
   <g id="mark" aria-hidden="true" transform="translate(92 160) scale(1.15)">
-    <path
-      d="M20 177C61 177 82 166 105 150C133 131 148 103 177 82C197 67 216 61 236 61"
-      fill="none" stroke="#ff6b35" stroke-linecap="round" stroke-width="30"
-    />
-    <path
-      d="M128 16C164 55 181 96 181 139C181 188 158 222 128 242C98 222 75 188 75 139C75 96 92 55 128 16ZM157 132A29 29 0 1 1 99 132A29 29 0 1 1 157 132Z"
-      fill="#4658ff" fill-rule="evenodd"
-    />
+    <g
+      fill="none"
+      stroke="#62cdb8"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="28"
+    >
+      <path d="M160 52H108C72 52 52 76 52 112S76 172 112 172H118" />
+      <path d="M96 204H148C184 204 204 180 204 144S180 84 144 84H138" />
+    </g>
+    <circle cx="128" cy="128" r="25" fill="#e78eb7" />
   </g>
 
   <g id="copy" transform="translate(430 138)">
-    <text x="0" y="0" fill="#ff6b35"
+    <text x="0" y="0" fill="#62cdb8"
           font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
           font-size="26" font-weight="750" letter-spacing="3">AUTHWEAVE · PYTHON AUTHENTICATION</text>
-    <text x="0" y="112" fill="#f4f1e8"
+    <text x="0" y="112" fill="#f1f4ef"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="92" font-weight="760" letter-spacing="-3">litestar-auth</text>
-    <text x="0" y="180" fill="#b6bbc8"
+    <text x="0" y="180" fill="#a5afab"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="34">Human sessions and workload identity.</text>
-    <text x="0" y="226" fill="#b6bbc8"
+    <text x="0" y="226" fill="#a5afab"
           font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
           font-size="34">Separate trust paths. One typed core.</text>
 
     <g transform="translate(0 288)"
        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
        font-size="20" font-weight="700">
-      <rect width="238" height="52" rx="26" fill="#1d2130" stroke="#4658ff" />
-      <text x="26" y="33" fill="#f4f1e8">OPAQUE SESSIONS</text>
-      <rect x="252" width="238" height="52" rx="26" fill="#1d2130" stroke="#ff6b35" />
-      <text x="278" y="33" fill="#f4f1e8">BOUND WORKLOADS</text>
-      <rect x="504" width="190" height="52" rx="26" fill="#4658ff" />
-      <text x="530" y="33" fill="#ffffff">FAIL CLOSED</text>
+      <rect width="238" height="52" rx="26" fill="#19211f" stroke="#62cdb8" />
+      <text x="26" y="33" fill="#f1f4ef">OPAQUE SESSIONS</text>
+      <rect x="252" width="238" height="52" rx="26" fill="#19211f" stroke="#e78eb7" />
+      <text x="278" y="33" fill="#f1f4ef">BOUND WORKLOADS</text>
+      <rect x="504" width="190" height="52" rx="26" fill="#007d6c" />
+      <text x="530" y="33" fill="#f7f6f2">FAIL CLOSED</text>
     </g>
   </g>
 
-  <path d="M92 528H1188" stroke="#353a49" stroke-width="2" />
-  <text x="92" y="558" fill="#858c9d"
+  <path d="M92 528H1188" stroke="#35423e" stroke-width="2" />
+  <text x="92" y="558" fill="#a5afab"
         font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
         font-size="18">github.com/ZYLVEXT/litestar-auth</text>
 </svg>
