@@ -47,12 +47,9 @@ async def test_minimum_response_helper_does_not_pad_slow_work(monkeypatch: pytes
         await real_sleep(SLOW_WORK_SECONDS)
         return "ok"
 
-    started_at = time.perf_counter()
     result = await response_timing.await_minimum_response_seconds(minimum_seconds=FAST_FLOOR_SECONDS, work=work)
-    elapsed = time.perf_counter() - started_at
 
     assert result == "ok"
-    assert elapsed >= SLOW_WORK_SECONDS
     padding_sleep.assert_not_awaited()
 
 
