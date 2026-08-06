@@ -52,6 +52,7 @@ class ServiceApplicationStore(Protocol):
     ) -> tuple[tuple[ServiceApplication, ...], int]:
         """Return one page of applications and the matching total count."""
 
+
 @runtime_checkable
 class MachinePrincipalStore(Protocol):
     """Persistence operations for machine principals."""
@@ -75,6 +76,7 @@ class MachinePrincipalStore(Protocol):
         status: EntityStatus | None = None,
     ) -> tuple[tuple[MachinePrincipal, ...], int]:
         """Return one page of principals and the matching total count."""
+
 
 @runtime_checkable
 class MachineCredentialStore(Protocol):
