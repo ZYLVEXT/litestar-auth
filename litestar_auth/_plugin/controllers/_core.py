@@ -172,6 +172,7 @@ def _append_account_feature_controllers[UP: UserProtocol[Any], ID](
                 unsafe_testing=config.unsafe_testing,
                 security=security,
                 totp_stepup_policy=config.totp_stepup_policy,
+                admin_guards=config.users_admin_guards,
                 **users_schema_kwargs(config),
             ),
         )

@@ -32,6 +32,26 @@ authentication downgrade by construction.
 - Public authentication and TOTP endpoints use bounded rate-limit presets by default. Deployments
   with more than one worker must use shared rate-limit and account-state stores.
 
+Bundled user-administration routes remain protected by the configured superuser role plus human
+authentication by default. Applications with an equivalent reviewed authorization policy may set
+`LitestarAuthConfig.users_admin_guards`, or `UsersControllerConfig.admin_guards` when mounting the
+public controller factory directly. An explicitly empty sequence is rejected so customization
+cannot accidentally publish the administrative inventory and mutation surface.
+
+Organization administration has the same secure global-superuser controller default. A deployment
+that exposes tenant administration may configure `OrganizationAdminAuthorizationPolicy` on the
+public controller factory or `OrganizationAdminExtension`. Its global and path callbacks receive a
+bounded operation name, and its role-delegation callback receives the target organization, target
+reference, and normalized requested roles. A denial returns 403 before mutation; store-level
+membership and last-privileged-member invariants still apply and cannot be replaced by callbacks.
+
+Application and contrib routes can compose `requires_recent_authentication()` with their normal
+authorization guards. The application supplies a verifier over trusted server-side session or IdP
+evidence and receives a bounded `RecentAuthenticationRequirement` containing the operation,
+maximum age, and phishing-resistance requirement. Anonymous/non-human callers, a false decision,
+and verifier exceptions all fail closed. The guard does not infer phishing resistance from TOTP or
+an unverified OAuth claim.
+
 The 15-character default follows the single-factor password minimum in
 [NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b/authenticators/#passwords). Applications
 must also reject commonly used, expected, compromised, and deployment-specific passwords. The new

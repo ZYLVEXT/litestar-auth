@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
 from litestar_auth._plugin.organization_admin import _mutations as organization_mutations_module
 from litestar_auth.contrib.organization_admin._controller import (
+    OrganizationAdminAuthorizationPolicy,
     _require_global_organization_catalog_admin,
     _require_path_organization_authority,
 )
@@ -617,14 +618,18 @@ async def test_caller_has_organization_authority_requires_privileged_membership(
     assert not await admin.caller_has_organization_authority(organization_id=organization.id, user_id=outsider.id)
 
 
-def test_require_global_organization_catalog_admin_allows_superuser() -> None:
+async def test_require_global_organization_catalog_admin_allows_superuser() -> None:
     """Org-less catalog routes stay available to global superusers."""
     request = cast(
         "Any",
         SimpleNamespace(user=SimpleNamespace(id=uuid4(), roles=["superuser"]), scope={}),
     )
 
-    _require_global_organization_catalog_admin(request)
+    await _require_global_organization_catalog_admin(
+        request=request,
+        operation="organization:list",
+        policy=OrganizationAdminAuthorizationPolicy(),
+    )
 
 
 async def test_require_global_organization_catalog_admin_denies_org_privileged_member(
@@ -638,7 +643,11 @@ async def test_require_global_organization_catalog_admin_denies_org_privileged_m
     request = cast("Any", SimpleNamespace(user=SimpleNamespace(id=owner.id, roles=[]), scope={}))
 
     with pytest.raises(PermissionDeniedException):
-        _require_global_organization_catalog_admin(request)
+        await _require_global_organization_catalog_admin(
+            request=request,
+            operation="organization:list",
+            policy=OrganizationAdminAuthorizationPolicy(),
+        )
 
 
 async def test_accept_invitation_rolls_back_consumed_invitation_when_membership_insert_fails(
@@ -794,7 +803,13 @@ async def test_require_path_organization_authority_allows_global_superuser_witho
     )
 
     # Must not raise: the default is_superuser admin flow is preserved.
-    await _require_path_organization_authority(request=request, organization_id=organization.id, admin=admin)
+    await _require_path_organization_authority(
+        request=request,
+        organization_id=organization.id,
+        admin=admin,
+        operation="membership:list",
+        policy=OrganizationAdminAuthorizationPolicy(),
+    )
 
 
 async def test_require_path_organization_authority_allows_privileged_member(
@@ -807,7 +822,33 @@ async def test_require_path_organization_authority_allows_privileged_member(
     await admin.add_member(organization_id=organization.id, user_id=owner.id, roles=["admin"])
     request = cast("Any", SimpleNamespace(user=SimpleNamespace(id=owner.id, roles=[]), scope={}))
 
-    await _require_path_organization_authority(request=request, organization_id=organization.id, admin=admin)
+    await _require_path_organization_authority(
+        request=request,
+        organization_id=organization.id,
+        admin=admin,
+        operation="membership:list",
+        policy=OrganizationAdminAuthorizationPolicy(),
+    )
+
+
+async def test_require_path_organization_authority_denies_when_configured_policy_denies(
+    organization_admin_session: AsyncSession,
+) -> None:
+    """An application path policy is authoritative and fails closed on denial."""
+    owner = await create_user(organization_admin_session, "policy-denied-owner@example.com")
+    admin = create_admin(organization_admin_session)
+    organization = await admin.create_organization(slug="policy-denied-org", name="Policy Denied Org")
+    await admin.add_member(organization_id=organization.id, user_id=owner.id, roles=["owner"])
+    request = cast("Any", SimpleNamespace(user=SimpleNamespace(id=owner.id, roles=[]), scope={}))
+
+    with pytest.raises(PermissionDeniedException):
+        await _require_path_organization_authority(
+            request=request,
+            organization_id=organization.id,
+            admin=admin,
+            operation="membership:list",
+            policy=OrganizationAdminAuthorizationPolicy(path_authority=lambda *_args: False),
+        )
 
 
 @pytest.mark.parametrize("caller_roles", [["member"], []])
@@ -828,7 +869,13 @@ async def test_require_path_organization_authority_denies_non_privileged_caller(
     request = cast("Any", SimpleNamespace(user=SimpleNamespace(id=caller.id, roles=[]), scope={}))
 
     with pytest.raises(PermissionDeniedException):
-        await _require_path_organization_authority(request=request, organization_id=organization.id, admin=admin)
+        await _require_path_organization_authority(
+            request=request,
+            organization_id=organization.id,
+            admin=admin,
+            operation="membership:list",
+            policy=OrganizationAdminAuthorizationPolicy(),
+        )
 
 
 async def test_require_path_organization_authority_denies_anonymous_request(
@@ -840,7 +887,13 @@ async def test_require_path_organization_authority_denies_anonymous_request(
     request = cast("Any", SimpleNamespace(user=None, scope={}))
 
     with pytest.raises(PermissionDeniedException):
-        await _require_path_organization_authority(request=request, organization_id=organization.id, admin=admin)
+        await _require_path_organization_authority(
+            request=request,
+            organization_id=organization.id,
+            admin=admin,
+            operation="membership:list",
+            policy=OrganizationAdminAuthorizationPolicy(),
+        )
 
 
 async def test_get_invitation_scopes_revoke_authority_to_invitation_organization(
@@ -870,6 +923,8 @@ async def test_get_invitation_scopes_revoke_authority_to_invitation_organization
         request=owner_request,
         organization_id=fetched.organization_id,
         admin=admin,
+        operation="invitation:revoke",
+        policy=OrganizationAdminAuthorizationPolicy(),
     )
 
     # An outsider, and a missing invitation (no organization id), are both denied without
@@ -882,4 +937,6 @@ async def test_get_invitation_scopes_revoke_authority_to_invitation_organization
                 request=outsider_request,
                 organization_id=organization_id,
                 admin=admin,
+                operation="invitation:revoke",
+                policy=OrganizationAdminAuthorizationPolicy(),
             )

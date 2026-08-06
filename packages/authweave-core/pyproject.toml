@@ -1,6 +1,6 @@
 [project]
 name = "authweave-core"
-version = "7.1.2"
+version = "7.2.0"
 description = "Framework-neutral principal authentication contracts and coordinator"
 readme = "README.md"
 license = "MIT"

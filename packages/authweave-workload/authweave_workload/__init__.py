@@ -20,6 +20,7 @@ from authweave_workload.models import (
     MachinePrincipal,
     ResolvedMachineIdentity,
     ServiceApplication,
+    WorkloadPage,
 )
 from authweave_workload.provider import DirectMTLSPolicy, DirectMTLSProvider
 from authweave_workload.rate_limit import WorkloadRateLimitIdentity, rate_limit_identity
@@ -33,7 +34,7 @@ from authweave_workload.stores import (
     WorkloadStore,
 )
 
-__version__ = "7.1.2"
+__version__ = "7.2.0"
 
 __all__ = (
     "PAYMENT_AUTHORIZATION_TYPE",
@@ -61,6 +62,7 @@ __all__ = (
     "StoreOwnerStateConflictError",
     "StoreUnavailableError",
     "WorkloadLifecycleService",
+    "WorkloadPage",
     "WorkloadRateLimitIdentity",
     "WorkloadStore",
     "__version__",

@@ -9,17 +9,27 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from litestar_auth.contrib.organization_admin._controller import (
+        OrganizationAdminAuthorizationPolicy,
         OrganizationAdminControllerConfig,
+        OrganizationAdminOperation,
+        OrganizationGlobalAuthorityPolicy,
         OrganizationInvitationControllerConfig,
+        OrganizationPathAuthorityPolicy,
+        OrganizationRoleDelegationPolicy,
         create_organization_admin_controller,
         create_organization_invitation_controller,
     )
     from litestar_auth.contrib.organization_admin._extension import OrganizationAdminExtension
 
 __all__ = (
+    "OrganizationAdminAuthorizationPolicy",
     "OrganizationAdminControllerConfig",
     "OrganizationAdminExtension",
+    "OrganizationAdminOperation",
+    "OrganizationGlobalAuthorityPolicy",
     "OrganizationInvitationControllerConfig",
+    "OrganizationPathAuthorityPolicy",
+    "OrganizationRoleDelegationPolicy",
     "create_organization_admin_controller",
     "create_organization_invitation_controller",
 )
@@ -34,9 +44,16 @@ def __getattr__(name: str) -> Callable[..., object]:
     Raises:
         AttributeError: If ``name`` is not part of the public package surface.
     """
-    if name == "OrganizationAdminControllerConfig":
+    if name in {
+        "OrganizationAdminAuthorizationPolicy",
+        "OrganizationAdminControllerConfig",
+        "OrganizationAdminOperation",
+        "OrganizationGlobalAuthorityPolicy",
+        "OrganizationPathAuthorityPolicy",
+        "OrganizationRoleDelegationPolicy",
+    }:
         controller_module = import_module("litestar_auth.contrib.organization_admin._controller")
-        return controller_module.OrganizationAdminControllerConfig
+        return getattr(controller_module, name)
     if name == "create_organization_admin_controller":
         controller_module = import_module("litestar_auth.contrib.organization_admin._controller")
         return controller_module.create_organization_admin_controller
