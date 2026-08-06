@@ -49,8 +49,8 @@ class ServiceApplicationStore(Protocol):
         owner_ref: str | None = None,
         environment: str | None = None,
         status: EntityStatus | None = None,
-    ) -> tuple[tuple[ServiceApplication, ...], int]: ...
-
+    ) -> tuple[tuple[ServiceApplication, ...], int]:
+        """Return one page of applications and the matching total count."""
 
 @runtime_checkable
 class MachinePrincipalStore(Protocol):
@@ -73,8 +73,8 @@ class MachinePrincipalStore(Protocol):
         offset: int,
         limit: int,
         status: EntityStatus | None = None,
-    ) -> tuple[tuple[MachinePrincipal, ...], int]: ...
-
+    ) -> tuple[tuple[MachinePrincipal, ...], int]:
+        """Return one page of principals and the matching total count."""
 
 @runtime_checkable
 class MachineCredentialStore(Protocol):
