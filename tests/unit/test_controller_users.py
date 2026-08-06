@@ -31,7 +31,8 @@ from litestar_auth.controllers._users_helpers import (
 )
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
-from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUserError
+from litestar_auth.exceptions import AuthorizationError, ConfigurationError, ErrorCode, UnverifiedUserError
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
@@ -1036,6 +1037,28 @@ def test_create_users_controller_accepts_config_object() -> None:
 
     assert controller.path == "/profile-users"
     assert controller.__module__ == "litestar_auth.controllers.users"
+
+
+def test_create_users_controller_uses_secure_default_admin_guards() -> None:
+    """Bundled user administration remains superuser-only by default."""
+    controller = create_users_controller()
+
+    for handler_name in ("get_user", "update_user", "delete_user", "list_users"):
+        assert getattr(controller, handler_name).guards == [is_superuser, is_human_authenticated]
+
+
+def test_create_users_controller_accepts_custom_admin_guards() -> None:
+    """Applications can authorize bundled user administration through public guards."""
+    controller = create_users_controller(admin_guards=[is_authenticated])
+
+    for handler_name in ("get_user", "update_user", "delete_user", "list_users"):
+        assert getattr(controller, handler_name).guards == [is_authenticated]
+
+
+def test_create_users_controller_rejects_empty_admin_guards() -> None:
+    """An empty custom policy cannot accidentally publish user administration."""
+    with pytest.raises(ConfigurationError, match="admin_guards must not be empty"):
+        create_users_controller(admin_guards=[])
 
 
 def test_create_users_controller_rejects_config_combined_with_keyword_options() -> None:

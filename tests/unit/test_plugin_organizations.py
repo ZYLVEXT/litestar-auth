@@ -30,7 +30,7 @@ from litestar_auth.exceptions import (
     InvalidOrganizationInvitationTokenError,
     OrganizationInvitationEmailMismatchError,
 )
-from litestar_auth.guards import is_human_authenticated, is_superuser
+from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from tests.integration.test_orchestrator import (
@@ -482,6 +482,7 @@ def _organization_app(  # ruff: ignore[too-many-arguments]
     include_organization_invitations: bool = False,
     rate_limit_config: AuthRateLimitConfig | None = None,
     user_manager_class: type[PluginUserManager] = PluginUserManager,
+    authorization_policy: organization_admin_contrib.OrganizationAdminAuthorizationPolicy | None = None,
 ) -> Litestar:
     """Build a plugin app configured for organization route tests.
 
@@ -512,9 +513,17 @@ def _organization_app(  # ruff: ignore[too-many-arguments]
         organization_config=plugin_module.OrganizationConfig(
             enabled=True,
             store_factory=cast("Any", lambda _session: organization_store),
-            include_organization_admin=include_organization_admin,
+            include_organization_admin=include_organization_admin and authorization_policy is None,
             include_organization_invitations=include_organization_invitations,
         ),
+        extensions=(
+            organization_admin_contrib.OrganizationAdminExtension(
+                guards=[is_authenticated, is_human_authenticated],
+                authorization_policy=authorization_policy,
+            ),
+        )
+        if authorization_policy is not None
+        else (),
     )
     return Litestar(plugins=[LitestarAuth(config)])
 
@@ -1159,6 +1168,73 @@ async def test_organization_admin_denies_non_superuser_by_default() -> None:
 
     assert response.status_code == HTTP_FORBIDDEN
     assert invite_response.status_code == HTTP_FORBIDDEN
+
+
+async def test_organization_admin_uses_public_authority_and_role_delegation_policies() -> None:
+    """Application policies can authorize one path while bounding delegated tenant roles."""
+    user = ExampleUser(id=uuid4(), email="tenant-admin@example.com", is_verified=True)
+    organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
+    store = SwitchOrganizationStore(organizations=[organization], memberships=[])
+    strategy = _session_strategy()
+    decisions: list[tuple[str, str]] = []
+
+    async def global_authority(_request: object, operation: str) -> bool:
+        await asyncio.sleep(0)
+        decisions.append(("global", operation))
+        return False
+
+    def path_authority(_request: object, operation: str, organization_id: object) -> bool:
+        decisions.append(("path", operation))
+        return organization_id == organization.id
+
+    def role_delegation(
+        _request: object,
+        operation: str,
+        organization_id: object,
+        _target_ref: str,
+        roles: tuple[str, ...],
+    ) -> bool:
+        decisions.append(("delegation", operation))
+        return organization_id == organization.id and set(roles) <= {"member"}
+
+    app = _organization_app(
+        user=user,
+        strategy=strategy,
+        organization_store=store,
+        authorization_policy=organization_admin_contrib.OrganizationAdminAuthorizationPolicy(
+            global_authority=global_authority,
+            path_authority=path_authority,
+            role_delegation=role_delegation,
+        ),
+    )
+    token = await strategy.write_token(user)
+    headers = {"Cookie": f"litestar_auth={token}"}
+    member_id = uuid4()
+
+    async with AsyncTestClient(app) as client:
+        global_response = await client.post(
+            "/organizations",
+            json={"slug": "other", "name": "Other"},
+            headers=headers,
+        )
+        path_response = await client.get(f"/organizations/{organization.id}", headers=headers)
+        allowed_delegation = await client.post(
+            f"/organizations/{organization.id}/members/{member_id}",
+            json={"roles": ["member"]},
+            headers=headers,
+        )
+        denied_delegation = await client.patch(
+            f"/organizations/{organization.id}/members/{member_id}/roles",
+            json={"roles": ["owner"]},
+            headers=headers,
+        )
+
+    assert global_response.status_code == HTTP_FORBIDDEN
+    assert path_response.status_code == HTTP_OK
+    assert allowed_delegation.status_code == HTTP_CREATED
+    assert denied_delegation.status_code == HTTP_FORBIDDEN
+    assert ("path", "organization.read") in decisions
+    assert ("delegation", "membership.set_roles") in decisions
 
 
 async def test_organization_admin_failures_are_non_enumerating_and_stable() -> None:

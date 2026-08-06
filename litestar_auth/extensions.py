@@ -53,6 +53,11 @@ if TYPE_CHECKING:
         create_users_controller,
         create_verify_controller,
     )
+    from litestar_auth.guards import (
+        RecentAuthenticationRequirement,
+        RecentAuthenticationVerifier,
+        requires_recent_authentication,
+    )
     from litestar_auth.oauth import ProviderOAuthControllerConfig, create_provider_oauth_controller
 
 # Litestar 2.24 deprecates inferred dependencies: handler parameters that consume
@@ -91,6 +96,8 @@ __all__ = (
     "OrganizationInvitationControllerConfig",
     "OrganizationStoreDependency",
     "ProviderOAuthControllerConfig",
+    "RecentAuthenticationRequirement",
+    "RecentAuthenticationVerifier",
     "RegisterControllerConfig",
     "ResolvedPermissionsDependency",
     "RoleAdminControllerConfig",
@@ -112,6 +119,7 @@ __all__ = (
     "create_totp_controller",
     "create_users_controller",
     "create_verify_controller",
+    "requires_recent_authentication",
 )
 
 _PUBLIC_EXPORTS = {
@@ -121,6 +129,8 @@ _PUBLIC_EXPORTS = {
     "OrganizationAdminControllerConfig": "litestar_auth.contrib.organization_admin",
     "OrganizationInvitationControllerConfig": "litestar_auth.contrib.organization_admin",
     "ProviderOAuthControllerConfig": "litestar_auth.oauth",
+    "RecentAuthenticationRequirement": "litestar_auth.guards",
+    "RecentAuthenticationVerifier": "litestar_auth.guards",
     "RegisterControllerConfig": "litestar_auth.controllers",
     "RoleAdminControllerConfig": "litestar_auth.contrib.role_admin",
     "SessionDevicesControllerConfig": "litestar_auth.controllers",
@@ -140,6 +150,7 @@ _PUBLIC_EXPORTS = {
     "create_totp_controller": "litestar_auth.controllers",
     "create_users_controller": "litestar_auth.controllers",
     "create_verify_controller": "litestar_auth.controllers",
+    "requires_recent_authentication": "litestar_auth.guards",
 }
 
 

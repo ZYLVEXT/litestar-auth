@@ -47,7 +47,13 @@ from litestar_auth.controllers._utils import (
     _to_user_schema,
 )
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
-from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.exceptions import (
+    AuthorizationError,
+    ConfigurationError,
+    ErrorCode,
+    InvalidPasswordError,
+    UserAlreadyExistsError,
+)
 from litestar_auth.guards import is_authenticated, is_human_authenticated, is_superuser
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
 from litestar_auth.types import RoleCapableUserProtocol
@@ -56,6 +62,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from litestar.openapi.spec import SecurityRequirement
+    from litestar.types import Guard
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler, RequestHandler
     from litestar_auth.ratelimit import AuthRateLimitConfig
@@ -127,6 +134,7 @@ class UsersControllerConfig[ID]:
     unsafe_testing: bool = False
     security: Sequence[SecurityRequirement] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
+    admin_guards: Sequence[Guard] | None = None
 
 
 class UsersControllerOptions[ID](TypedDict, total=False):
@@ -144,6 +152,7 @@ class UsersControllerOptions[ID](TypedDict, total=False):
     unsafe_testing: bool
     security: Sequence[SecurityRequirement] | None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
+    admin_guards: Sequence[Guard] | None
 
 
 @dataclass(slots=True)
@@ -163,6 +172,24 @@ class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID]:
     change_password_rate_limit_reset: RequestHandler
     unsafe_testing: bool
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
+    admin_guards: tuple[Guard, ...] = (is_superuser, is_human_authenticated)
+
+
+def _resolve_users_admin_guards(settings: UsersControllerConfig[Any]) -> tuple[Guard, ...]:
+    """Resolve user-administration guards with a secure superuser-only default.
+
+    Returns:
+        The default or explicitly configured non-empty guard sequence.
+
+    Raises:
+        ConfigurationError: If an explicitly supplied guard sequence is empty.
+    """
+    if settings.admin_guards is None:
+        return (is_superuser, is_human_authenticated)
+    if not settings.admin_guards:
+        msg = "create_users_controller admin_guards must not be empty."
+        raise ConfigurationError(msg)
+    return tuple(settings.admin_guards)
 
 
 async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID](
@@ -730,7 +757,7 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @get("/{user_id:str}", guards=[is_superuser, is_human_authenticated])
+    @get("/{user_id:str}", guards=list(ctx.admin_guards))
     async def get_user(
         self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
@@ -754,7 +781,7 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @patch("/{user_id:str}", guards=[is_superuser, is_human_authenticated])
+    @patch("/{user_id:str}", guards=list(ctx.admin_guards))
     async def update_user(
         self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
@@ -782,7 +809,7 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @delete("/{user_id:str}", guards=[is_superuser, is_human_authenticated], status_code=200)
+    @delete("/{user_id:str}", guards=list(ctx.admin_guards), status_code=200)
     async def delete_user(
         self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
@@ -830,7 +857,7 @@ def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
         signature=signature,
         annotations=_list_users_handler_annotations(max_limit=ctx.max_limit),
     )
-    return _finalize_route_handler(get(guards=[is_superuser, is_human_authenticated])(list_users))
+    return _finalize_route_handler(get(guards=list(ctx.admin_guards))(list_users))
 
 
 def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
@@ -945,6 +972,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
         change_password_rate_limit_reset=change_password_rate_limit_reset,
         unsafe_testing=settings.unsafe_testing,
         totp_stepup_policy=dict(settings.totp_stepup_policy),
+        admin_guards=_resolve_users_admin_guards(settings),
     )
     controller_cls = _define_users_controller_class_di(ctx)
     controller_cls.path = settings.path

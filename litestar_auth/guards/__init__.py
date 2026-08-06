@@ -22,8 +22,15 @@ from litestar_auth.guards._organization_guards import (
     requires_organization_membership,
 )
 from litestar_auth.guards._permission_guards import has_all_permissions, has_any_permission, has_permission
+from litestar_auth.guards._recent_authentication import (
+    RecentAuthenticationRequirement,
+    RecentAuthenticationVerifier,
+    requires_recent_authentication,
+)
 
 __all__ = (
+    "RecentAuthenticationRequirement",
+    "RecentAuthenticationVerifier",
     "has_all_permissions",
     "has_all_roles",
     "has_any_permission",
@@ -37,4 +44,5 @@ __all__ = (
     "is_superuser",
     "is_verified",
     "requires_organization_membership",
+    "requires_recent_authentication",
 )

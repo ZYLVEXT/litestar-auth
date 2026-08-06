@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
     from litestar.types import Guard
 
+    from litestar_auth.contrib.organization_admin._controller import OrganizationAdminAuthorizationPolicy
     from litestar_auth.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
 
 
@@ -23,6 +24,7 @@ class OrganizationAdminExtension:
     enabled: bool = True
     route_prefix: str = "organizations"
     guards: Sequence[Guard] | None = None
+    authorization_policy: OrganizationAdminAuthorizationPolicy | None = None
     include_invitations: bool = False
     invitation_path: str = "/auth"
     _include_admin_controller: bool = True
@@ -56,6 +58,7 @@ class OrganizationAdminExtension:
     def register(self, context: AuthExtensionRegistrationContext) -> None:
         """Contribute generated organization-admin controllers through the extension context."""
         from litestar_auth.contrib.organization_admin import (  # ruff: ignore[import-outside-top-level]
+            OrganizationAdminAuthorizationPolicy,
             OrganizationAdminControllerConfig,
             OrganizationInvitationControllerConfig,
             create_organization_admin_controller,
@@ -68,6 +71,7 @@ class OrganizationAdminExtension:
                     config=context.config,
                     route_prefix=self.route_prefix,
                     guards=self.guards,
+                    authorization_policy=self.authorization_policy or OrganizationAdminAuthorizationPolicy(),
                 ),
             )
             context.add_controller(self._prepare_controller(context, controller))
