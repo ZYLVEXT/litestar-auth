@@ -52,6 +52,12 @@ integrations. Inventory those separately.
 The workload SQL is a reference schema, not a migration runner. The application owns its Alembic
 or equivalent migration and transaction boundary.
 
+Management inventories should use `WorkloadLifecycleService.list_applications()` and
+`list_principals()` rather than reading reference ORM rows. Both return a typed `WorkloadPage`, use
+stable identifier ordering, accept bounded `limit`/`offset` pagination, and support only explicit
+safe filters. The SQLAlchemy store maps database failures to `StoreUnavailableError`; callers must
+fail the administrative request closed rather than present a partial inventory.
+
 ## 3. Replace the human backend
 
 Configure exactly one `CookieTransport` with `DatabaseTokenStrategy` or `RedisTokenStrategy`.

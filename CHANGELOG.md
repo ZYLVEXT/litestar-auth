@@ -1,3 +1,29 @@
+## 7.2.0 (2026-08-06)
+
+### Added
+
+- Added `requires_recent_authentication()` with a bounded
+  `RecentAuthenticationRequirement` so applications can compose recent-authentication assurance on
+  sensitive routes through an owned verifier. Anonymous or non-human callers, a false decision, and
+  verifier exceptions fail closed; the guard does not infer phishing resistance from TOTP or
+  unverified OAuth claims.
+- Added `LitestarAuthConfig.users_admin_guards` and `UsersControllerConfig.admin_guards` so reviewed
+  deployments can replace the default superuser-plus-human user-administration guards. An explicitly
+  empty sequence is rejected so customization cannot publish the administrative surface by accident.
+- Added `OrganizationAdminAuthorizationPolicy` for organization administration, with optional global,
+  path, and role-delegation callbacks that receive bounded operation names. Denials return 403 before
+  mutation; store-level membership and last-privileged-member invariants still apply.
+- Added `WorkloadLifecycleService.list_applications()` and `list_principals()` returning a typed
+  `WorkloadPage` with stable identifier ordering, bounded pagination, and explicit safe filters. The
+  SQLAlchemy store maps inventory lookup failures to `StoreUnavailableError`.
+
+### Security
+
+- Kept organization-admin and user-admin routes on secure defaults while allowing only non-empty,
+  application-owned authorization customization for tenant and platform administration.
+- Documented the recent-authentication composition contract and the fail-closed workload inventory
+  path for management UIs.
+
 ## 7.1.2 (2026-08-02)
 
 ### CI

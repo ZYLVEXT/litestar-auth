@@ -2894,6 +2894,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "JWTDenylistStore": JWTDenylistStore,
             "JWTReplayStore": JWTReplayStore,
             "SecurityObserver": SecurityObserver,
+            "Guard": Any,
             "msgspec": msgspec,
         },
     )

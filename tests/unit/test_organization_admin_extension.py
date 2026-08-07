@@ -94,9 +94,14 @@ def _minimal_config(
 def test_organization_admin_package_exports_extension_lazily() -> None:
     """The contrib organization-admin package exposes the extension without widening unrelated surface."""
     assert organization_admin_module.__all__ == (
+        "OrganizationAdminAuthorizationPolicy",
         "OrganizationAdminControllerConfig",
         "OrganizationAdminExtension",
+        "OrganizationAdminOperation",
+        "OrganizationGlobalAuthorityPolicy",
         "OrganizationInvitationControllerConfig",
+        "OrganizationPathAuthorityPolicy",
+        "OrganizationRoleDelegationPolicy",
         "create_organization_admin_controller",
         "create_organization_invitation_controller",
     )

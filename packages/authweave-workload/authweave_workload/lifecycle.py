@@ -20,6 +20,7 @@ from authweave_workload.models import (
     MachineCredential,
     MachinePrincipal,
     ServiceApplication,
+    WorkloadPage,
     freeze_metadata,
 )
 from authweave_workload.stores import StoreConflictError, StoreOwnerStateConflictError
@@ -29,11 +30,18 @@ _APPLICATION_DISABLED = "application is disabled"
 _CREDENTIAL_ENVIRONMENT_MISMATCH = "credential environment does not match its application"
 _CREDENTIAL_OWNER_DISABLED = "credential owner is disabled"
 _EMPTY_METADATA: Mapping[str, str] = MappingProxyType({})
+_MAX_QUERY_PAGE_SIZE = 100
 
 if TYPE_CHECKING:
     from authweave_workload.stores import WorkloadStore
 
 type EventRecorder = Callable[[SecurityEvent], object]
+
+
+def _validate_query_page(*, offset: int, limit: int) -> None:
+    if offset < 0 or limit < 1 or limit > _MAX_QUERY_PAGE_SIZE:
+        msg = f"offset must be non-negative and limit must be between 1 and {_MAX_QUERY_PAGE_SIZE}"
+        raise ValueError(msg)
 
 
 class LifecycleConflictError(Exception):
@@ -68,6 +76,44 @@ class WorkloadLifecycleService:
         self.event_recorder = event_recorder
         self.active_credential_limit = active_credential_limit
         self.maximum_rotation_lead = maximum_rotation_lead
+
+    async def list_applications(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        owner_ref: str | None = None,
+        environment: str | None = None,
+        status: EntityStatus | None = None,
+    ) -> WorkloadPage[ServiceApplication]:
+        """Return a bounded deterministic application inventory page."""
+        _validate_query_page(offset=offset, limit=limit)
+        items, total = await self.store.list_applications(
+            offset=offset,
+            limit=limit,
+            owner_ref=owner_ref,
+            environment=environment,
+            status=status,
+        )
+        return WorkloadPage(items=items, total=total, limit=limit, offset=offset)
+
+    async def list_principals(
+        self,
+        *,
+        application_id: str,
+        offset: int = 0,
+        limit: int = 50,
+        status: EntityStatus | None = None,
+    ) -> WorkloadPage[MachinePrincipal]:
+        """Return a bounded deterministic principal inventory page for one application."""
+        _validate_query_page(offset=offset, limit=limit)
+        items, total = await self.store.list_principals(
+            application_id=application_id,
+            offset=offset,
+            limit=limit,
+            status=status,
+        )
+        return WorkloadPage(items=items, total=total, limit=limit, offset=offset)
 
     async def create_application(
         self,

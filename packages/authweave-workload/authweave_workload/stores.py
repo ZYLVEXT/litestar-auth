@@ -41,6 +41,17 @@ class ServiceApplicationStore(Protocol):
 
     async def set_application_metadata(self, application_id: str, metadata: Mapping[str, str]) -> None: ...
 
+    async def list_applications(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        owner_ref: str | None = None,
+        environment: str | None = None,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[ServiceApplication, ...], int]:
+        """Return one page of applications and the matching total count."""
+
 
 @runtime_checkable
 class MachinePrincipalStore(Protocol):
@@ -55,6 +66,16 @@ class MachinePrincipalStore(Protocol):
     async def set_principal_status(self, principal_id: str, status: EntityStatus) -> None: ...
 
     async def set_principal_metadata(self, principal_id: str, metadata: Mapping[str, str]) -> None: ...
+
+    async def list_principals(
+        self,
+        *,
+        application_id: str,
+        offset: int,
+        limit: int,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[MachinePrincipal, ...], int]:
+        """Return one page of principals and the matching total count."""
 
 
 @runtime_checkable

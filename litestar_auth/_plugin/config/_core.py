@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     import msgspec
     from authweave_core import SecurityObserver
     from litestar.openapi.spec import SecurityRequirement, SecurityScheme
+    from litestar.types import Guard
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy._jwt_denylist import JWTReplayStore
@@ -153,6 +154,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     include_verify: bool = True
     include_reset_password: bool = True
     include_users: bool = False
+    users_admin_guards: Sequence[Guard] | None = None
     include_session_devices: bool = False
     include_openapi_security: bool = True
     enable_refresh: bool = False

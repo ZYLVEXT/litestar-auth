@@ -685,6 +685,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "unsafe_testing": False,
             "security": None,
             "totp_stepup_policy": {},
+            "admin_guards": None,
             "user_read_schema": _ReadSchema,
             "user_update_schema": _UpdateSchema,
         },

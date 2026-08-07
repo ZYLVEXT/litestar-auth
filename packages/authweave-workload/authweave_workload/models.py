@@ -181,6 +181,22 @@ class ResolvedMachineIdentity:
     credential: MachineCredential
 
 
+@dataclass(frozen=True, slots=True)
+class WorkloadPage[PAGE_ITEM]:
+    """One deterministic bounded page of workload inventory results."""
+
+    items: tuple[PAGE_ITEM, ...]
+    total: int
+    limit: int
+    offset: int
+
+    def __post_init__(self) -> None:
+        """Reject internally inconsistent page metadata."""
+        if self.total < 0 or self.limit < 1 or self.offset < 0 or len(self.items) > self.limit:
+            msg = "workload page metadata is invalid"
+            raise ValueError(msg)
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class CertificateMetadata:
     """Opaque public-certificate facts produced by the X.509 validator."""
@@ -242,5 +258,6 @@ __all__ = (
     "MachinePrincipal",
     "ResolvedMachineIdentity",
     "ServiceApplication",
+    "WorkloadPage",
     "freeze_metadata",
 )

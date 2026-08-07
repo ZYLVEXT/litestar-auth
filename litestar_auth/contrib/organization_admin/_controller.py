@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import inspect
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, TypedDict, Unpack, cast, overload
 
@@ -70,6 +71,34 @@ _UserIdQuery = Annotated[str, QueryParameter(name="user_id")]
 _OrganizationStoreDep = NamedDependency[BaseOrganizationStore[Any, Any, Any, Any]]
 _UserManagerDep = NamedDependency[object]
 type IdParser[ID] = Callable[[str], ID]
+type OrganizationAdminOperation = str
+type OrganizationGlobalAuthorityPolicy = Callable[
+    [Request[Any, Any, Any], OrganizationAdminOperation],
+    bool | Awaitable[bool],
+]
+type OrganizationPathAuthorityPolicy = Callable[
+    [Request[Any, Any, Any], OrganizationAdminOperation, object],
+    bool | Awaitable[bool],
+]
+type OrganizationRoleDelegationPolicy = Callable[
+    [Request[Any, Any, Any], OrganizationAdminOperation, object, str, tuple[str, ...]],
+    bool | Awaitable[bool],
+]
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationAdminAuthorizationPolicy:
+    """Optional application-owned authorization callbacks for organization administration.
+
+    Secure defaults retain global-superuser catalog access, global-superuser or privileged-member
+    path access, and the existing last-privileged-member invariants. Configure
+    ``role_delegation`` when tenant administrators must be prevented from granting roles outside
+    their own delegated authority.
+    """
+
+    global_authority: OrganizationGlobalAuthorityPolicy | None = None
+    path_authority: OrganizationPathAuthorityPolicy | None = None
+    role_delegation: OrganizationRoleDelegationPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +109,7 @@ class OrganizationAdminControllerConfig[ID]:
     id_parser: IdParser[ID] | None = None
     route_prefix: str = "organizations"
     guards: Sequence[Guard] | None = None
+    authorization_policy: OrganizationAdminAuthorizationPolicy = OrganizationAdminAuthorizationPolicy()
 
 
 class OrganizationAdminControllerOptions[ID](TypedDict, total=False):
@@ -89,6 +119,7 @@ class OrganizationAdminControllerOptions[ID](TypedDict, total=False):
     id_parser: IdParser[ID] | None
     route_prefix: str
     guards: Sequence[Guard] | None
+    authorization_policy: OrganizationAdminAuthorizationPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +128,7 @@ class _OrganizationAdminControllerContext[ID]:
     organization_page_schema_type: type[msgspec.Struct]
     membership_page_schema_type: type[msgspec.Struct]
     invitation_page_schema_type: type[msgspec.Struct]
+    authorization_policy: OrganizationAdminAuthorizationPolicy
 
 
 class _OrganizationAdminControllerBase(Controller):
@@ -316,7 +348,28 @@ _PATH_ORGANIZATION_AUTHORITY_DENIED_DETAIL = (
 _GLOBAL_ORGANIZATION_CATALOG_DENIED_DETAIL = "Global organization catalog administration is required for this route."
 
 
-def _require_global_organization_catalog_admin(request: Request[Any, Any, Any]) -> None:
+async def _policy_decision(*, result: bool | Awaitable[bool]) -> bool:
+    resolved = await result if inspect.isawaitable(result) else result
+    return resolved is True
+
+
+async def _has_global_organization_authority(
+    *,
+    request: Request[Any, Any, Any],
+    operation: OrganizationAdminOperation,
+    policy: OrganizationAdminAuthorizationPolicy,
+) -> bool:
+    if policy.global_authority is None:
+        return is_global_superuser(request)
+    return await _policy_decision(result=policy.global_authority(request, operation))
+
+
+async def _require_global_organization_catalog_admin(
+    *,
+    request: Request[Any, Any, Any],
+    operation: OrganizationAdminOperation,
+    policy: OrganizationAdminAuthorizationPolicy,
+) -> None:
     """Fail closed on org-less catalog routes unless the caller is a global superuser.
 
     Org-scoped guards such as ``has_organization_role`` authorize the tenant-resolved current
@@ -326,7 +379,7 @@ def _require_global_organization_catalog_admin(request: Request[Any, Any, Any]) 
     Raises:
         PermissionDeniedException: When the caller is not a global superuser.
     """
-    if is_global_superuser(request):
+    if await _has_global_organization_authority(request=request, operation=operation, policy=policy):
         return
     raise PermissionDeniedException(
         detail=_GLOBAL_ORGANIZATION_CATALOG_DENIED_DETAIL,
@@ -339,6 +392,8 @@ async def _require_path_organization_authority(
     request: Request[Any, Any, Any],
     organization_id: object,
     admin: SQLAlchemyOrganizationAdmin[Any, Any, Any, Any],
+    operation: OrganizationAdminOperation,
+    policy: OrganizationAdminAuthorizationPolicy,
 ) -> None:
     """Fail closed unless the caller has authority over the *path* organization.
 
@@ -354,8 +409,15 @@ async def _require_path_organization_authority(
     """
     # Global superusers administer every organization and hold no per-organization
     # membership, so the default ``is_superuser`` admin flow is preserved unchanged.
-    if is_global_superuser(request):
+    if await _has_global_organization_authority(request=request, operation=operation, policy=policy):
         return
+    if policy.path_authority is not None:
+        if await _policy_decision(result=policy.path_authority(request, operation, organization_id)):
+            return
+        raise PermissionDeniedException(
+            detail=_PATH_ORGANIZATION_AUTHORITY_DENIED_DETAIL,
+            extra={"code": ErrorCode.AUTHORIZATION_DENIED},
+        )
     user_id = getattr(request.user, "id", None)
     if user_id is not None and await admin.caller_has_organization_authority(
         organization_id=organization_id,
@@ -364,6 +426,32 @@ async def _require_path_organization_authority(
         return
     raise PermissionDeniedException(
         detail=_PATH_ORGANIZATION_AUTHORITY_DENIED_DETAIL,
+        extra={"code": ErrorCode.AUTHORIZATION_DENIED},
+    )
+
+
+async def _require_role_delegation_authority(  # ruff: ignore[too-many-arguments]
+    *,
+    request: Request[Any, Any, Any],
+    operation: OrganizationAdminOperation,
+    organization_id: object,
+    target_ref: str,
+    roles: Sequence[str],
+    policy: OrganizationAdminAuthorizationPolicy,
+) -> None:
+    """Fail closed when an application-owned role-delegation policy denies the grant.
+
+    Raises:
+        PermissionDeniedException: When the configured policy denies the requested roles.
+    """
+    if policy.role_delegation is None:
+        return
+    if await _policy_decision(
+        result=policy.role_delegation(request, operation, organization_id, target_ref, tuple(roles)),
+    ):
+        return
+    raise PermissionDeniedException(
+        detail="The authenticated user cannot delegate the requested organization roles.",
         extra={"code": ErrorCode.AUTHORIZATION_DENIED},
     )
 
@@ -386,8 +474,12 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
             limit: _LimitQuery = _DEFAULT_LIMIT,
             offset: _OffsetQuery = 0,
         ) -> msgspec.Struct:
-            _require_global_organization_catalog_admin(request)
             context = _context(self)
+            await _require_global_organization_catalog_admin(
+                request=request,
+                operation="organization.list_for_user",
+                policy=context.authorization_policy,
+            )
             parsed_user_id = _parse_user_id(context, user_id)
             organizations, total = await _admin(litestar_auth_organization_store).list_organizations_for_user(
                 parsed_user_id,
@@ -402,13 +494,18 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
             )
 
         @post(status_code=201, exception_handlers=exception_handlers)
-        async def create_organization(  # ruff: ignore[no-self-use]
+        async def create_organization(
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
             litestar_auth_organization_store: _OrganizationStoreDep,
         ) -> OrganizationRead:
-            _require_global_organization_catalog_admin(request)
+            context = _context(self)
+            await _require_global_organization_catalog_admin(
+                request=request,
+                operation="organization.create",
+                policy=context.authorization_policy,
+            )
             payload = cast("OrganizationCreate", data)
             try:
                 organization = await _admin(litestar_auth_organization_store).create_organization(
@@ -432,6 +529,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="organization.read",
+                policy=context.authorization_policy,
             )
             try:
                 organization = await _admin(litestar_auth_organization_store).get_organization(parsed_organization_id)
@@ -454,6 +553,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="organization.update",
+                policy=context.authorization_policy,
             )
             try:
                 organization = await _admin(litestar_auth_organization_store).update_organization(
@@ -478,6 +579,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="organization.delete",
+                policy=context.authorization_policy,
             )
             try:
                 await _admin(litestar_auth_organization_store).delete_organization(parsed_organization_id)
@@ -500,8 +603,18 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="membership.add",
+                policy=context.authorization_policy,
             )
             parsed_user_id = _parse_user_id(context, user_id)
+            await _require_role_delegation_authority(
+                request=request,
+                operation="membership.add",
+                organization_id=parsed_organization_id,
+                target_ref=str(parsed_user_id),
+                roles=payload.roles,
+                policy=context.authorization_policy,
+            )
             try:
                 membership = await _admin(litestar_auth_organization_store).add_member(
                     organization_id=parsed_organization_id,
@@ -528,6 +641,16 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="invitation.create",
+                policy=context.authorization_policy,
+            )
+            await _require_role_delegation_authority(
+                request=request,
+                operation="invitation.create",
+                organization_id=parsed_organization_id,
+                target_ref=payload.invited_email,
+                roles=payload.roles,
+                policy=context.authorization_policy,
             )
             try:
                 issue = await _admin(litestar_auth_organization_store).invite_member(
@@ -555,6 +678,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="invitation.list",
+                policy=context.authorization_policy,
             )
             try:
                 invitations, total = await _admin(litestar_auth_organization_store).list_pending_invitations(
@@ -589,6 +714,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=getattr(invitation, "organization_id", None),
                 admin=admin,
+                operation="invitation.revoke",
+                policy=context.authorization_policy,
             )
             try:
                 await admin.revoke_invitation(parsed_invitation_id)
@@ -610,6 +737,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="membership.list",
+                policy=context.authorization_policy,
             )
             try:
                 memberships, total = await _admin(litestar_auth_organization_store).list_members(
@@ -646,8 +775,18 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="membership.set_roles",
+                policy=context.authorization_policy,
             )
             parsed_user_id = _parse_user_id(context, user_id)
+            await _require_role_delegation_authority(
+                request=request,
+                operation="membership.set_roles",
+                organization_id=parsed_organization_id,
+                target_ref=str(parsed_user_id),
+                roles=payload.roles,
+                policy=context.authorization_policy,
+            )
             try:
                 membership = await _admin(litestar_auth_organization_store).set_member_roles(
                     organization_id=parsed_organization_id,
@@ -672,6 +811,8 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
                 request=request,
                 organization_id=parsed_organization_id,
                 admin=_admin(litestar_auth_organization_store),
+                operation="membership.remove",
+                policy=context.authorization_policy,
             )
             parsed_user_id = _parse_user_id(context, user_id)
             try:
@@ -700,6 +841,7 @@ def _finalize_controller[ID](
         organization_page_schema_type=_create_organization_page_schema_type(),
         membership_page_schema_type=_create_membership_page_schema_type(),
         invitation_page_schema_type=_create_invitation_page_schema_type(),
+        authorization_policy=settings.authorization_policy,
     )
     controller_for_body_config = cast("Any", controller_cls)
     _configure_request_body_handler(controller_for_body_config.create_organization, schema=OrganizationCreate)
@@ -885,8 +1027,13 @@ def create_organization_admin_controller[ID](
 
 
 __all__ = (
+    "OrganizationAdminAuthorizationPolicy",
     "OrganizationAdminControllerConfig",
+    "OrganizationAdminOperation",
+    "OrganizationGlobalAuthorityPolicy",
     "OrganizationInvitationControllerConfig",
+    "OrganizationPathAuthorityPolicy",
+    "OrganizationRoleDelegationPolicy",
     "create_organization_admin_controller",
     "create_organization_invitation_controller",
 )

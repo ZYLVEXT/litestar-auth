@@ -124,6 +124,8 @@ PUBLIC_EXTENSION_EXPORTS = (
     "OrganizationInvitationControllerConfig",
     "OrganizationStoreDependency",
     "ProviderOAuthControllerConfig",
+    "RecentAuthenticationRequirement",
+    "RecentAuthenticationVerifier",
     "RegisterControllerConfig",
     "ResolvedPermissionsDependency",
     "RoleAdminControllerConfig",
@@ -145,6 +147,7 @@ PUBLIC_EXTENSION_EXPORTS = (
     "create_totp_controller",
     "create_users_controller",
     "create_verify_controller",
+    "requires_recent_authentication",
 )
 VERIFICATION_SECRET = "0123456789abcdef" * 4
 RESET_PASSWORD_SECRET = "fedcba9876543210" * 4

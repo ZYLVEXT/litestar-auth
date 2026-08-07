@@ -33,6 +33,7 @@ from authweave_workload.models import (
     MachinePrincipal,
     ResolvedMachineIdentity,
     ServiceApplication,
+    WorkloadPage,
     _certificate_metadata,
 )
 
@@ -87,6 +88,25 @@ class MemoryStore:
     async def set_application_metadata(self, application_id: str, metadata: Mapping[str, str]) -> None:
         self.applications[application_id] = replace(self.applications[application_id], metadata=metadata)
 
+    async def list_applications(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        owner_ref: str | None = None,
+        environment: str | None = None,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[ServiceApplication, ...], int]:
+        values = sorted(self.applications.values(), key=lambda item: item.id)
+        values = [
+            item
+            for item in values
+            if (owner_ref is None or item.owner_ref == owner_ref)
+            and (environment is None or item.environment == environment)
+            and (status is None or item.status is status)
+        ]
+        return tuple(values[offset : offset + limit]), len(values)
+
     async def create_principal(self, principal: MachinePrincipal) -> None:
         self.principals[principal.id] = principal
 
@@ -98,6 +118,24 @@ class MemoryStore:
 
     async def set_principal_metadata(self, principal_id: str, metadata: Mapping[str, str]) -> None:
         self.principals[principal_id] = replace(self.principals[principal_id], metadata=metadata)
+
+    async def list_principals(
+        self,
+        *,
+        application_id: str,
+        offset: int,
+        limit: int,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[MachinePrincipal, ...], int]:
+        values = sorted(
+            (
+                item
+                for item in self.principals.values()
+                if item.application_id == application_id and (status is None or item.status is status)
+            ),
+            key=lambda item: item.id,
+        )
+        return tuple(values[offset : offset + limit]), len(values)
 
     async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None:
         active = sum(
@@ -188,6 +226,70 @@ class MemoryStore:
 
 
 pytestmark = pytest.mark.unit
+
+
+async def test_lifecycle_lists_bounded_filtered_application_and_principal_pages() -> None:
+    store = MemoryStore()
+    lifecycle = _service(store, issuer="urn:test:workloads")
+    for application_id, owner_ref in (("alpha", "team-a"), ("beta", "team-b"), ("gamma", "team-a")):
+        await lifecycle.create_application(
+            application_id=application_id,
+            environment="sandbox",
+            owner_ref=owner_ref,
+        )
+    await lifecycle.create_principal(
+        principal_id="alpha-b",
+        application_id="alpha",
+        subject="alpha-b",
+        kind="service",
+    )
+    await lifecycle.create_principal(
+        principal_id="alpha-a",
+        application_id="alpha",
+        subject="alpha-a",
+        kind="workload",
+    )
+    await lifecycle.create_principal(
+        principal_id="beta-a",
+        application_id="beta",
+        subject="beta-a",
+        kind="agent",
+    )
+
+    applications = await lifecycle.list_applications(owner_ref="team-a", offset=1, limit=1)
+    principals = await lifecycle.list_principals(application_id="alpha", limit=1)
+
+    assert [item.id for item in applications.items] == ["gamma"]
+    assert (applications.total, applications.limit, applications.offset) == (2, 1, 1)
+    assert [item.id for item in principals.items] == ["alpha-a"]
+    assert (principals.total, principals.limit, principals.offset) == (2, 1, 0)
+
+
+@pytest.mark.parametrize(("offset", "limit"), [(-1, 1), (0, 0), (0, 101)])
+async def test_lifecycle_rejects_unbounded_inventory_pages(offset: int, limit: int) -> None:
+    lifecycle = _service(MemoryStore(), issuer="urn:test:workloads")
+
+    with pytest.raises(ValueError, match="offset must be non-negative"):
+        await lifecycle.list_applications(offset=offset, limit=limit)
+
+
+@pytest.mark.parametrize(
+    ("total", "limit", "offset", "items"),
+    [
+        (-1, 1, 0, ()),
+        (0, 0, 0, ()),
+        (0, 1, -1, ()),
+        (0, 1, 0, ("too-many", "items")),
+    ],
+)
+def test_workload_page_rejects_inconsistent_metadata(
+    total: int,
+    limit: int,
+    offset: int,
+    items: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="workload page metadata is invalid"):
+        WorkloadPage(items=items, total=total, limit=limit, offset=offset)
 
 
 async def test_lifecycle_and_direct_mtls_are_principal_neutral() -> None:

@@ -136,6 +136,38 @@ class SQLAlchemyWorkloadStore:
         row = await self.session.get(ServiceApplicationRow, application_id)
         return None if row is None else _application(row)
 
+    async def list_applications(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        owner_ref: str | None = None,
+        environment: str | None = None,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[ServiceApplication, ...], int]:
+        """Return a deterministic filtered page and total application count."""
+        filters = []
+        if owner_ref is not None:
+            filters.append(ServiceApplicationRow.owner_ref == owner_ref)
+        if environment is not None:
+            filters.append(ServiceApplicationRow.environment == environment)
+        if status is not None:
+            filters.append(ServiceApplicationRow.status == status.value)
+        try:
+            total = await self.session.scalar(select(func.count()).select_from(ServiceApplicationRow).where(*filters))
+            rows = (
+                await self.session.scalars(
+                    select(ServiceApplicationRow)
+                    .where(*filters)
+                    .order_by(ServiceApplicationRow.id)
+                    .offset(offset)
+                    .limit(limit),
+                )
+            ).all()
+        except SQLAlchemyError as exc:
+            raise StoreUnavailableError("workload application inventory lookup failed") from exc
+        return tuple(_application(row) for row in rows), int(total or 0)
+
     async def set_application_status(self, application_id: str, status: EntityStatus) -> None:
         """Update only application status, without replaying a stale aggregate."""
         result = cast(
@@ -181,6 +213,33 @@ class SQLAlchemyWorkloadStore:
         """Return one principal by public ID."""
         row = await self.session.get(MachinePrincipalRow, principal_id)
         return None if row is None else _principal(row)
+
+    async def list_principals(
+        self,
+        *,
+        application_id: str,
+        offset: int,
+        limit: int,
+        status: EntityStatus | None = None,
+    ) -> tuple[tuple[MachinePrincipal, ...], int]:
+        """Return a deterministic filtered page and total principal count."""
+        filters = [MachinePrincipalRow.application_id == application_id]
+        if status is not None:
+            filters.append(MachinePrincipalRow.status == status.value)
+        try:
+            total = await self.session.scalar(select(func.count()).select_from(MachinePrincipalRow).where(*filters))
+            rows = (
+                await self.session.scalars(
+                    select(MachinePrincipalRow)
+                    .where(*filters)
+                    .order_by(MachinePrincipalRow.id)
+                    .offset(offset)
+                    .limit(limit),
+                )
+            ).all()
+        except SQLAlchemyError as exc:
+            raise StoreUnavailableError("workload principal inventory lookup failed") from exc
+        return tuple(_principal(row) for row in rows), int(total or 0)
 
     async def set_principal_status(self, principal_id: str, status: EntityStatus) -> None:
         """Update only principal status, without replaying a stale aggregate."""
