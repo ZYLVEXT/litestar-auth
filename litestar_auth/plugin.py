@@ -386,6 +386,11 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 tenant_resolver=(
                     self.config.organization_config.tenant_resolver if self.config.organization_config.enabled else None
                 ),
+                elevated_membership_resolver=(
+                    self.config.organization_config.elevated_membership_resolver
+                    if self.config.organization_config.enabled
+                    else None
+                ),
             ),
         )
         if self.config.middleware_hook is not None:

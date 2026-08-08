@@ -1,3 +1,18 @@
+## Unreleased
+
+### Added
+
+- Added `OrganizationConfig.elevated_membership_resolver` so support and operations staff can reach
+  an organization they are not a member of without the application overriding
+  `get_membership()` to return a row that does not exist. The resolver runs only after the store
+  reports no membership, so it can never widen a member's own authority, and it is unset by default,
+  leaving the unconfigured path closed. Which principals qualify, and under which organization roles,
+  stays application-owned authorization policy.
+- Added `CurrentOrganizationContext.elevated` and `current_organization_is_elevated()` so audit can
+  attribute a request granted this way. Guards treat both the same — an elevated principal holds
+  exactly the roles the resolver returned — because least privilege belongs in that return value, not
+  in a second guard path.
+
 ## 7.2.0 (2026-08-06)
 
 ### Added

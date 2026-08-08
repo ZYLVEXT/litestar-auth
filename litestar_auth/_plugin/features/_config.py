@@ -20,6 +20,7 @@ from litestar_auth.exceptions import ConfigurationError
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from litestar_auth._current_organization import ElevatedMembershipResolver
     from litestar_auth._tenant_resolution import TenantResolver
     from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
     from litestar_auth.config import OAuthProviderConfig
@@ -94,6 +95,7 @@ class OrganizationConfig:
     slug_max_length: int = FEATURE_DEFAULTS.organization.slug_max_length
     tenant_header_name: str = FEATURE_DEFAULTS.organization.tenant_header_name
     tenant_resolver: TenantResolver | None = None
+    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any] | None = None
     role_precedence: OrganizationRolePrecedence = FEATURE_DEFAULTS.organization.role_precedence
     require_authorization_context: bool = FEATURE_DEFAULTS.organization.require_authorization_context
 

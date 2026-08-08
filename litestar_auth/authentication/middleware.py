@@ -30,6 +30,7 @@ from litestar.types import ASGIApp, Method, Scope, Scopes
 
 from litestar_auth._current_organization import (
     CurrentOrganizationContext,
+    ElevatedMembershipResolver,
     clear_scope_current_organization_context,
     set_scope_current_organization_context,
 )
@@ -91,6 +92,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     permission_resolver: PermissionResolver = DEFAULT_PERMISSION_RESOLVER
     organization_store_factory: OrganizationStoreFactory | None = None
     tenant_resolver: TenantResolver | None = None
+    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any] | None = None
     exclude: str | list[str] | None = None
     exclude_from_auth_key: str = "exclude_from_auth"
     exclude_http_methods: Sequence[Method] | None = None
@@ -123,6 +125,7 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     permission_resolver: NotRequired[PermissionResolver]
     organization_store_factory: NotRequired[OrganizationStoreFactory | None]
     tenant_resolver: NotRequired[TenantResolver | None]
+    elevated_membership_resolver: NotRequired[ElevatedMembershipResolver[Any, Any] | None]
     exclude: NotRequired[str | list[str] | None]
     exclude_from_auth_key: NotRequired[str]
     exclude_http_methods: NotRequired[Sequence[Method] | None]
@@ -178,6 +181,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.permission_resolver = settings.permission_resolver
         self.organization_store_factory = settings.organization_store_factory
         self.tenant_resolver = settings.tenant_resolver
+        self.elevated_membership_resolver = settings.elevated_membership_resolver
 
     @override
     async def authenticate_request(
@@ -260,16 +264,72 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
             raise InternalServerException(detail="Authentication principal projection failed.")
 
         if decision.context.subject.kind == "human":
-            await _publish_current_organization_context_if_applicable(
+            await self._publish_current_organization_context_if_applicable(
                 connection,
                 session=session,
                 user=principal,
-                organization_store_factory=self.organization_store_factory,
-                tenant_resolver=self.tenant_resolver,
             )
         else:
             clear_scope_current_organization_context(connection.scope)
         return AuthenticationResult(user=principal, auth=decision.context)
+
+    async def _publish_current_organization_context_if_applicable(
+        self,
+        connection: ASGIConnection[Any, Any, Any, Any],
+        *,
+        session: AsyncSession,
+        user: object,
+    ) -> None:
+        """Publish verified organization membership for one authenticated human request."""
+        clear_scope_current_organization_context(connection.scope)
+        if self.organization_store_factory is None or self.tenant_resolver is None:
+            return
+
+        slug = self.tenant_resolver(connection)
+        if slug is None:
+            return
+
+        store = self.organization_store_factory(session)
+        organization = await store.get_organization_by_slug(slug)
+        if organization is None:
+            return
+
+        organization_id = getattr(organization, "id", None)
+        user_id = getattr(user, "id", None)
+        if organization_id is None or user_id is None:
+            return
+
+        membership = await store.get_membership(organization_id=organization_id, user_id=user_id)
+        elevated = False
+        if membership is None:
+            membership = await self._elevated_membership(connection, organization=organization, user=user)
+            if membership is None:
+                return
+            elevated = True
+
+        set_scope_current_organization_context(
+            connection.scope,
+            CurrentOrganizationContext(organization=organization, membership=membership, elevated=elevated),
+        )
+
+    async def _elevated_membership(
+        self,
+        connection: ASGIConnection[Any, Any, Any, Any],
+        *,
+        organization: object,
+        user: object,
+    ) -> object | None:
+        """Ask the application whether this non-member may act inside ``organization``.
+
+        Reached only once the store has already refused, so elevation can add access for a
+        non-member but can never alter what a member already holds.
+
+        Returns:
+            The membership the application granted, or ``None`` when it refuses or is unconfigured.
+        """
+        if self.elevated_membership_resolver is None:
+            return None
+        return await self.elevated_membership_resolver(connection, organization=organization, user=user)
 
 
 def route_provider_policy(*providers: str) -> dict[str, RouteProviderPolicy]:
@@ -359,40 +419,3 @@ def _binding_for_authenticated_provider(
     if len(matches) != 1:
         raise InternalServerException(detail="Authenticated provider binding is missing or ambiguous.")
     return matches[0]
-
-
-async def _publish_current_organization_context_if_applicable(
-    connection: ASGIConnection[Any, Any, Any, Any],
-    *,
-    session: AsyncSession,
-    user: object,
-    organization_store_factory: OrganizationStoreFactory | None,
-    tenant_resolver: TenantResolver | None,
-) -> None:
-    """Publish verified organization membership for one authenticated human request."""
-    clear_scope_current_organization_context(connection.scope)
-    if organization_store_factory is None or tenant_resolver is None:
-        return
-
-    slug = tenant_resolver(connection)
-    if slug is None:
-        return
-
-    store = organization_store_factory(session)
-    organization = await store.get_organization_by_slug(slug)
-    if organization is None:
-        return
-
-    organization_id = getattr(organization, "id", None)
-    user_id = getattr(user, "id", None)
-    if organization_id is None or user_id is None:
-        return
-
-    membership = await store.get_membership(organization_id=organization_id, user_id=user_id)
-    if membership is None:
-        return
-
-    set_scope_current_organization_context(
-        connection.scope,
-        CurrentOrganizationContext(organization=organization, membership=membership),
-    )
