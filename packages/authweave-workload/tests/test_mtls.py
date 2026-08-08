@@ -221,6 +221,13 @@ def test_provider_attested_certificate_enforces_leaf_and_encoding_profile() -> N
             policy=_attested_policy(),
             verification_time=now,
         )
+    with pytest.raises(CertificateValidationError, match="encoding"):
+        validate_attested_certificate(
+            b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n",
+            attestation=attestation,
+            policy=_attested_policy(),
+            verification_time=now,
+        )
     with pytest.raises(CertificateValidationError, match="lifetime"):
         validate_attested_certificate(
             leaf_pem,
@@ -253,6 +260,26 @@ def test_provider_attested_certificate_enforces_leaf_and_encoding_profile() -> N
                 policy=_attested_policy(),
                 verification_time=profile_now,
             )
+
+
+def test_provider_attested_certificate_normalizes_unexpected_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now, leaf, leaf_pem = _attested_leaf()
+
+    def fail_validation(*_: object, **__: object) -> None:
+        msg = "unexpected certificate API value"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(mtls_module, "_validate_attested_leaf", fail_validation)
+
+    with pytest.raises(CertificateValidationError, match="certificate validation failed"):
+        validate_attested_certificate(
+            leaf_pem,
+            attestation=_provider_attestation(leaf, now=now),
+            policy=_attested_policy(),
+            verification_time=now,
+        )
 
 
 @pytest.mark.parametrize(
