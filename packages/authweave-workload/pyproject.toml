@@ -1,6 +1,6 @@
 [project]
 name = "authweave-workload"
-version = "7.3.0"
+version = "7.3.1"
 description = "Framework-neutral sender-constrained workload authentication"
 readme = "README.md"
 license = "MIT"
@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 requires-python = "<3.15.0,>=3.12.0"
-dependencies = ["authweave-core==7.3.0"]
+dependencies = ["authweave-core==7.3.1"]
 
 [project.urls]
 homepage = "https://github.com/ZYLVEXT/litestar-auth"
@@ -40,7 +40,7 @@ spiffe = ["authweave-workload[mtls]", "spiffe>=0.3.0,<0.4.0"]
 introspection = ["authweave-workload[jwt]"]
 token-exchange = ["authweave-workload[jwt]"]
 redis = ["redis>=8.1.0,<9.0"]
-litestar = ["authweave-workload[sqlalchemy]", "litestar>=2.24.0,<3.0", "litestar-auth==7.3.0"]
+litestar = ["authweave-workload[sqlalchemy]", "litestar>=2.24.0,<3.0", "litestar-auth==7.3.1"]
 all = ["authweave-workload[jwt,dpop,spiffe,introspection,token-exchange,redis,litestar]"]
 
 [build-system]

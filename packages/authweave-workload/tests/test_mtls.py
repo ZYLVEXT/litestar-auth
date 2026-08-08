@@ -68,20 +68,6 @@ def test_valid_client_certificate_is_canonicalized_without_private_material() ->
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(hours=1))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=False,
-                crl_sign=False,
-                encipher_only=False,
-                decipher_only=False,
-            ),
-            critical=True,
-        )
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("workload.test")]), critical=False)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()), critical=False)
@@ -226,13 +212,23 @@ def test_certificate_validation_rejects_encoding_time_and_stale_revocation() -> 
 
 
 class _Extensions:
-    def __init__(self, *, digital_signature: bool = True, client_auth: bool = True, missing: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        digital_signature: bool = True,
+        client_auth: bool = True,
+        missing_key_usage: bool = False,
+        missing_extended_key_usage: bool = False,
+    ) -> None:
         self.digital_signature = digital_signature
         self.client_auth = client_auth
-        self.missing = missing
+        self.missing_key_usage = missing_key_usage
+        self.missing_extended_key_usage = missing_extended_key_usage
 
     def get_extension_for_class(self, extension_type: type[object]) -> object:
-        if self.missing:
+        if (extension_type is x509.KeyUsage and self.missing_key_usage) or (
+            extension_type is x509.ExtendedKeyUsage and self.missing_extended_key_usage
+        ):
             message = "missing"
             raise x509.ExtensionNotFound(message, x509.ObjectIdentifier("1.2.3"))
         if extension_type is x509.KeyUsage:
@@ -265,8 +261,11 @@ class _Certificate:
         (_Certificate(ed25519.Ed25519PrivateKey.generate().public_key(), signature_hash=None), "not supported"),
         (_Certificate(ec.generate_private_key(ec.SECP256R1()).public_key(), signature_hash=hashes.SHA1()), "hash"),
         (
-            _Certificate(ec.generate_private_key(ec.SECP256R1()).public_key(), extensions=_Extensions(missing=True)),
-            "required",
+            _Certificate(
+                ec.generate_private_key(ec.SECP256R1()).public_key(),
+                extensions=_Extensions(missing_extended_key_usage=True),
+            ),
+            "clientAuth",
         ),
         (
             _Certificate(
@@ -294,6 +293,14 @@ def test_leaf_certificate_profile_negative_matrix(certificate: _Certificate, mes
 
 def test_leaf_certificate_profile_accepts_strong_rsa() -> None:
     certificate = _Certificate(rsa.generate_private_key(public_exponent=65537, key_size=3072).public_key())
+    mtls_module._validate_leaf_profile(cast("object", certificate), mtls_module._load_cryptography())
+
+
+def test_leaf_certificate_profile_accepts_omitted_key_usage() -> None:
+    certificate = _Certificate(
+        ec.generate_private_key(ec.SECP256R1()).public_key(),
+        extensions=_Extensions(missing_key_usage=True),
+    )
     mtls_module._validate_leaf_profile(cast("object", certificate), mtls_module._load_cryptography())
 
 

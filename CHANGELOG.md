@@ -1,3 +1,11 @@
+## 7.3.1 (2026-08-08)
+
+### Fixed
+
+- Accepted standards-conformant client certificates that omit the optional RFC 5280 KeyUsage
+  extension, while still requiring clientAuth EKU and rejecting KeyUsage values that do not permit
+  digital signatures when the extension is present.
+
 ## 7.3.0 (2026-08-08)
 
 ### Added

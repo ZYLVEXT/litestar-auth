@@ -150,11 +150,14 @@ def _validate_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
     if signature_hash is None or signature_hash.name.lower() in {"md5", "sha1"}:
         raise CertificateValidationError("certificate signature hash is not supported")
     try:
-        key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
         extended_key_usage = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound as exc:
-        raise CertificateValidationError("client certificate key usage extensions are required") from exc
-    if not key_usage.digital_signature:
+        raise CertificateValidationError("client certificate must include clientAuth EKU") from exc
+    try:
+        key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        key_usage = None
+    if key_usage is not None and not key_usage.digital_signature:
         raise CertificateValidationError("client certificate must permit digital signatures")
     if crypto["ExtendedKeyUsageOID"].CLIENT_AUTH not in extended_key_usage:
         raise CertificateValidationError("client certificate must include clientAuth EKU")

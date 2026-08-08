@@ -103,9 +103,9 @@ unsupported. Verify the chosen client during deployment; do not enable SHA1 for 
 - Certificate registration accepts public certificates only. Private-key or passphrase material
   is rejected before parsing and is never persisted or included in events. Registration accepts
   only the opaque metadata result produced by the X.509 validator.
-- Client certificates require a modern key, safe signature hash, digital-signature key usage, and
-  client-auth EKU. Trust anchors, validity, revocation freshness, TLS version, and termination
-  boundary are explicit policy.
+- Client certificates require a modern key, safe signature hash, and client-auth EKU. When the
+  RFC 5280-optional key-usage extension is present it must permit digital signatures. Trust anchors,
+  validity, revocation freshness, TLS version, and termination boundary are explicit policy.
 - Persistence atomically resolves application, principal, and credential state. Disabling any
   owner or revoking a credential terminates authentication.
 - External JWT issuers have explicit HTTPS JWKS sources or static keys, bounded response/key/cache
