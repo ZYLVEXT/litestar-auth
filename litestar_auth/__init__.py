@@ -40,6 +40,7 @@ Examples:
 
 import logging
 
+from litestar_auth._current_organization import ElevatedMembershipResolver, current_organization_is_elevated
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._tenant_resolution import HeaderTenantResolver, SubdomainTenantResolver, TenantResolver
@@ -94,6 +95,7 @@ __all__ = (
     "CookieTransport",
     "CookieTransportConfig",
     "DatabaseTokenAuthConfig",
+    "ElevatedMembershipResolver",
     "ErrorCode",
     "FernetKeyringConfig",
     "GuardedUserProtocol",
@@ -115,6 +117,7 @@ __all__ = (
     "UserProtocol",
     "UserProtocolStrict",
     "__version__",
+    "current_organization_is_elevated",
     "has_all_permissions",
     "has_all_roles",
     "has_any_permission",

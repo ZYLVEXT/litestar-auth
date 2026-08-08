@@ -45,6 +45,21 @@ bounded operation name, and its role-delegation callback receives the target org
 reference, and normalized requested roles. A denial returns 403 before mutation; store-level
 membership and last-privileged-member invariants still apply and cannot be replaced by callbacks.
 
+Organization access normally requires stored membership. Deployments whose support or operations
+staff must work inside an organization they do not belong to can set
+`OrganizationConfig.elevated_membership_resolver`. It is consulted only after the store reports no
+membership, so it can grant access to a non-member but can never widen what a member already holds,
+and returning `None` — the default, since the field is unset — leaves the request without
+organization context. Who qualifies, and under which organization roles, is authorization policy the
+application owns; the library carries the answer and records that it was granted rather than stored.
+
+Requests admitted this way are marked, and `current_organization_is_elevated(connection)` reports
+it. Guards intentionally do not distinguish the two: an elevated principal holds exactly the
+permissions of the organization roles the resolver returned, so least privilege is expressed by
+returning a narrow role rather than by a parallel guard path. The distinction exists for
+attribution — an operator acting inside someone else's organization is a different audit event from
+a member acting in their own, and a request with no organization context reports `False`.
+
 Application and contrib routes can compose `requires_recent_authentication()` with their normal
 authorization guards. The application supplies a verifier over trusted server-side session or IdP
 evidence and receives a bounded `RecentAuthenticationRequirement` containing the operation,
