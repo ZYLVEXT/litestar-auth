@@ -26,8 +26,12 @@ The payment profile and application guard are documented in
 
 Lifecycle mutations require a verified actor, a correlation ID, and an application recorder that
 writes the security event in the same transaction. X.509 registration accepts only opaque
-`CertificateMetadata` returned by `validate_public_certificate`; it cannot be built from unchecked
-fields.
+`CertificateMetadata` returned by an AuthWeave validator; it cannot be built from unchecked fields.
+Use `validate_public_certificate` when the application owns the PKIX trust anchors. For a managed CA
+that intentionally does not export its root, use `validate_attested_certificate` with a fresh
+`ProviderCertificateAttestation` constructed only from the pinned provider's authenticated control
+plane response. That path binds the leaf profile, fingerprint, dates, active status, provider, and
+application trust-anchor identity without claiming local PKIX validation.
 Custom stores raise `StoreOwnerStateConflictError` when concurrent owner revalidation rejects a
 principal or credential write; the lifecycle service maps that typed conflict to `LifecycleConflictError`.
 
