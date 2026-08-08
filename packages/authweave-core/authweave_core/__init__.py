@@ -40,7 +40,7 @@ from authweave_core.replay import (
     validate_replay_key,
 )
 
-__version__ = "7.3.0"
+__version__ = "7.3.1"
 
 __all__ = (
     "Authenticated",
