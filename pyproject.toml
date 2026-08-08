@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "7.2.0"
+version = "7.3.0"
 description = "Opaque human sessions for Litestar on the AuthWeave authentication stack"
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,7 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
-    "authweave-core==7.2.0",
+    "authweave-core==7.3.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
     "idna>=3.18,<4.0",
@@ -74,10 +74,10 @@ docs = [
 ]
 reference = [
     "asyncpg>=0.31.0,<0.32",
-    "authweave-http-signatures[redis]==7.2.0",
-    "authweave-otel==7.2.0",
-    "authweave-webhooks[redis]==7.2.0",
-    "authweave-workload[all]==7.2.0",
+    "authweave-http-signatures[redis]==7.3.0",
+    "authweave-otel==7.3.0",
+    "authweave-webhooks[redis]==7.3.0",
+    "authweave-workload[all]==7.3.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<2.0",
     "opentelemetry-sdk>=1.44.0,<2.0",
     "uvicorn>=0.52.1,<0.53",
