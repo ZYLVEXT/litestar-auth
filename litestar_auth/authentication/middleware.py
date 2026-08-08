@@ -92,7 +92,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     permission_resolver: PermissionResolver = DEFAULT_PERMISSION_RESOLVER
     organization_store_factory: OrganizationStoreFactory | None = None
     tenant_resolver: TenantResolver | None = None
-    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any] | None = None
+    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any, Any] | None = None
     exclude: str | list[str] | None = None
     exclude_from_auth_key: str = "exclude_from_auth"
     exclude_http_methods: Sequence[Method] | None = None
@@ -125,7 +125,7 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     permission_resolver: NotRequired[PermissionResolver]
     organization_store_factory: NotRequired[OrganizationStoreFactory | None]
     tenant_resolver: NotRequired[TenantResolver | None]
-    elevated_membership_resolver: NotRequired[ElevatedMembershipResolver[Any, Any] | None]
+    elevated_membership_resolver: NotRequired[ElevatedMembershipResolver[Any, Any, Any] | None]
     exclude: NotRequired[str | list[str] | None]
     exclude_from_auth_key: NotRequired[str]
     exclude_http_methods: NotRequired[Sequence[Method] | None]
