@@ -302,11 +302,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         membership = await store.get_membership(organization_id=organization_id, user_id=user_id)
         elevated = False
         if membership is None:
-            if self.elevated_membership_resolver is None:
-                return
-            # Consulted only once the store has already refused, so elevation can add access for a
-            # non-member but can never alter what a member already holds.
-            membership = await self.elevated_membership_resolver(connection, organization=organization, user=user)
+            membership = await self._elevated_membership(connection, organization=organization, user=user)
             if membership is None:
                 return
             elevated = True
@@ -315,6 +311,25 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
             connection.scope,
             CurrentOrganizationContext(organization=organization, membership=membership, elevated=elevated),
         )
+
+    async def _elevated_membership(
+        self,
+        connection: ASGIConnection[Any, Any, Any, Any],
+        *,
+        organization: object,
+        user: object,
+    ) -> object | None:
+        """Ask the application whether this non-member may act inside ``organization``.
+
+        Reached only once the store has already refused, so elevation can add access for a
+        non-member but can never alter what a member already holds.
+
+        Returns:
+            The membership the application granted, or ``None`` when it refuses or is unconfigured.
+        """
+        if self.elevated_membership_resolver is None:
+            return None
+        return await self.elevated_membership_resolver(connection, organization=organization, user=user)
 
 
 def route_provider_policy(*providers: str) -> dict[str, RouteProviderPolicy]:

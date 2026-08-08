@@ -102,6 +102,8 @@ def _build_middleware(
     Returns:
         A middleware whose organization resolution can be driven directly.
     """
+    # Organization resolution reads only these three seams off the middleware, so an uninitialized
+    # instance carrying them exercises the real method without a whole authentication pipeline.
     middleware = cast("LitestarAuthMiddleware[Any, Any]", LitestarAuthMiddleware.__new__(LitestarAuthMiddleware))
     middleware.organization_store_factory = cast("Any", None if store is None else lambda _session: store)
     middleware.tenant_resolver = cast(

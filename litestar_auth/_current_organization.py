@@ -59,6 +59,7 @@ class ElevatedMembershipResolver[ORG, MEMBERSHIP](Protocol):
         user: object,
     ) -> Awaitable[MEMBERSHIP | None]:
         """Return a membership granting access to ``organization``, or ``None`` to refuse."""
+        ...
 
 
 def set_scope_current_organization_context(scope: object, context: CurrentOrganizationContext[Any, Any]) -> None:
