@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import builtins
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
@@ -10,8 +12,11 @@ from typing import cast
 import pytest
 from authweave_workload import mtls as mtls_module
 from authweave_workload.mtls import (
+    AttestedCertificateValidationPolicy,
     CertificateValidationError,
     CertificateValidationPolicy,
+    ProviderCertificateAttestation,
+    validate_attested_certificate,
     validate_public_certificate,
 )
 from cryptography import x509
@@ -136,6 +141,191 @@ def test_valid_client_certificate_is_canonicalized_without_private_material() ->
     )
     with pytest.raises(CertificateValidationError, match="validation failed"):
         validate_public_certificate(leaf_pem, policy=invalid_chain, verification_time=now)
+
+
+def test_provider_attested_certificate_is_reconciled_without_exported_ca() -> None:
+    now, leaf, leaf_pem = _attested_leaf()
+    attestation = _provider_attestation(leaf, now=now)
+    policy = _attested_policy()
+
+    metadata = validate_attested_certificate(
+        leaf_pem,
+        attestation=attestation,
+        policy=policy,
+        verification_time=now,
+    )
+    der_metadata = validate_attested_certificate(
+        leaf.public_bytes(serialization.Encoding.DER),
+        attestation=attestation,
+        policy=policy,
+        verification_time=now,
+    )
+
+    assert metadata == der_metadata
+    assert metadata.thumbprint == attestation.certificate_thumbprint
+    assert metadata.trust_anchor == "managed-ca-1"
+    assert metadata.subject_dn == "CN=managed-workload"
+
+
+def test_provider_attested_certificate_rejects_untrusted_or_stale_evidence() -> None:
+    now, leaf, leaf_pem = _attested_leaf()
+    attestation = _provider_attestation(leaf, now=now)
+    policy = _attested_policy()
+
+    cases = (
+        (replace(attestation, provider="other-provider"), policy, now, "not trusted"),
+        (replace(attestation, trust_anchor="other-ca"), policy, now, "not trusted"),
+        (replace(attestation, attested_at=now + timedelta(minutes=6)), policy, now, "future"),
+        (replace(attestation, attested_at=now - timedelta(minutes=6)), policy, now, "stale"),
+        (
+            replace(attestation, certificate_thumbprint="A" * _THUMBPRINT_LENGTH),
+            policy,
+            now,
+            "fingerprint",
+        ),
+        (replace(attestation, not_before=attestation.not_before - timedelta(minutes=6)), policy, now, "dates"),
+        (attestation, policy, datetime(2026, 1, 1), "timezone"),
+    )
+    for evidence, validation_policy, verification_time, message in cases:
+        with pytest.raises(CertificateValidationError, match=message):
+            validate_attested_certificate(
+                leaf_pem,
+                attestation=evidence,
+                policy=validation_policy,
+                verification_time=verification_time,
+            )
+
+
+def test_provider_attested_certificate_enforces_leaf_and_encoding_profile() -> None:
+    now, leaf, leaf_pem = _attested_leaf()
+    attestation = _provider_attestation(leaf, now=now)
+
+    with pytest.raises(CertificateValidationError, match="exactly one"):
+        validate_attested_certificate(
+            leaf_pem + leaf_pem,
+            attestation=attestation,
+            policy=_attested_policy(),
+            verification_time=now,
+        )
+    with pytest.raises(CertificateValidationError, match="private key"):
+        validate_attested_certificate(
+            leaf_pem + b"PRIVATE KEY",
+            attestation=attestation,
+            policy=_attested_policy(),
+            verification_time=now,
+        )
+    with pytest.raises(CertificateValidationError, match="encoding"):
+        validate_attested_certificate(
+            b"not-a-certificate",
+            attestation=attestation,
+            policy=_attested_policy(),
+            verification_time=now,
+        )
+    with pytest.raises(CertificateValidationError, match="encoding"):
+        validate_attested_certificate(
+            b"-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----\n",
+            attestation=attestation,
+            policy=_attested_policy(),
+            verification_time=now,
+        )
+    with pytest.raises(CertificateValidationError, match="lifetime"):
+        validate_attested_certificate(
+            leaf_pem,
+            attestation=attestation,
+            policy=replace(_attested_policy(), maximum_certificate_lifetime=timedelta(minutes=30)),
+            verification_time=now,
+        )
+    with pytest.raises(CertificateValidationError, match="currently usable"):
+        validate_attested_certificate(
+            leaf_pem,
+            attestation=replace(attestation, attested_at=leaf.not_valid_after_utc),
+            policy=_attested_policy(),
+            verification_time=leaf.not_valid_after_utc,
+        )
+
+    for include_basic_constraints, is_ca, critical, message in (
+        (False, False, True, "BasicConstraints"),
+        (True, False, False, "CA=false"),
+        (True, True, True, "CA=false"),
+    ):
+        profile_now, profile_leaf, profile_pem = _attested_leaf(
+            include_basic_constraints=include_basic_constraints,
+            basic_constraints_ca=is_ca,
+            basic_constraints_critical=critical,
+        )
+        with pytest.raises(CertificateValidationError, match=message):
+            validate_attested_certificate(
+                profile_pem,
+                attestation=_provider_attestation(profile_leaf, now=profile_now),
+                policy=_attested_policy(),
+                verification_time=profile_now,
+            )
+
+
+def test_provider_attested_certificate_normalizes_unexpected_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now, leaf, leaf_pem = _attested_leaf()
+
+    def fail_validation(*_: object, **__: object) -> None:
+        msg = "unexpected certificate API value"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(mtls_module, "_validate_attested_leaf", fail_validation)
+
+    with pytest.raises(CertificateValidationError, match="certificate validation failed"):
+        validate_attested_certificate(
+            leaf_pem,
+            attestation=_provider_attestation(leaf, now=now),
+            policy=_attested_policy(),
+            verification_time=now,
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"provider": "bad provider"},
+        {"trust_anchor": "bad anchor"},
+        {"certificate_thumbprint": "invalid"},
+        {"not_before": datetime(2026, 1, 1)},
+        {"not_after": datetime(2026, 1, 1)},
+        {"attested_at": datetime(2026, 1, 1)},
+        {"not_after": datetime(2026, 1, 1, tzinfo=UTC)},
+        {"status": "revoked"},
+    ],
+)
+def test_provider_attestation_rejects_invalid_evidence(changes: dict[str, object]) -> None:
+    now, leaf, _ = _attested_leaf()
+    values: dict[str, object] = {
+        "provider": "cloudflare",
+        "trust_anchor": "managed-ca-1",
+        "certificate_thumbprint": _thumbprint(leaf),
+        "not_before": leaf.not_valid_before_utc,
+        "not_after": leaf.not_valid_after_utc,
+        "attested_at": now,
+        "status": "active",
+    }
+    values.update(changes)
+    with pytest.raises(ValueError, match=r".+"):
+        ProviderCertificateAttestation(**values)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"provider": "bad provider"},
+        {"trust_anchor": "bad anchor"},
+        {"maximum_attestation_age": timedelta(0)},
+        {"maximum_certificate_lifetime": timedelta(0)},
+        {"maximum_clock_skew": timedelta(microseconds=-1)},
+    ],
+)
+def test_attested_certificate_policy_rejects_invalid_values(changes: dict[str, object]) -> None:
+    values: dict[str, object] = {"provider": "cloudflare", "trust_anchor": "managed-ca-1"}
+    values.update(changes)
+    with pytest.raises(ValueError, match=r".+"):
+        AttestedCertificateValidationPolicy(**values)  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(
@@ -302,6 +492,59 @@ def test_leaf_certificate_profile_accepts_omitted_key_usage() -> None:
         extensions=_Extensions(missing_key_usage=True),
     )
     mtls_module._validate_leaf_profile(cast("object", certificate), mtls_module._load_cryptography())
+
+
+def _attested_leaf(
+    *,
+    include_basic_constraints: bool = True,
+    basic_constraints_ca: bool = False,
+    basic_constraints_critical: bool = True,
+) -> tuple[datetime, x509.Certificate, bytes]:
+    now = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
+    ca_key = ec.generate_private_key(ec.SECP384R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Opaque Managed CA")])
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    builder = (
+        x509
+        .CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "managed-workload")]))
+        .issuer_name(ca_name)
+        .public_key(leaf_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+    )
+    if include_basic_constraints:
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=basic_constraints_ca, path_length=None),
+            critical=basic_constraints_critical,
+        )
+    leaf = builder.sign(ca_key, hashes.SHA256())
+    return now, leaf, leaf.public_bytes(serialization.Encoding.PEM)
+
+
+def _thumbprint(certificate: x509.Certificate) -> str:
+    return base64.urlsafe_b64encode(certificate.fingerprint(hashes.SHA256())).rstrip(b"=").decode("ascii")
+
+
+def _provider_attestation(certificate: x509.Certificate, *, now: datetime) -> ProviderCertificateAttestation:
+    return ProviderCertificateAttestation(
+        provider="cloudflare",
+        trust_anchor="managed-ca-1",
+        certificate_thumbprint=_thumbprint(certificate),
+        not_before=certificate.not_valid_before_utc,
+        not_after=certificate.not_valid_after_utc,
+        attested_at=now,
+        status="active",
+    )
+
+
+def _attested_policy() -> AttestedCertificateValidationPolicy:
+    return AttestedCertificateValidationPolicy(
+        provider="cloudflare",
+        trust_anchor="managed-ca-1",
+    )
 
 
 def test_mtls_optional_dependency_error_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:

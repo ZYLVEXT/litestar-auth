@@ -199,7 +199,7 @@ class WorkloadPage[PAGE_ITEM]:
 
 @dataclass(frozen=True, slots=True, init=False)
 class CertificateMetadata:
-    """Opaque public-certificate facts produced by the X.509 validator."""
+    """Opaque public-certificate facts produced by an AuthWeave validator."""
 
     thumbprint: str
     trust_anchor: str
@@ -211,7 +211,7 @@ class CertificateMetadata:
 
     def __new__(cls) -> Self:
         """Prevent construction outside the certificate validator."""
-        msg = "CertificateMetadata is created by validate_public_certificate()"
+        msg = "CertificateMetadata is created by AuthWeave certificate validators"
         raise TypeError(msg)
 
     def __post_init__(self) -> None:

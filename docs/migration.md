@@ -101,8 +101,13 @@ middleware. Keep provider names and contributed OpenAPI security scheme names gl
 
 Create a service application and a service, workload, or agent principal with
 `WorkloadLifecycleService`. Issue a short-lived client certificate from an application-approved
-CA and validate it with `validate_public_certificate`. `CertificateMetadata` is an opaque result
-type and cannot be assembled from caller-supplied fields.
+CA and validate it with `validate_public_certificate`. If an application-approved managed CA does
+not export its root certificate, reconcile the issued leaf with a fresh, authenticated provider
+control-plane response through `validate_attested_certificate`; pin both the provider and its
+application trust-anchor identity in `AttestedCertificateValidationPolicy`.
+`CertificateMetadata` is an opaque result type and cannot be assembled from caller-supplied fields.
+The attested path validates the leaf and provider evidence but deliberately does not claim local
+PKIX path validation.
 
 Construct each lifecycle service with the verified operator `actor`, an application-generated
 `correlation_id`, and an `event_recorder`. The recorder must insert the event into the same

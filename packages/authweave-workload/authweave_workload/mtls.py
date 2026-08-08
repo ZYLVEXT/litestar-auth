@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -16,6 +18,10 @@ if TYPE_CHECKING:
 
 class CertificateValidationError(ValueError):
     """Raised when public certificate material fails the release security profile."""
+
+
+_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_THUMBPRINT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +52,74 @@ class CertificateValidationPolicy:
             raise ValueError(msg)
         if self.maximum_certificate_lifetime <= timedelta(0):
             msg = "maximum_certificate_lifetime must be positive"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCertificateAttestation:
+    """Fresh public-certificate facts from an authenticated provider control plane.
+
+    Applications must construct this object only from a successful, authenticated response from
+    the pinned certificate provider. It is evidence of provider issuance, not a PKIX path.
+    """
+
+    provider: str
+    trust_anchor: str
+    certificate_thumbprint: str
+    not_before: datetime
+    not_after: datetime
+    attested_at: datetime
+    status: str
+
+    def __post_init__(self) -> None:
+        """Reject invalid provider evidence.
+
+        Raises:
+            ValueError: If evidence is unbounded, inactive, or temporally invalid.
+        """
+        _validate_identifier(self.provider, name="provider")
+        _validate_identifier(self.trust_anchor, name="trust_anchor")
+        if _THUMBPRINT_PATTERN.fullmatch(self.certificate_thumbprint) is None:
+            msg = "certificate_thumbprint must be an unpadded base64url SHA-256 digest"
+            raise ValueError(msg)
+        for name in ("not_before", "not_after", "attested_at"):
+            if getattr(self, name).utcoffset() is None:
+                msg = f"{name} must be timezone-aware"
+                raise ValueError(msg)
+        if self.not_before >= self.not_after:
+            msg = "not_before must be earlier than not_after"
+            raise ValueError(msg)
+        if self.status != "active":
+            msg = "provider certificate status must be active"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class AttestedCertificateValidationPolicy:
+    """Local policy for one authenticated external certificate provider."""
+
+    provider: str
+    trust_anchor: str
+    maximum_attestation_age: timedelta = timedelta(minutes=5)
+    maximum_certificate_lifetime: timedelta = timedelta(days=90)
+    maximum_clock_skew: timedelta = timedelta(minutes=5)
+
+    def __post_init__(self) -> None:
+        """Require a pinned provider boundary.
+
+        Raises:
+            ValueError: If an identifier or bounded policy interval is invalid.
+        """
+        _validate_identifier(self.provider, name="provider")
+        _validate_identifier(self.trust_anchor, name="trust_anchor")
+        if self.maximum_attestation_age <= timedelta(0):
+            msg = "maximum_attestation_age must be positive"
+            raise ValueError(msg)
+        if self.maximum_certificate_lifetime <= timedelta(0):
+            msg = "maximum_certificate_lifetime must be positive"
+            raise ValueError(msg)
+        if self.maximum_clock_skew < timedelta(0):
+            msg = "maximum_clock_skew cannot be negative"
             raise ValueError(msg)
 
 
@@ -90,17 +164,53 @@ def validate_public_certificate(
         raise CertificateValidationError("certificate validation failed") from exc
     if leaf.serial_number in policy.revoked_serial_numbers:
         raise CertificateValidationError("certificate is revoked")
-    der = leaf.public_bytes(crypto["Encoding"].DER)
-    thumbprint = base64.urlsafe_b64encode(hashlib.sha256(der).digest()).rstrip(b"=").decode("ascii")
-    return _certificate_metadata(
-        thumbprint=thumbprint,
-        trust_anchor=policy.trust_anchor,
-        not_before=leaf.not_valid_before_utc,
-        not_after=leaf.not_valid_after_utc,
-        subject_dn=leaf.subject.rfc4514_string(),
-        issuer_dn=leaf.issuer.rfc4514_string(),
-        serial_number=format(leaf.serial_number, "x"),
-    )
+    return _metadata_from_leaf(leaf, trust_anchor=policy.trust_anchor, encoding=crypto["Encoding"])
+
+
+def validate_attested_certificate(
+    certificate: bytes,
+    *,
+    attestation: ProviderCertificateAttestation,
+    policy: AttestedCertificateValidationPolicy,
+    verification_time: datetime | None = None,
+) -> CertificateMetadata:
+    """Validate a leaf against fresh evidence from a pinned external provider.
+
+    This path is for managed certificate authorities whose authenticated control plane returns the
+    issued leaf and its digest but intentionally does not export the CA certificate. It validates
+    the leaf profile and reconciles it with that provider evidence; it does not perform or claim
+    local PKIX path validation.
+
+    Returns:
+        Canonical certificate metadata. Certificate and attestation bytes are not retained.
+
+    Raises:
+        CertificateValidationError: If parsing, provider binding, freshness, profile, validity,
+            fingerprint, or attested dates fail.
+        ImportError: If the ``mtls`` extra is not installed.
+    """
+    if b"PRIVATE KEY" in certificate:
+        raise CertificateValidationError("private key material is not accepted")
+    crypto = _load_cryptography()
+    x509 = crypto["x509"]
+    try:
+        leaf = _load_single_certificate(x509, certificate)
+        now = datetime.now(UTC) if verification_time is None else verification_time
+        if now.utcoffset() is None:
+            raise CertificateValidationError("verification_time must be timezone-aware")
+        _validate_provider_attestation(attestation, policy=policy, verification_time=now)
+        _validate_attested_leaf(
+            leaf,
+            attestation=attestation,
+            policy=policy,
+            verification_time=now,
+            crypto=crypto,
+        )
+    except CertificateValidationError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise CertificateValidationError("certificate validation failed") from exc
+    return _metadata_from_leaf(leaf, trust_anchor=policy.trust_anchor, encoding=crypto["Encoding"])
 
 
 def _load_cryptography() -> dict[str, Any]:
@@ -134,6 +244,18 @@ def _load_certificate(x509: Any, value: bytes) -> Any:
         raise CertificateValidationError("certificate encoding is invalid") from exc
 
 
+def _load_single_certificate(x509: Any, value: bytes) -> Any:
+    if b"-----BEGIN CERTIFICATE-----" not in value:
+        return _load_certificate(x509, value)
+    try:
+        certificates = x509.load_pem_x509_certificates(value)
+    except ValueError as exc:
+        raise CertificateValidationError("certificate encoding is invalid") from exc
+    if len(certificates) != 1:
+        raise CertificateValidationError("exactly one public certificate is required")
+    return certificates[0]
+
+
 def _validate_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
     x509 = crypto["x509"]
     public_key = certificate.public_key()
@@ -163,8 +285,84 @@ def _validate_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
         raise CertificateValidationError("client certificate must include clientAuth EKU")
 
 
+def _validate_attested_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
+    _validate_leaf_profile(certificate, crypto)
+    x509 = crypto["x509"]
+    try:
+        basic_constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+    except x509.ExtensionNotFound as exc:
+        raise CertificateValidationError("client certificate must include BasicConstraints") from exc
+    if not basic_constraints.critical or basic_constraints.value.ca:
+        raise CertificateValidationError("client certificate must be a critical CA=false end entity")
+
+
+def _validate_provider_attestation(
+    attestation: ProviderCertificateAttestation,
+    *,
+    policy: AttestedCertificateValidationPolicy,
+    verification_time: datetime,
+) -> None:
+    if attestation.provider != policy.provider or attestation.trust_anchor != policy.trust_anchor:
+        raise CertificateValidationError("certificate provider attestation is not trusted")
+    if attestation.attested_at > verification_time + policy.maximum_clock_skew:
+        raise CertificateValidationError("certificate provider attestation is from the future")
+    if verification_time - attestation.attested_at > policy.maximum_attestation_age:
+        raise CertificateValidationError("certificate provider attestation is stale")
+
+
+def _validate_attested_leaf(
+    certificate: Any,
+    *,
+    attestation: ProviderCertificateAttestation,
+    policy: AttestedCertificateValidationPolicy,
+    verification_time: datetime,
+    crypto: dict[str, Any],
+) -> None:
+    _validate_attested_leaf_profile(certificate, crypto)
+    not_before = certificate.not_valid_before_utc
+    not_after = certificate.not_valid_after_utc
+    if not_before > verification_time + policy.maximum_clock_skew or not_after <= verification_time:
+        raise CertificateValidationError("certificate validity window is not currently usable")
+    if not_after - not_before > policy.maximum_certificate_lifetime + policy.maximum_clock_skew:
+        raise CertificateValidationError("certificate lifetime exceeds policy")
+    if (
+        abs(attestation.not_before - not_before) > policy.maximum_clock_skew
+        or abs(attestation.not_after - not_after) > policy.maximum_clock_skew
+    ):
+        raise CertificateValidationError("certificate dates disagree with provider attestation")
+    thumbprint = _certificate_thumbprint(certificate, encoding=crypto["Encoding"])
+    if not hmac.compare_digest(thumbprint, attestation.certificate_thumbprint):
+        raise CertificateValidationError("certificate fingerprint disagrees with provider attestation")
+
+
+def _certificate_thumbprint(certificate: Any, *, encoding: Any) -> str:
+    der = certificate.public_bytes(encoding.DER)
+    return base64.urlsafe_b64encode(hashlib.sha256(der).digest()).rstrip(b"=").decode("ascii")
+
+
+def _metadata_from_leaf(certificate: Any, *, trust_anchor: str, encoding: Any) -> CertificateMetadata:
+    return _certificate_metadata(
+        thumbprint=_certificate_thumbprint(certificate, encoding=encoding),
+        trust_anchor=trust_anchor,
+        not_before=certificate.not_valid_before_utc,
+        not_after=certificate.not_valid_after_utc,
+        subject_dn=certificate.subject.rfc4514_string(),
+        issuer_dn=certificate.issuer.rfc4514_string(),
+        serial_number=format(certificate.serial_number, "x"),
+    )
+
+
+def _validate_identifier(value: str, *, name: str) -> None:
+    if _IDENTIFIER_PATTERN.fullmatch(value) is None:
+        msg = f"{name} must match {_IDENTIFIER_PATTERN.pattern!r}"
+        raise ValueError(msg)
+
+
 __all__ = (
+    "AttestedCertificateValidationPolicy",
     "CertificateValidationError",
     "CertificateValidationPolicy",
+    "ProviderCertificateAttestation",
+    "validate_attested_certificate",
     "validate_public_certificate",
 )

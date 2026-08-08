@@ -1,3 +1,13 @@
+## 7.3.2 (2026-08-08)
+
+### Added
+
+- Added `validate_attested_certificate` for managed certificate authorities that return fresh,
+  authenticated issuance evidence but intentionally do not export their CA root. The validator
+  pins the provider and application trust-anchor identity, requires active and fresh evidence,
+  reconciles the leaf fingerprint and dates, and enforces the client-certificate profile without
+  misrepresenting provider attestation as local PKIX path validation.
+
 ## 7.3.1 (2026-08-08)
 
 ### Fixed
