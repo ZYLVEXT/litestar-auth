@@ -95,7 +95,7 @@ class OrganizationConfig:
     slug_max_length: int = FEATURE_DEFAULTS.organization.slug_max_length
     tenant_header_name: str = FEATURE_DEFAULTS.organization.tenant_header_name
     tenant_resolver: TenantResolver | None = None
-    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any] | None = None
+    elevated_membership_resolver: ElevatedMembershipResolver[Any, Any, Any] | None = None
     role_precedence: OrganizationRolePrecedence = FEATURE_DEFAULTS.organization.role_precedence
     require_authorization_context: bool = FEATURE_DEFAULTS.organization.require_authorization_context
 

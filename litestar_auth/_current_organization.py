@@ -40,7 +40,7 @@ class CurrentOrganizationContext[ORG, MEMBERSHIP]:
     """
 
 
-class ElevatedMembershipResolver[ORG, MEMBERSHIP](Protocol):
+class ElevatedMembershipResolver[ORG, MEMBERSHIP, USER](Protocol):
     """Request seam for granting organization access to a user with no stored membership.
 
     Called only after the store reports no membership, so it can never widen a member's own
@@ -56,7 +56,7 @@ class ElevatedMembershipResolver[ORG, MEMBERSHIP](Protocol):
         connection: ASGIConnection[Any, Any, Any, Any],
         *,
         organization: ORG,
-        user: object,
+        user: USER,
     ) -> Awaitable[MEMBERSHIP | None]:
         """Return a membership granting access to ``organization``, or ``None`` to refuse."""
         ...
