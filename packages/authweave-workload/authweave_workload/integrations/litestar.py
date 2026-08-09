@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Never, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Never, cast
 
 from authweave_core import AuthenticationContext, ReplayStore, SpiffePeerEvidence, TlsPeerEvidence
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
@@ -40,8 +41,30 @@ type SecurityEventCallback = Callable[[SecurityEvent], Awaitable[None] | None]
 type TlsPeerEvidenceFactory = Callable[[Scope], TlsPeerEvidence | None]
 type SpiffePeerEvidenceFactory = Callable[[Scope], SpiffePeerEvidence | None]
 type MachineGuard = Callable[[ASGIConnection[Any, Any, Any, Any], BaseRouteHandler], None]
+type _CertificateTimeParser = Callable[[bytes], datetime]
 UNIX_SOCKET_PROXY = "unix"
-_ENVOY_SHA256_HEX_LENGTH = 64
+_SHA256_HEX_LENGTH = 64
+
+_CLOUDFLARE_CERTIFICATE_TIME_PATTERN = re.compile(
+    rb"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    rb"(?P<day> [1-9]|[12][0-9]|3[01]) "
+    rb"(?P<hour>[0-2][0-9]):(?P<minute>[0-5][0-9]):(?P<second>[0-5][0-9]) "
+    rb"(?P<year>[0-9]{4}) GMT"
+)
+_CLOUDFLARE_MONTHS = {
+    b"Jan": 1,
+    b"Feb": 2,
+    b"Mar": 3,
+    b"Apr": 4,
+    b"May": 5,
+    b"Jun": 6,
+    b"Jul": 7,
+    b"Aug": 8,
+    b"Sep": 9,
+    b"Oct": 10,
+    b"Nov": 11,
+    b"Dec": 12,
+}
 
 _TLS_HEADER_NAMES = (
     b"x-auth-tls-verified",
@@ -301,14 +324,38 @@ class WorkloadAuthExtension:
             )
 
 
+def _parse_time(value: bytes) -> datetime:
+    parsed = datetime.fromisoformat(value.decode("ascii"))
+    if parsed.utcoffset() is None:
+        raise ValueError
+    return parsed
+
+
+def _parse_cloudflare_time(value: bytes) -> datetime:
+    match = _CLOUDFLARE_CERTIFICATE_TIME_PATTERN.fullmatch(value)
+    if match is None:
+        raise ValueError
+    return datetime(
+        int(match["year"]),
+        _CLOUDFLARE_MONTHS[match["month"]],
+        int(match["day"]),
+        int(match["hour"]),
+        int(match["minute"]),
+        int(match["second"]),
+        tzinfo=UTC,
+    )
+
+
 @dataclass(frozen=True, slots=True)
-class EnvoyTLSHeaderEvidence:
-    """Project sanitized Envoy headers only from allowlisted proxy connections."""
+class _TLSHeaderEvidence:
+    """Shared fail-closed projection for provider-specific TLS header contracts."""
 
     proxy_addresses: frozenset[str]
     trust_anchors: frozenset[str]
     revocation_checked_at: Callable[[], datetime]
-    termination_boundary: str = "envoy"
+    termination_boundary: str
+    _provider_name: ClassVar[str]
+    _certificate_time_parser: ClassVar[_CertificateTimeParser]
 
     def __post_init__(self) -> None:
         """Require an explicit proxy and trust-anchor allowlist.
@@ -317,7 +364,7 @@ class EnvoyTLSHeaderEvidence:
             ValueError: If either allowlist is empty.
         """
         if not self.proxy_addresses or not self.trust_anchors or not callable(self.revocation_checked_at):
-            msg = "Envoy TLS evidence requires proxy addresses and trust anchors"
+            msg = f"{self._provider_name} TLS evidence requires proxy addresses and trust anchors"
             raise ValueError(msg)
 
     def __call__(self, scope: Scope) -> TlsPeerEvidence | None:
@@ -346,15 +393,40 @@ class EnvoyTLSHeaderEvidence:
             _require_trust_anchor(trust_anchor, self.trust_anchors)
             return TlsPeerEvidence(
                 tls_version=values[b"x-auth-tls-version"].decode("ascii"),
-                certificate_thumbprint=_parse_envoy_thumbprint(values[b"x-auth-client-cert-sha256"]),
-                certificate_not_before=_parse_time(values[b"x-auth-client-cert-not-before"]),
-                certificate_not_after=_parse_time(values[b"x-auth-client-cert-not-after"]),
+                certificate_thumbprint=_parse_sha256_thumbprint(values[b"x-auth-client-cert-sha256"]),
+                certificate_not_before=self._certificate_time_parser(values[b"x-auth-client-cert-not-before"]),
+                certificate_not_after=self._certificate_time_parser(values[b"x-auth-client-cert-not-after"]),
                 revocation_checked_at=self.revocation_checked_at(),
                 trust_anchor=trust_anchor,
                 termination_boundary=self.termination_boundary,
             )
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise NotAuthorizedException(detail="TLS client evidence is invalid.") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class EnvoyTLSHeaderEvidence(_TLSHeaderEvidence):
+    """Project sanitized Envoy headers only from allowlisted proxy connections."""
+
+    termination_boundary: str = "envoy"
+    _provider_name: ClassVar[str] = "Envoy"
+    _certificate_time_parser: ClassVar[_CertificateTimeParser] = staticmethod(_parse_time)
+
+
+@dataclass(frozen=True, slots=True)
+class CloudflareTLSHeaderEvidence(_TLSHeaderEvidence):
+    """Project sanitized Cloudflare mTLS headers from allowlisted origin connections.
+
+    Cloudflare certificate validity fields use its documented OpenSSL-style
+    ``Mon DD HH:MM:SS YYYY GMT`` representation. The edge must emit
+    ``X-Auth-TLS-Verified: SUCCESS`` only when ``cert_verified`` is true and
+    ``cert_revoked`` is false, overwrite every ``X-Auth-*`` evidence header,
+    and prevent direct traffic from reaching the origin.
+    """
+
+    termination_boundary: str = "cloudflare"
+    _provider_name: ClassVar[str] = "Cloudflare"
+    _certificate_time_parser: ClassVar[_CertificateTimeParser] = staticmethod(_parse_cloudflare_time)
 
 
 @dataclass(frozen=True, slots=True)
@@ -527,16 +599,9 @@ def _spiffe_headers(scope: Scope) -> dict[bytes, bytes]:
     return relevant
 
 
-def _parse_time(value: bytes) -> datetime:
-    parsed = datetime.fromisoformat(value.decode("ascii"))
-    if parsed.utcoffset() is None:
-        raise ValueError
-    return parsed
-
-
-def _parse_envoy_thumbprint(value: bytes) -> str:
+def _parse_sha256_thumbprint(value: bytes) -> str:
     encoded = value.decode("ascii")
-    if len(encoded) != _ENVOY_SHA256_HEX_LENGTH:
+    if len(encoded) != _SHA256_HEX_LENGTH:
         raise ValueError
     digest = bytes.fromhex(encoded)
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -658,6 +723,7 @@ def _machine_context(connection: ASGIConnection[Any, Any, Any, Any]) -> Authenti
 
 __all__ = (
     "UNIX_SOCKET_PROXY",
+    "CloudflareTLSHeaderEvidence",
     "DPoPBoundIntrospectionProviderConfig",
     "DPoPBoundJWTProviderConfig",
     "DirectMTLSProviderConfig",

@@ -23,6 +23,25 @@ domain socket, allowlist `UNIX_SOCKET_PROXY`; do not use that sentinel on a TCP 
 timestamp of the locally mounted CRL. Never derive it from a caller header or the current request
 time.
 
+For a Cloudflare mTLS boundary, use `CloudflareTLSHeaderEvidence`. Cloudflare emits
+[`cf.tls_client_auth.cert_not_before`](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/cf.tls_client_auth.cert_not_before/)
+and
+[`cf.tls_client_auth.cert_not_after`](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/cf.tls_client_auth.cert_not_after/)
+as OpenSSL-style `Mar 21 13:35:00 2022 GMT` values rather than ISO 8601. The Cloudflare adapter
+accepts only that provider contract; the Envoy adapter remains ISO-only. Configure the edge to
+overwrite every `X-Auth-*` evidence header, allowlist only the immediate trusted origin connection,
+and prevent direct access to the origin. A caller-provided header must never reach either adapter
+unchanged.
+
+Cloudflare reports
+[`cert_verified=true`](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/cf.tls_client_auth.cert_verified/)
+even when
+[`cert_revoked=true`](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/cf.tls_client_auth.cert_revoked/).
+The trusted edge projection must therefore set `X-Auth-TLS-Verified: SUCCESS` only for
+`cf.tls_client_auth.cert_verified and not cf.tls_client_auth.cert_revoked`; an unverified or revoked
+certificate must be rejected at the edge or projected as a non-`SUCCESS` value. Never map
+`cert_verified` alone.
+
 PostgreSQL is the guaranteed workload persistence target. The application owns migrations,
 transaction boundaries, row-level security, tenant mapping, business authorization, and durable
 event delivery. The lifecycle event recorder must use the same SQLAlchemy session/transaction as

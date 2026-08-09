@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from opentelemetry.metrics import CallbackOptions, Counter, Histogram, Meter, MeterProvider, Observation
     from opentelemetry.trace import Span, TracerProvider
 
-__version__ = "7.3.2"
+__version__ = "7.3.3"
 
 type AttributeValue = str
 type Attributes = dict[str, AttributeValue]
