@@ -12,6 +12,7 @@ import pytest
 from authweave_core import AuthenticationContext, AuthenticationEvidence, PrincipalRef
 from authweave_workload.integrations.litestar import (
     UNIX_SOCKET_PROXY,
+    CloudflareTLSHeaderEvidence,
     DirectMTLSProviderConfig,
     EnvoyTLSHeaderEvidence,
     MeshSPIFFEHeaderEvidence,
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
 
-_ENVOY_THUMBPRINT = "ab" * 32
+_SHA256_THUMBPRINT = "ab" * 32
 _REVOCATION_CHECKED_AT = datetime(2026, 7, 30, tzinfo=UTC)
 
 
@@ -61,7 +62,7 @@ def _headers() -> list[tuple[bytes, bytes]]:
     return [
         (b"x-auth-tls-verified", b"SUCCESS"),
         (b"x-auth-tls-version", b"TLSv1.3"),
-        (b"x-auth-client-cert-sha256", _ENVOY_THUMBPRINT.encode()),
+        (b"x-auth-client-cert-sha256", _SHA256_THUMBPRINT.encode()),
         (b"x-auth-client-cert-not-before", b"2026-01-01T00:00:00+00:00"),
         (b"x-auth-client-cert-not-after", b"2027-01-01T00:00:00+00:00"),
         (b"x-auth-client-cert-trust-anchor", b"local-ca"),
@@ -71,6 +72,25 @@ def _headers() -> list[tuple[bytes, bytes]]:
 def _evidence_factory(*, proxy_addresses: frozenset[str] = frozenset({"127.0.0.1"})) -> EnvoyTLSHeaderEvidence:
     return EnvoyTLSHeaderEvidence(
         proxy_addresses,
+        frozenset({"local-ca"}),
+        lambda: _REVOCATION_CHECKED_AT,
+    )
+
+
+def _cloudflare_headers() -> list[tuple[bytes, bytes]]:
+    return [
+        (b"x-auth-tls-verified", b"SUCCESS"),
+        (b"x-auth-tls-version", b"TLSv1.3"),
+        (b"x-auth-client-cert-sha256", _SHA256_THUMBPRINT.encode()),
+        (b"x-auth-client-cert-not-before", b"Mar 21 13:35:00 2026 GMT"),
+        (b"x-auth-client-cert-not-after", b"Nov  7 08:05:00 2026 GMT"),
+        (b"x-auth-client-cert-trust-anchor", b"local-ca"),
+    ]
+
+
+def _cloudflare_evidence_factory() -> CloudflareTLSHeaderEvidence:
+    return CloudflareTLSHeaderEvidence(
+        frozenset({"127.0.0.1"}),
         frozenset({"local-ca"}),
         lambda: _REVOCATION_CHECKED_AT,
     )
@@ -106,7 +126,7 @@ def test_envoy_evidence_builds_strict_neutral_projection() -> None:
 
     assert evidence is not None
     assert evidence.tls_version == "TLSv1.3"
-    expected_thumbprint = base64.urlsafe_b64encode(bytes.fromhex(_ENVOY_THUMBPRINT)).rstrip(b"=").decode()
+    expected_thumbprint = base64.urlsafe_b64encode(bytes.fromhex(_SHA256_THUMBPRINT)).rstrip(b"=").decode()
     assert evidence.certificate_thumbprint == expected_thumbprint
     assert evidence.revocation_checked_at == _REVOCATION_CHECKED_AT
     assert evidence.trust_anchor == "local-ca"
@@ -150,6 +170,72 @@ def test_envoy_evidence_rejects_incomplete_or_malformed_headers(headers: list[tu
     factory = _evidence_factory()
     with pytest.raises(NotAuthorizedException, match="invalid"):
         factory(_scope(headers=headers))
+
+
+def test_envoy_evidence_rejects_cloudflare_timestamp_contract() -> None:
+    with pytest.raises(NotAuthorizedException, match="invalid"):
+        _evidence_factory()(_scope(headers=_cloudflare_headers()))
+
+
+def test_cloudflare_evidence_builds_strict_neutral_projection() -> None:
+    evidence = _cloudflare_evidence_factory()(_scope(headers=_cloudflare_headers()))
+
+    assert evidence is not None
+    assert evidence.certificate_not_before == datetime(2026, 3, 21, 13, 35, tzinfo=UTC)
+    assert evidence.certificate_not_after == datetime(2026, 11, 7, 8, 5, tzinfo=UTC)
+    assert evidence.revocation_checked_at == _REVOCATION_CHECKED_AT
+    assert evidence.termination_boundary == "cloudflare"
+
+
+def test_cloudflare_evidence_is_absent_without_headers_and_requires_explicit_trust() -> None:
+    assert _cloudflare_evidence_factory()(_scope()) is None
+    with pytest.raises(ValueError, match="Cloudflare TLS evidence requires"):
+        CloudflareTLSHeaderEvidence(frozenset(), frozenset({"local-ca"}), lambda: _REVOCATION_CHECKED_AT)
+
+
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        (_scope(client="203.0.113.5", headers=_cloudflare_headers()), "not trusted"),
+        (
+            _scope(headers=[*_cloudflare_headers(), (b"x-auth-tls-version", b"TLSv1.2")]),
+            "ambiguous",
+        ),
+        (_scope(headers=_cloudflare_headers()[:-1]), "invalid"),
+    ],
+)
+def test_cloudflare_evidence_rejects_untrusted_ambiguous_or_incomplete_headers(
+    scope: Scope,
+    message: str,
+) -> None:
+    with pytest.raises(NotAuthorizedException, match=message):
+        _cloudflare_evidence_factory()(scope)
+
+
+def test_cloudflare_evidence_rejects_unverified_or_revoked_projection() -> None:
+    headers = [(name, b"FAILED" if name == b"x-auth-tls-verified" else value) for name, value in _cloudflare_headers()]
+    with pytest.raises(NotAuthorizedException, match="invalid"):
+        _cloudflare_evidence_factory()(_scope(headers=headers))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"2026-11-07T08:05:00+00:00",
+        b"Nov 07 08:05:00 2026 GMT",
+        b"Nov  7 08:05:00 2026 UTC",
+        b"Not  7 08:05:00 2026 GMT",
+        b"Feb 30 08:05:00 2026 GMT",
+        b"Nov  7 25:05:00 2026 GMT",
+    ],
+)
+def test_cloudflare_evidence_rejects_non_cloudflare_or_invalid_timestamps(value: bytes) -> None:
+    headers = [
+        (name, value if name == b"x-auth-client-cert-not-before" else header_value)
+        for name, header_value in _cloudflare_headers()
+    ]
+    with pytest.raises(NotAuthorizedException, match="invalid"):
+        _cloudflare_evidence_factory()(_scope(headers=headers))
 
 
 def _policy() -> DirectMTLSPolicy:

@@ -1,3 +1,12 @@
+## 7.3.3 (2026-08-09)
+
+### Fixed
+
+- Added a strict `CloudflareTLSHeaderEvidence` adapter for Cloudflare's OpenSSL-style client
+  certificate validity timestamps while keeping `EnvoyTLSHeaderEvidence` ISO-only. The Cloudflare
+  boundary documentation now requires verified and non-revoked evidence, trusted header
+  replacement, and direct-origin isolation.
+
 ## 7.3.2 (2026-08-08)
 
 ### Added
