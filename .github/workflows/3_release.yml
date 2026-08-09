@@ -244,14 +244,14 @@ jobs:
           done
 
       - name: Attest distribution build provenance
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/**/*.whl
             ${{ runner.temp }}/dist1/**/*.tar.gz
 
       - name: Attest authweave-core SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/authweave-core/*.whl
@@ -259,7 +259,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/sbom/authweave-core-${{ needs.check-tag.outputs.tag }}.cdx.json
 
       - name: Attest litestar-auth SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/litestar-auth/*.whl
@@ -267,7 +267,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/sbom/litestar-auth-${{ needs.check-tag.outputs.tag }}.cdx.json
 
       - name: Attest authweave-workload SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/authweave-workload/*.whl
@@ -275,7 +275,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/sbom/authweave-workload-${{ needs.check-tag.outputs.tag }}.cdx.json
 
       - name: Attest authweave-otel SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/authweave-otel/*.whl
@@ -283,7 +283,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/sbom/authweave-otel-${{ needs.check-tag.outputs.tag }}.cdx.json
 
       - name: Attest authweave-webhooks SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/authweave-webhooks/*.whl
@@ -291,7 +291,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/sbom/authweave-webhooks-${{ needs.check-tag.outputs.tag }}.cdx.json
 
       - name: Attest authweave-http-signatures SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist1/authweave-http-signatures/*.whl
