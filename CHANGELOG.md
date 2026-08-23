@@ -1,4 +1,21 @@
-## Unreleased
+## 7.3.4 (2026-08-23)
+
+### Added
+
+- Added `LitestarAuthConfig.request_session_provider` so an application with its own request-session
+  integration can lend AuthWeave the HTTP session it already opens. The provider may be synchronous or
+  asynchronous, is registered under `db_session_dependency_key` with request caching disabled, and is
+  memoized per request scope, so authentication, the authentication-result hook, organization lookup,
+  and handler injection all observe one borrowed session. AuthWeave never commits, rolls back, or
+  closes it; the application keeps lifecycle ownership. It is mutually exclusive with the legacy
+  `db_session_dependency_provided_externally=True` flag, and a configured `session_maker` stays the
+  session source for CLI commands.
+- Added `LitestarAuthConfig.authentication_result_hook`, which runs once per anonymous or
+  authenticated result, after stale organization context is cleared and before organization lookup. It
+  may be synchronous or asynchronous, must return `None`, and fails the request when it raises or
+  rebinds `AuthenticationResult.user` or `.auth`, so it can project application request context but
+  never replace the verified authentication result.
+- Exported `RequestSessionProvider` and `AuthenticationResultHook` for typing both seams.
 
 ### Fixed
 
@@ -10,6 +27,13 @@
   organization context into other requests. Only the request-independent `config` and `user_model`
   dependencies remain cached; guards were never affected because they resolve permissions from the
   connection instead of dependency injection.
+
+### Changed
+
+- Controller assembly no longer requires `session_maker`, so a deployment whose request session comes
+  from `request_session_provider` or external dependency injection no longer has to configure an
+  unused session factory. A legacy external session that is missing from request scope now fails
+  closed with a request-time error instead of a startup error.
 
 ## 7.3.3 (2026-08-09)
 

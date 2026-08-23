@@ -1230,6 +1230,34 @@ def test_register_dependencies_skips_db_session_provider_and_autocommit_when_ext
     assert app_config.before_send == []
 
 
+async def test_register_dependencies_uses_borrowed_request_session_provider_without_ownership() -> None:
+    """The configured provider owns the DB key while AuthWeave adds no lifecycle handler."""
+    app_config = AppConfig()
+    session = object()
+    calls = 0
+
+    async def request_session_provider(_state: State, _scope: object) -> object:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return session
+
+    config = _minimal_config()
+    config.request_session_provider = cast("Any", request_session_provider)
+
+    register_dependencies(app_config, config, providers=_providers())
+
+    registered = app_config.dependencies[config.db_session_dependency_key]
+    scope: dict[str, Any] = {}
+    assert isinstance(registered, Provide)
+    assert registered.dependency is not request_session_provider
+    assert registered.use_cache is False
+    assert await registered.dependency(State(), scope) is session
+    assert await registered.dependency(State(), scope) is session
+    assert calls == 1
+    assert app_config.before_send == []
+
+
 def test_register_dependencies_caches_only_request_independent_providers() -> None:
     """Litestar caches Provide values for the app lifetime, so request-scoped keys stay uncached."""
     app_config = AppConfig()

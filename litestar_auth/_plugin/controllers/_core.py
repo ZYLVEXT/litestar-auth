@@ -8,7 +8,6 @@ from litestar_auth._plugin.auth_controller import PluginAuthControllerSettings, 
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     StartupBackendInventory,
-    require_session_maker,
     resolve_backend_inventory,
 )
 from litestar_auth._plugin.controllers._factory_kit import (
@@ -70,7 +69,6 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
         Auth controllers corresponding to configured backends.
     """
     controllers: list[ControllerRouterHandler] = []
-    require_session_maker(config)
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
     for backend_index, backend in enumerate(inventory.startup_backends()):
         totp_pending_secret = config.totp_config.totp_pending_secret if config.totp_config is not None else None

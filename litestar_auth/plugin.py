@@ -27,7 +27,7 @@ from litestar_auth._plugin.dependencies import (
 )
 from litestar_auth._plugin.exception_handlers import register_exception_handlers
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
-from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
+from litestar_auth._plugin.scoped_session import get_or_create_scoped_session, memoize_request_session_provider
 from litestar_auth._plugin.session_binding import (
     _AccountStateValidator as PluginAccountStateValidator,
 )
@@ -42,10 +42,12 @@ from litestar_auth._plugin.validation import (
     validate_config,
 )
 from litestar_auth.authentication import (
+    AuthenticationResultHook,
     HumanSessionProvider,
     LitestarAuthMiddleware,
     LitestarAuthMiddlewareConfig,
     LitestarProviderBinding,
+    RequestSessionProvider,
 )
 from litestar_auth.authentication.strategy.base import HumanSessionStrategy
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -106,8 +108,16 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         self.config = config
         self._oauth_token_encryption = _build_oauth_token_encryption(self.config)
         validate_config(self.config)
-        self._session_maker = _plugin_config.require_session_maker(self.config)
         self._session_scope_key = _resolve_session_scope_key(self.config)
+        self._request_session_provider = (
+            memoize_request_session_provider(self.config.request_session_provider)
+            if self.config.request_session_provider is not None
+            else partial(
+                get_or_create_scoped_session,
+                session_maker=self.config.session_maker,
+                session_scope_key=self._session_scope_key,
+            )
+        )
         from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
             resolve_user_manager_factory,
         )
@@ -364,11 +374,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         middleware = DefineMiddleware(
             LitestarAuthMiddleware[UP, ID],
             config=LitestarAuthMiddlewareConfig[UP, ID](
-                get_request_session=partial(
-                    get_or_create_scoped_session,
-                    session_maker=self._session_maker,
-                    session_scope_key=self._session_scope_key,
-                ),
+                get_request_session=self._request_session_provider,
                 provider_bindings_factory=self._build_provider_bindings,
                 default_policy=RouteProviderPolicy(tuple(backend.name for backend in startup_backends)),
                 tls_peer_evidence_factory=None if tls_evidence is None else cast("Any", tls_evidence.factory),
@@ -391,6 +397,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                     if self.config.organization_config.enabled
                     else None
                 ),
+                authentication_result_hook=self.config.authentication_result_hook,
             ),
         )
         if self.config.middleware_hook is not None:
@@ -479,6 +486,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
 __all__ = (
     "AlchemyAuthSessionBinding",
+    "AuthenticationResultHook",
     "DatabaseTokenAuthConfig",
     "FernetKeyringConfig",
     "LitestarAuth",
@@ -486,6 +494,7 @@ __all__ = (
     "OAuthConfig",
     "OAuthProviderConfig",
     "OrganizationConfig",
+    "RequestSessionProvider",
     "StartupBackendTemplate",
     "TotpConfig",
     "bind_auth_session_to_alchemy",

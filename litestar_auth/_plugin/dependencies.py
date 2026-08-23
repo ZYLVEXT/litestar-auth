@@ -36,6 +36,7 @@ from litestar_auth._plugin.scoped_session import (
     SESSION_SCOPE_KEY,
     SessionFactory,
     get_or_create_scoped_session,
+    memoize_request_session_provider,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.types import UserProtocol
@@ -262,7 +263,7 @@ def provide_authentication_context(
 def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
-    if config.db_session_dependency_provided_externally:
+    if config.request_session_provider is not None or config.db_session_dependency_provided_externally:
         return None
     return config.session_maker
 
@@ -440,16 +441,7 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
     if static_registration is not None:
         return static_registration
     if provider_name == "db_session":
-        session_maker = _resolve_builtin_db_session_provider_factory(config)
-        if session_maker is None:
-            return None
-        return _DependencyRegistration(
-            config.db_session_dependency_key,
-            _make_db_session_provide(
-                session_maker,
-                session_scope_key=_resolve_session_scope_key(config),
-            ),
-        )
+        return _resolve_db_session_registration(config)
     if provider_name == "oauth_associate_user_manager":
         oauth_contract = _build_oauth_route_registration_contract(
             auth_path=config.auth_path,
@@ -465,6 +457,26 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
         return _resolve_organization_store_registration(config)
     msg = f"Unknown auth dependency provider wiring: {provider_name}"
     raise RuntimeError(msg)
+
+
+def _resolve_db_session_registration[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> _DependencyRegistration | None:
+    if config.request_session_provider is not None:
+        return _DependencyRegistration(
+            config.db_session_dependency_key,
+            memoize_request_session_provider(config.request_session_provider),
+        )
+    session_maker = _resolve_builtin_db_session_provider_factory(config)
+    if session_maker is None:
+        return None
+    return _DependencyRegistration(
+        config.db_session_dependency_key,
+        _make_db_session_provide(
+            session_maker,
+            session_scope_key=_resolve_session_scope_key(config),
+        ),
+    )
 
 
 def _resolve_organization_store_registration[UP: UserProtocol[Any], ID](

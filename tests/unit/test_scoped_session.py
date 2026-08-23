@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -12,6 +13,7 @@ from litestar_auth._plugin.scoped_session import (
     SESSION_SCOPE_KEY,
     _get_aa_namespace,
     get_or_create_scoped_session,
+    memoize_request_session_provider,
 )
 from tests.e2e.conftest import assert_structural_session_factory
 
@@ -115,6 +117,49 @@ def test_get_or_create_scoped_session_honors_custom_scope_key() -> None:
     namespace = cast("dict[str, Any]", _scope_dict(scope)[_AA_SCOPE_NAMESPACE])
     assert namespace[custom_key] is session
     assert SESSION_SCOPE_KEY not in namespace
+
+
+def test_get_or_create_scoped_session_fails_when_external_session_is_absent() -> None:
+    """A missing legacy external request session fails closed instead of inventing ownership."""
+    with pytest.raises(RuntimeError, match="externally provided request session is unavailable"):
+        get_or_create_scoped_session(State(), _build_scope(), None)
+
+
+async def test_memoized_request_session_provider_calls_sync_provider_once() -> None:
+    """Repeated consumers share one resolved identity from a synchronous provider."""
+    session = cast("Any", DummySession())
+    calls = 0
+
+    def provider(_state: State, _scope: Scope) -> AsyncSession:
+        nonlocal calls
+        calls += 1
+        return session
+
+    wrapped = memoize_request_session_provider(provider)
+    scope = _build_scope()
+
+    assert await wrapped(State(), scope) is session
+    assert await wrapped(State(), scope) is session
+    assert calls == 1
+
+
+async def test_memoized_request_session_provider_calls_async_provider_once() -> None:
+    """Repeated consumers share one resolved identity from an asynchronous provider."""
+    session = cast("Any", DummySession())
+    calls = 0
+
+    async def provider(_state: State, _scope: Scope) -> AsyncSession:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return session
+
+    wrapped = memoize_request_session_provider(provider)
+    scope = _build_scope()
+
+    assert await wrapped(State(), scope) is session
+    assert await wrapped(State(), scope) is session
+    assert calls == 1
 
 
 def test_get_aa_namespace_creates_namespace_when_absent() -> None:

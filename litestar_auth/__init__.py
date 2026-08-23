@@ -44,6 +44,7 @@ from litestar_auth._current_organization import ElevatedMembershipResolver, curr
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._tenant_resolution import HeaderTenantResolver, SubdomainTenantResolver, TenantResolver
+from litestar_auth.authentication.middleware import AuthenticationResultHook, RequestSessionProvider
 from litestar_auth.authentication.transport import CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
 from litestar_auth.extensions import AuthExtension, AuthExtensionRegistrationContext, AuthExtensionValidationContext
@@ -83,13 +84,14 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # ruff: ignore[non-empty-init-module]
 
-__version__ = "7.3.3"
+__version__ = "7.3.4"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
     "AuthExtension",
     "AuthExtensionRegistrationContext",
     "AuthExtensionValidationContext",
+    "AuthenticationResultHook",
     "BaseUserManager",
     "BaseUserManagerConfig",
     "CookieTransport",
@@ -107,6 +109,7 @@ __all__ = (
     "OAuthProviderConfig",
     "OrganizationConfig",
     "PermissionResolver",
+    "RequestSessionProvider",
     "RoleCapableUserProtocol",
     "StaticRolePermissionResolver",
     "SubdomainTenantResolver",

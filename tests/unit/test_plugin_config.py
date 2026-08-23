@@ -6,7 +6,7 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Sequence
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import timedelta
 from functools import partial
 from operator import eq
@@ -36,6 +36,7 @@ from litestar_auth._plugin.user_manager_builder import (
 )
 from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER, HeaderTenantResolver
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.middleware import AuthenticationResultHook, RequestSessionProvider
 from litestar_auth.authentication.strategy._jwt_denylist import (
     InMemoryJWTDenylistStore,
     JWTDenylistStore,
@@ -832,6 +833,29 @@ def test_litestar_auth_config_declares_db_session_dependency_fields() -> None:
     assert plugin_config_module.DbSessionDependencyKey.__name__ == "DbSessionDependencyKey"
     assert dataclass_fields["db_session_dependency_key"].type == "DbSessionDependencyKey"
     assert "db_session_dependency_provided_externally" in dataclass_fields
+    assert "request_session_provider" in dataclass_fields
+    assert "authentication_result_hook" in dataclass_fields
+
+
+def test_litestar_auth_config_rejects_ambiguous_request_session_sources() -> None:
+    """A provider cannot be combined with the legacy external-dependency declaration."""
+    config = _minimal_config()
+
+    with pytest.raises(ConfigurationError, match="mutually exclusive"):
+        replace(
+            config,
+            request_session_provider=lambda _state, _scope: cast("Any", object()),
+            db_session_dependency_provided_externally=True,
+        )
+
+
+@pytest.mark.parametrize("field_name", ["request_session_provider", "authentication_result_hook"])
+def test_litestar_auth_config_rejects_non_callable_request_session_hooks(field_name: str) -> None:
+    """Request-session integration fields accept callables only."""
+    config = _minimal_config()
+
+    with pytest.raises(ConfigurationError, match=field_name):
+        replace(config, **{field_name: cast("Any", object())})
 
 
 def test_litestar_auth_config_declares_login_identifier_field() -> None:
@@ -2894,6 +2918,8 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "JWTDenylistStore": JWTDenylistStore,
             "JWTReplayStore": JWTReplayStore,
             "SecurityObserver": SecurityObserver,
+            "RequestSessionProvider": RequestSessionProvider,
+            "AuthenticationResultHook": AuthenticationResultHook,
             "Guard": Any,
             "msgspec": msgspec,
         },
