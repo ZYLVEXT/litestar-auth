@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import re
-from collections.abc import Mapping
+from collections.abc import (
+    Mapping,
+)
 from dataclasses import dataclass, field
 
 from authweave_webhooks.errors import WebhookFailureCode, WebhookVerificationError
@@ -83,6 +85,9 @@ def format_signature_header(signatures: list[bytes]) -> str:
 
     Returns:
         A space-delimited ``v1a,<base64>`` list.
+
+    Raises:
+        ValueError: If the call cannot complete.
     """
     if not signatures or len(signatures) > MAX_SIGNATURES:
         msg = f"signature count must be 1..{MAX_SIGNATURES}"

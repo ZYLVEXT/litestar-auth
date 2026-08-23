@@ -141,7 +141,8 @@ def validate_public_certificate(
         ImportError: If the ``mtls`` extra is not installed.
     """
     if b"PRIVATE KEY" in certificate:
-        raise CertificateValidationError("private key material is not accepted")
+        msg = "private key material is not accepted"
+        raise CertificateValidationError(msg)
     crypto = _load_cryptography()
     x509 = crypto["x509"]
     try:
@@ -150,20 +151,25 @@ def validate_public_certificate(
         untrusted = [_load_certificate(x509, value) for value in intermediates]
         now = datetime.now(UTC) if verification_time is None else verification_time
         if now.utcoffset() is None:
-            raise CertificateValidationError("verification_time must be timezone-aware")
+            msg = "verification_time must be timezone-aware"
+            raise CertificateValidationError(msg)
         if policy.revocation_checked_at > now or now - policy.revocation_checked_at > policy.maximum_revocation_age:
-            raise CertificateValidationError("certificate revocation information is stale")
+            msg = "certificate revocation information is stale"
+            raise CertificateValidationError(msg)
         verifier = crypto["PolicyBuilder"]().store(crypto["Store"](anchors)).time(now).build_client_verifier()
         verifier.verify(leaf, untrusted)
         _validate_leaf_profile(leaf, crypto)
         if leaf.not_valid_after_utc - leaf.not_valid_before_utc > policy.maximum_certificate_lifetime:
-            raise CertificateValidationError("certificate lifetime exceeds policy")
+            msg = "certificate lifetime exceeds policy"
+            raise CertificateValidationError(msg)
     except CertificateValidationError:
         raise
     except (TypeError, ValueError, crypto["VerificationError"]) as exc:
-        raise CertificateValidationError("certificate validation failed") from exc
+        msg = "certificate validation failed"
+        raise CertificateValidationError(msg) from exc
     if leaf.serial_number in policy.revoked_serial_numbers:
-        raise CertificateValidationError("certificate is revoked")
+        msg = "certificate is revoked"
+        raise CertificateValidationError(msg)
     return _metadata_from_leaf(leaf, trust_anchor=policy.trust_anchor, encoding=crypto["Encoding"])
 
 
@@ -190,14 +196,16 @@ def validate_attested_certificate(
         ImportError: If the ``mtls`` extra is not installed.
     """
     if b"PRIVATE KEY" in certificate:
-        raise CertificateValidationError("private key material is not accepted")
+        msg = "private key material is not accepted"
+        raise CertificateValidationError(msg)
     crypto = _load_cryptography()
     x509 = crypto["x509"]
     try:
         leaf = _load_single_certificate(x509, certificate)
         now = datetime.now(UTC) if verification_time is None else verification_time
         if now.utcoffset() is None:
-            raise CertificateValidationError("verification_time must be timezone-aware")
+            msg = "verification_time must be timezone-aware"
+            raise CertificateValidationError(msg)
         _validate_provider_attestation(attestation, policy=policy, verification_time=now)
         _validate_attested_leaf(
             leaf,
@@ -209,17 +217,31 @@ def validate_attested_certificate(
     except CertificateValidationError:
         raise
     except (TypeError, ValueError) as exc:
-        raise CertificateValidationError("certificate validation failed") from exc
+        msg = "certificate validation failed"
+        raise CertificateValidationError(msg) from exc
     return _metadata_from_leaf(leaf, trust_anchor=policy.trust_anchor, encoding=crypto["Encoding"])
 
 
 def _load_cryptography() -> dict[str, Any]:
     try:
-        from cryptography import x509
-        from cryptography.hazmat.primitives.asymmetric import ec, rsa
-        from cryptography.hazmat.primitives.serialization import Encoding
-        from cryptography.x509 import ExtendedKeyUsageOID
-        from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
+        from cryptography import (
+            x509,
+        )
+        from cryptography.hazmat.primitives.asymmetric import (
+            ec,
+            rsa,
+        )
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+        )
+        from cryptography.x509 import (
+            ExtendedKeyUsageOID,
+        )
+        from cryptography.x509.verification import (
+            PolicyBuilder,
+            Store,
+            VerificationError,
+        )
     except ImportError as exc:
         msg = "X.509 validation requires the 'authweave-workload[mtls]' extra."
         raise ImportError(msg) from exc
@@ -241,7 +263,8 @@ def _load_certificate(x509: Any, value: bytes) -> Any:
             return x509.load_pem_x509_certificate(value)
         return x509.load_der_x509_certificate(value)
     except ValueError as exc:
-        raise CertificateValidationError("certificate encoding is invalid") from exc
+        msg = "certificate encoding is invalid"
+        raise CertificateValidationError(msg) from exc
 
 
 def _load_single_certificate(x509: Any, value: bytes) -> Any:
@@ -250,9 +273,11 @@ def _load_single_certificate(x509: Any, value: bytes) -> Any:
     try:
         certificates = x509.load_pem_x509_certificates(value)
     except ValueError as exc:
-        raise CertificateValidationError("certificate encoding is invalid") from exc
+        msg = "certificate encoding is invalid"
+        raise CertificateValidationError(msg) from exc
     if len(certificates) != 1:
-        raise CertificateValidationError("exactly one public certificate is required")
+        msg = "exactly one public certificate is required"
+        raise CertificateValidationError(msg)
     return certificates[0]
 
 
@@ -261,28 +286,35 @@ def _validate_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
     public_key = certificate.public_key()
     if isinstance(public_key, crypto["rsa"].RSAPublicKey):
         if public_key.key_size < 3072:
-            raise CertificateValidationError("RSA certificate keys must be at least 3072 bits")
+            msg = "RSA certificate keys must be at least 3072 bits"
+            raise CertificateValidationError(msg)
     elif isinstance(public_key, crypto["ec"].EllipticCurvePublicKey):
         if public_key.curve.name not in {"secp256r1", "secp384r1"}:
-            raise CertificateValidationError("ECDSA certificate keys must use P-256 or P-384")
+            msg = "ECDSA certificate keys must use P-256 or P-384"
+            raise CertificateValidationError(msg)
     else:
-        raise CertificateValidationError("certificate public key type is not supported")
+        msg = "certificate public key type is not supported"
+        raise CertificateValidationError(msg)
 
     signature_hash = certificate.signature_hash_algorithm
     if signature_hash is None or signature_hash.name.lower() in {"md5", "sha1"}:
-        raise CertificateValidationError("certificate signature hash is not supported")
+        msg = "certificate signature hash is not supported"
+        raise CertificateValidationError(msg)
     try:
         extended_key_usage = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound as exc:
-        raise CertificateValidationError("client certificate must include clientAuth EKU") from exc
+        msg = "client certificate must include clientAuth EKU"
+        raise CertificateValidationError(msg) from exc
     try:
         key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
     except x509.ExtensionNotFound:
         key_usage = None
     if key_usage is not None and not key_usage.digital_signature:
-        raise CertificateValidationError("client certificate must permit digital signatures")
+        msg = "client certificate must permit digital signatures"
+        raise CertificateValidationError(msg)
     if crypto["ExtendedKeyUsageOID"].CLIENT_AUTH not in extended_key_usage:
-        raise CertificateValidationError("client certificate must include clientAuth EKU")
+        msg = "client certificate must include clientAuth EKU"
+        raise CertificateValidationError(msg)
 
 
 def _validate_attested_leaf_profile(certificate: Any, crypto: dict[str, Any]) -> None:
@@ -291,9 +323,11 @@ def _validate_attested_leaf_profile(certificate: Any, crypto: dict[str, Any]) ->
     try:
         basic_constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
     except x509.ExtensionNotFound as exc:
-        raise CertificateValidationError("client certificate must include BasicConstraints") from exc
+        msg = "client certificate must include BasicConstraints"
+        raise CertificateValidationError(msg) from exc
     if not basic_constraints.critical or basic_constraints.value.ca:
-        raise CertificateValidationError("client certificate must be a critical CA=false end entity")
+        msg = "client certificate must be a critical CA=false end entity"
+        raise CertificateValidationError(msg)
 
 
 def _validate_provider_attestation(
@@ -303,11 +337,14 @@ def _validate_provider_attestation(
     verification_time: datetime,
 ) -> None:
     if attestation.provider != policy.provider or attestation.trust_anchor != policy.trust_anchor:
-        raise CertificateValidationError("certificate provider attestation is not trusted")
+        msg = "certificate provider attestation is not trusted"
+        raise CertificateValidationError(msg)
     if attestation.attested_at > verification_time + policy.maximum_clock_skew:
-        raise CertificateValidationError("certificate provider attestation is from the future")
+        msg = "certificate provider attestation is from the future"
+        raise CertificateValidationError(msg)
     if verification_time - attestation.attested_at > policy.maximum_attestation_age:
-        raise CertificateValidationError("certificate provider attestation is stale")
+        msg = "certificate provider attestation is stale"
+        raise CertificateValidationError(msg)
 
 
 def _validate_attested_leaf(
@@ -322,17 +359,21 @@ def _validate_attested_leaf(
     not_before = certificate.not_valid_before_utc
     not_after = certificate.not_valid_after_utc
     if not_before > verification_time + policy.maximum_clock_skew or not_after <= verification_time:
-        raise CertificateValidationError("certificate validity window is not currently usable")
+        msg = "certificate validity window is not currently usable"
+        raise CertificateValidationError(msg)
     if not_after - not_before > policy.maximum_certificate_lifetime + policy.maximum_clock_skew:
-        raise CertificateValidationError("certificate lifetime exceeds policy")
+        msg = "certificate lifetime exceeds policy"
+        raise CertificateValidationError(msg)
     if (
         abs(attestation.not_before - not_before) > policy.maximum_clock_skew
         or abs(attestation.not_after - not_after) > policy.maximum_clock_skew
     ):
-        raise CertificateValidationError("certificate dates disagree with provider attestation")
+        msg = "certificate dates disagree with provider attestation"
+        raise CertificateValidationError(msg)
     thumbprint = _certificate_thumbprint(certificate, encoding=crypto["Encoding"])
     if not hmac.compare_digest(thumbprint, attestation.certificate_thumbprint):
-        raise CertificateValidationError("certificate fingerprint disagrees with provider attestation")
+        msg = "certificate fingerprint disagrees with provider attestation"
+        raise CertificateValidationError(msg)
 
 
 def _certificate_thumbprint(certificate: Any, *, encoding: Any) -> str:

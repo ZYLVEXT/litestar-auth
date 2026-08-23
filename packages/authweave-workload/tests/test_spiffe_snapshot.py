@@ -146,7 +146,7 @@ def _snapshot(
     )
 
 
-def _policy(  # ruff: ignore[too-many-arguments] - each lifecycle bound is independently exercised
+def _policy(
     *,
     federated_trust_domains: frozenset[str] = frozenset(),
     refresh_interval: timedelta = timedelta(minutes=1),

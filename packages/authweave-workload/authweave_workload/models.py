@@ -52,7 +52,14 @@ def _validate_time(value: datetime, *, name: str) -> None:
 
 
 def freeze_metadata(metadata: Mapping[str, str]) -> Mapping[str, str]:
-    """Validate and freeze bounded, secret-free metadata."""
+    """Validate and freeze bounded, secret-free metadata.
+
+    Returns:
+        The freeze metadata.
+
+    Raises:
+        ValueError: If the call cannot complete.
+    """
     frozen = dict(metadata)
     if len(frozen) > _MAX_METADATA_ITEMS:
         msg = f"metadata must contain at most {_MAX_METADATA_ITEMS} items"
@@ -78,7 +85,11 @@ class ServiceApplication:
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate stable public fields."""
+        """Validate stable public fields.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         _validate_id(self.id, name="application id")
         _validate_id(self.owner_ref, name="owner_ref")
         if _ENVIRONMENT_PATTERN.fullmatch(self.environment) is None:
@@ -98,7 +109,11 @@ class MachinePrincipal:
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate public IDs and supported principal classification."""
+        """Validate public IDs and supported principal classification.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         _validate_id(self.id, name="principal id")
         _validate_id(self.application_id, name="application_id")
         if self.ref.kind == "human":
@@ -131,7 +146,11 @@ class MachineCredential:
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate bounded credential identity and temporal constraints."""
+        """Validate bounded credential identity and temporal constraints.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         _validate_id(self.id, name="credential id")
         _validate_id(self.principal_id, name="principal_id")
         _validate_id(self.trust_anchor, name="trust_anchor")
@@ -191,7 +210,11 @@ class WorkloadPage[PAGE_ITEM]:
     offset: int
 
     def __post_init__(self) -> None:
-        """Reject internally inconsistent page metadata."""
+        """Reject internally inconsistent page metadata.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if self.total < 0 or self.limit < 1 or self.offset < 0 or len(self.items) > self.limit:
             msg = "workload page metadata is invalid"
             raise ValueError(msg)
@@ -210,12 +233,20 @@ class CertificateMetadata:
     serial_number: str
 
     def __new__(cls) -> Self:
-        """Prevent construction outside the certificate validator."""
+        """Prevent construction outside the certificate validator.
+
+        Raises:
+            TypeError: If the call cannot complete.
+        """
         msg = "CertificateMetadata is created by AuthWeave certificate validators"
         raise TypeError(msg)
 
     def __post_init__(self) -> None:
-        """Reuse credential validation through bounded primitive checks."""
+        """Reuse credential validation through bounded primitive checks.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if _THUMBPRINT_PATTERN.fullmatch(self.thumbprint) is None:
             msg = "thumbprint must be an unpadded base64url SHA-256 digest"
             raise ValueError(msg)
@@ -232,7 +263,7 @@ class CertificateMetadata:
                 raise ValueError(msg)
 
 
-def _certificate_metadata(  # ruff: ignore[too-many-arguments]
+def _certificate_metadata(
     *,
     thumbprint: str,
     trust_anchor: str,
@@ -245,7 +276,7 @@ def _certificate_metadata(  # ruff: ignore[too-many-arguments]
     certificate = object.__new__(CertificateMetadata)
     for name, value in locals().items():
         if name != "certificate":
-            object.__setattr__(certificate, name, value)  # ruff: ignore[unnecessary-dunder-call]
+            object.__setattr__(certificate, name, value)
     certificate.__post_init__()
     return certificate
 

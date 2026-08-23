@@ -62,7 +62,11 @@ class WorkloadLifecycleService:
         active_credential_limit: int = 4,
         maximum_rotation_lead: timedelta = timedelta(days=7),
     ) -> None:
-        """Bind persistence and bounded lifecycle policy."""
+        """Bind persistence and bounded lifecycle policy.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if active_credential_limit < 1:
             msg = "active_credential_limit must be positive"
             raise ValueError(msg)
@@ -123,7 +127,11 @@ class WorkloadLifecycleService:
         owner_ref: str,
         metadata: Mapping[str, str] = _EMPTY_METADATA,
     ) -> tuple[ServiceApplication, SecurityEvent]:
-        """Create an enabled service application."""
+        """Create an enabled service application.
+
+        Returns:
+            The created application.
+        """
         application = ServiceApplication(
             id=application_id,
             status=EntityStatus.ACTIVE,
@@ -145,10 +153,18 @@ class WorkloadLifecycleService:
         *,
         enabled: bool,
     ) -> tuple[ServiceApplication, SecurityEvent]:
-        """Enable or disable one application."""
+        """Enable or disable one application.
+
+        Returns:
+            The set application enabled.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         application = await self.store.get_application(application_id)
         if application is None:
-            raise LifecycleConflictError("application does not exist")
+            msg = "application does not exist"
+            raise LifecycleConflictError(msg)
         status = EntityStatus.ACTIVE if enabled else EntityStatus.DISABLED
         updated = replace(application, status=status)
         await self.store.set_application_status(application_id, status)
@@ -168,10 +184,18 @@ class WorkloadLifecycleService:
         kind: str,
         metadata: Mapping[str, str] = _EMPTY_METADATA,
     ) -> tuple[MachinePrincipal, SecurityEvent]:
-        """Create an enabled machine principal under an existing application."""
+        """Create an enabled machine principal under an existing application.
+
+        Returns:
+            The created principal.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         application = await self.store.get_application(application_id)
         if application is None:
-            raise LifecycleConflictError("application does not exist")
+            msg = "application does not exist"
+            raise LifecycleConflictError(msg)
         if application.status is not EntityStatus.ACTIVE:
             raise LifecycleConflictError(_APPLICATION_DISABLED)
         principal = MachinePrincipal(
@@ -199,10 +223,18 @@ class WorkloadLifecycleService:
         *,
         enabled: bool,
     ) -> tuple[MachinePrincipal, SecurityEvent]:
-        """Enable or disable one machine principal."""
+        """Enable or disable one machine principal.
+
+        Returns:
+            The set principal enabled.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         principal = await self.store.get_principal(principal_id)
         if principal is None:
-            raise LifecycleConflictError("principal does not exist")
+            msg = "principal does not exist"
+            raise LifecycleConflictError(msg)
         updated = replace(principal, status=EntityStatus.ACTIVE if enabled else EntityStatus.DISABLED)
         await self.store.set_principal_status(principal_id, updated.status)
         event = SecurityEvent(
@@ -225,14 +257,23 @@ class WorkloadLifecycleService:
         rotation_of: str | None = None,
         now: datetime | None = None,
     ) -> tuple[MachineCredential, SecurityEvent]:
-        """Register validated public certificate metadata without retaining certificate bytes."""
+        """Register validated public certificate metadata without retaining certificate bytes.
+
+        Returns:
+            The register credential.
+
+        Raises:
+            ValueError: If the call cannot complete.
+            LifecycleConflictError: If the call cannot complete.
+        """
         current_time = datetime.now(UTC) if now is None else now
         if current_time.utcoffset() is None:
             msg = "now must be timezone-aware"
             raise ValueError(msg)
         principal = await self.store.get_principal(principal_id)
         if principal is None:
-            raise LifecycleConflictError("principal does not exist")
+            msg_0 = "principal does not exist"
+            raise LifecycleConflictError(msg_0)
         application = await self.store.get_application(principal.application_id)
         if application is None or application.environment != environment:
             raise LifecycleConflictError(_CREDENTIAL_ENVIRONMENT_MISMATCH)
@@ -240,16 +281,19 @@ class WorkloadLifecycleService:
             raise LifecycleConflictError(_CREDENTIAL_OWNER_DISABLED)
         if certificate.not_before > current_time:
             if rotation_of is None or certificate.not_before - current_time > self.maximum_rotation_lead:
-                raise LifecycleConflictError("future-dated certificate is outside the rotation window")
+                msg_0 = "future-dated certificate is outside the rotation window"
+                raise LifecycleConflictError(msg_0)
             status = CredentialStatus.PENDING
         else:
             status = CredentialStatus.ACTIVE
         if certificate.not_after <= current_time:
-            raise LifecycleConflictError("expired certificate cannot be registered")
+            msg_0 = "expired certificate cannot be registered"
+            raise LifecycleConflictError(msg_0)
         if rotation_of is not None:
             previous = await self.store.get_credential(rotation_of)
             if previous is None or previous.principal_id != principal_id:
-                raise LifecycleConflictError("rotation source does not belong to the principal")
+                msg_0 = "rotation source does not belong to the principal"
+                raise LifecycleConflictError(msg_0)
         credential = MachineCredential(
             id=str(uuid4()),
             principal_id=principal_id,
@@ -280,7 +324,11 @@ class WorkloadLifecycleService:
         return credential, event
 
     async def _register_credential(self, credential: MachineCredential) -> None:
-        """Persist one credential while preserving lifecycle conflict errors."""
+        """Persist one credential while preserving lifecycle conflict errors.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         try:
             await self.store.register_credential(credential, active_limit=self.active_credential_limit)
         except StoreOwnerStateConflictError as exc:
@@ -293,7 +341,15 @@ class WorkloadLifecycleService:
         reason: str,
         now: datetime | None = None,
     ) -> tuple[MachineCredential, SecurityEvent]:
-        """Revoke one credential immediately."""
+        """Revoke one credential immediately.
+
+        Returns:
+            The revoke credential.
+
+        Raises:
+            ValueError: If the call cannot complete.
+            LifecycleConflictError: If the call cannot complete.
+        """
         if not reason or reason != reason.strip() or len(reason) > _MAX_REVOCATION_REASON_LENGTH:
             msg = f"revocation reason must be non-empty and at most {_MAX_REVOCATION_REASON_LENGTH} characters"
             raise ValueError(msg)
@@ -308,7 +364,8 @@ class WorkloadLifecycleService:
                 revoked_at=revoked_at,
             )
         except StoreConflictError as exc:
-            raise LifecycleConflictError("credential does not exist or is already revoked") from exc
+            msg_0 = "credential does not exist or is already revoked"
+            raise LifecycleConflictError(msg_0) from exc
         principal = await self.store.get_principal(updated.principal_id)
         event = SecurityEvent(
             SecurityEventType.CREDENTIAL_REVOKED,
@@ -326,7 +383,15 @@ class WorkloadLifecycleService:
         previous_credential_id: str,
         now: datetime | None = None,
     ) -> tuple[MachineCredential, MachineCredential, SecurityEvent]:
-        """Activate a valid replacement and revoke its predecessor."""
+        """Activate a valid replacement and revoke its predecessor.
+
+        Returns:
+            The complete rotation.
+
+        Raises:
+            ValueError: If the call cannot complete.
+            LifecycleConflictError: If the call cannot complete.
+        """
         current_time = datetime.now(UTC) if now is None else now
         if current_time.utcoffset() is None:
             msg = "now must be timezone-aware"
@@ -358,10 +423,18 @@ class WorkloadLifecycleService:
         application_id: str,
         metadata: Mapping[str, str],
     ) -> tuple[ServiceApplication, SecurityEvent]:
-        """Replace bounded safe application metadata."""
+        """Replace bounded safe application metadata.
+
+        Returns:
+            The update application metadata.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         application = await self.store.get_application(application_id)
         if application is None:
-            raise LifecycleConflictError("application does not exist")
+            msg = "application does not exist"
+            raise LifecycleConflictError(msg)
         frozen = freeze_metadata(metadata)
         updated = replace(application, metadata=frozen)
         await self.store.set_application_metadata(application_id, frozen)
@@ -377,10 +450,18 @@ class WorkloadLifecycleService:
         principal_id: str,
         metadata: Mapping[str, str],
     ) -> tuple[MachinePrincipal, SecurityEvent]:
-        """Replace bounded safe principal metadata."""
+        """Replace bounded safe principal metadata.
+
+        Returns:
+            The update principal metadata.
+
+        Raises:
+            LifecycleConflictError: If the call cannot complete.
+        """
         principal = await self.store.get_principal(principal_id)
         if principal is None:
-            raise LifecycleConflictError("principal does not exist")
+            msg = "principal does not exist"
+            raise LifecycleConflictError(msg)
         frozen = freeze_metadata(metadata)
         updated = replace(principal, metadata=frozen)
         await self.store.set_principal_metadata(principal_id, frozen)

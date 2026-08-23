@@ -37,6 +37,6 @@ class RedisHttpSignatureReplayStore:
                 nx=True,
                 ex=max(1, int(ttl_seconds)),
             )
-        except Exception:  # ruff: ignore[blind-except] - transport failures are Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if created else ReplayOutcome.REPLAY

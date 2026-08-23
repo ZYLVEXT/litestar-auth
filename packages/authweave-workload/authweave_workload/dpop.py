@@ -81,7 +81,11 @@ class DPoPPolicy:
     nonce_store: DPoPNonceStore | None = None
 
     def __post_init__(self) -> None:
-        """Reject empty identity or legacy algorithms."""
+        """Reject empty identity or legacy algorithms.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.resource_server_id:
             msg = "resource_server_id must be non-empty"
             raise ValueError(msg)
@@ -141,7 +145,11 @@ class InMemoryDPoPNonceStore:
     __slots__ = ("_capacity", "_entries", "_time_source")
 
     def __init__(self, *, capacity: int, time_source: Callable[[], float]) -> None:
-        """Bound capacity and inject a monotonic clock."""
+        """Bound capacity and inject a monotonic clock.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if capacity <= 0:
             msg = "capacity must be positive"
             raise ValueError(msg)
@@ -154,6 +162,9 @@ class InMemoryDPoPNonceStore:
 
         Returns:
             The opaque nonce string.
+
+        Raises:
+            RuntimeError: If the call cannot complete.
         """
         now = self._time_source()
         if len(self._entries) >= self._capacity:
@@ -210,7 +221,11 @@ class DPoPBoundJWTProvider:
         self.event_callback = event_callback
 
     def match(self, request: RequestView) -> CredentialMatch:
-        """Own the DPoP composite presentation and reject mixed credentials."""
+        """Own the DPoP composite presentation and reject mixed credentials.
+
+        Returns:
+            The match.
+        """
         authorization = request.header_values(b"authorization")
         proof_headers = request.header_values(b"dpop")
         if not authorization and not proof_headers:
@@ -258,7 +273,11 @@ class DPoPBoundJWTProvider:
         request: RequestView,
         runtime: AuthenticationRuntime,
     ) -> AuthenticationDecision:
-        """Validate DPoP proof and access-token binding fail-closed."""
+        """Validate DPoP proof and access-token binding fail-closed.
+
+        Returns:
+            The authenticate.
+        """
         presentation = _extract_presentation(request)
         if presentation is None:
             await self._emit_failure(request, FailureCode.MALFORMED)
@@ -423,7 +442,11 @@ async def verify_dpop_proof(
     proof_jwt: str,
     policy: DPoPPolicy,
 ) -> tuple[str, str] | FailureCode:
-    """Verify one DPoP proof independently of access-token representation."""
+    """Verify one DPoP proof independently of access-token representation.
+
+    Returns:
+        The verified dpop proof.
+    """
     jwt = _load_jwt()
     try:
         header = jwt.get_unverified_header(proof_jwt)
@@ -533,7 +556,11 @@ def _replay_outcome(outcome: ReplayOutcome) -> SecurityOutcome:
 
 
 def _proof_replay_ttl_seconds(policy: DPoPPolicy) -> float:
-    """Cover the full acceptance window for a proof at the future-skew boundary."""
+    """Cover the full acceptance window for a proof at the future-skew boundary.
+
+    Returns:
+        The proof replay ttl seconds.
+    """
     return (policy.iat_window + 2 * policy.clock_skew).total_seconds() + 1
 
 

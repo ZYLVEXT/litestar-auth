@@ -82,7 +82,7 @@ class AsyncStreamingClient(Protocol):
     ``httpx`` itself.
     """
 
-    def stream(  # ruff: ignore[too-many-arguments] - mirrors the httpx call this sender makes
+    def stream(
         self,
         method: str,
         url: str,
@@ -116,7 +116,11 @@ class HttpxWebhookSender:
         timeout_seconds: float = 5.0,
         observer: SecurityObserver | None = None,
     ) -> None:
-        """Bind an httpx-like async client and exact onboarding endpoints."""
+        """Bind an httpx-like async client and exact onboarding endpoints.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if timeout_seconds <= 0:
             msg = "timeout_seconds must be positive"
             raise ValueError(msg)

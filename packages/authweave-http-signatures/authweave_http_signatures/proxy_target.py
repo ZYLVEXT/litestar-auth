@@ -26,7 +26,11 @@ class AllowlistedProxyExternalTarget:
     header_name: bytes = _DEFAULT_HEADER
 
     def __post_init__(self) -> None:
-        """Require a non-empty proxy allowlist and header name."""
+        """Require a non-empty proxy allowlist and header name.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.proxy_addresses or not self.header_name:
             msg = "proxy addresses and header name are required"
             raise ValueError(msg)
