@@ -18,7 +18,11 @@ class SignatureNonceGuard:
     __slots__ = ("_profile_tag", "_store", "_ttl_seconds")
 
     def __init__(self, store: ReplayStore, *, profile_tag: str, ttl_seconds: float) -> None:
-        """Bind the replay store and profile namespace."""
+        """Bind the replay store and profile namespace.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if ttl_seconds <= 0 or not profile_tag:
             msg = "nonce guard requires positive ttl and profile_tag"
             raise ValueError(msg)

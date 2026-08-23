@@ -45,7 +45,11 @@ class DirectMTLSPolicy:
     last_used_minimum_interval_seconds: int = 300
 
     def __post_init__(self) -> None:
-        """Reject empty or unsafe policy configuration."""
+        """Reject empty or unsafe policy configuration.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.trust_anchors or not self.termination_boundaries:
             msg = "direct mTLS policy requires trust anchors and termination boundaries"
             raise ValueError(msg)
@@ -77,7 +81,11 @@ class DirectMTLSProvider:
         self.event_callback = event_callback
 
     def match(self, request: RequestView) -> CredentialMatch:
-        """Own verified TLS evidence and reject mixed credential presentations."""
+        """Own verified TLS evidence and reject mixed credential presentations.
+
+        Returns:
+            The match.
+        """
         if request.tls_peer is None:
             return CredentialMatch.NOT_APPLICABLE
         if request.header_values(b"authorization") or request.header_values(b"cookie"):
@@ -99,12 +107,16 @@ class DirectMTLSProvider:
         except EventDeliveryError:
             return Unavailable()
 
-    async def _authenticate(  # ruff: ignore[too-many-branches]
+    async def _authenticate(
         self,
         request: RequestView,
         runtime: AuthenticationRuntime,
     ) -> AuthenticationDecision:
-        """Verify boundary facts and atomically resolve active registration state."""
+        """Verify boundary facts and atomically resolve active registration state.
+
+        Returns:
+            The authenticate.
+        """
         _ = runtime
         peer = request.tls_peer
         if peer is None:

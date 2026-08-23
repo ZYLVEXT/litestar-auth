@@ -33,13 +33,21 @@ class StoreOwnerStateConflictError(StoreConflictError):
 class ServiceApplicationStore(Protocol):
     """Persistence operations for application registrations."""
 
-    async def create_application(self, application: ServiceApplication) -> None: ...
+    async def create_application(self, application: ServiceApplication) -> None:
+        """Persist the new application."""
+        ...
 
-    async def get_application(self, application_id: str) -> ServiceApplication | None: ...
+    async def get_application(self, application_id: str) -> ServiceApplication | None:
+        """Return the application."""
+        ...
 
-    async def set_application_status(self, application_id: str, status: EntityStatus) -> None: ...
+    async def set_application_status(self, application_id: str, status: EntityStatus) -> None:
+        """Update the application status."""
+        ...
 
-    async def set_application_metadata(self, application_id: str, metadata: Mapping[str, str]) -> None: ...
+    async def set_application_metadata(self, application_id: str, metadata: Mapping[str, str]) -> None:
+        """Update the application metadata."""
+        ...
 
     async def list_applications(
         self,
@@ -61,11 +69,17 @@ class MachinePrincipalStore(Protocol):
         """Persist only when the owning application is active at write time."""
         ...
 
-    async def get_principal(self, principal_id: str) -> MachinePrincipal | None: ...
+    async def get_principal(self, principal_id: str) -> MachinePrincipal | None:
+        """Return the principal."""
+        ...
 
-    async def set_principal_status(self, principal_id: str, status: EntityStatus) -> None: ...
+    async def set_principal_status(self, principal_id: str, status: EntityStatus) -> None:
+        """Update the principal status."""
+        ...
 
-    async def set_principal_metadata(self, principal_id: str, metadata: Mapping[str, str]) -> None: ...
+    async def set_principal_metadata(self, principal_id: str, metadata: Mapping[str, str]) -> None:
+        """Update the principal metadata."""
+        ...
 
     async def list_principals(
         self,
@@ -86,7 +100,9 @@ class MachineCredentialStore(Protocol):
         """Recheck active application/principal state before enforcing the limit and inserting."""
         ...
 
-    async def get_credential(self, credential_id: str) -> MachineCredential | None: ...
+    async def get_credential(self, credential_id: str) -> MachineCredential | None:
+        """Return the credential."""
+        ...
 
     async def revoke_credential(
         self,
@@ -94,13 +110,21 @@ class MachineCredentialStore(Protocol):
         *,
         reason: str,
         revoked_at: datetime,
-    ) -> MachineCredential: ...
+    ) -> MachineCredential:
+        """Revoke the credential."""
+        ...
 
-    async def list_credentials(self, principal_id: str) -> tuple[MachineCredential, ...]: ...
+    async def list_credentials(self, principal_id: str) -> tuple[MachineCredential, ...]:
+        """Return one page of credentials."""
+        ...
 
-    async def resolve_by_thumbprint(self, thumbprint: str) -> ResolvedMachineIdentity | None: ...
+    async def resolve_by_thumbprint(self, thumbprint: str) -> ResolvedMachineIdentity | None:
+        """Resolve by thumbprint."""
+        ...
 
-    async def record_last_used(self, credential_id: str, *, used_at_epoch: int, minimum_interval: int) -> None: ...
+    async def record_last_used(self, credential_id: str, *, used_at_epoch: int, minimum_interval: int) -> None:
+        """Record last used."""
+        ...
 
     async def complete_rotation(
         self,
@@ -108,7 +132,9 @@ class MachineCredentialStore(Protocol):
         previous_id: str,
         *,
         completed_at: datetime,
-    ) -> tuple[MachineCredential, MachineCredential]: ...
+    ) -> tuple[MachineCredential, MachineCredential]:
+        """Complete rotation."""
+        ...
 
 
 class WorkloadStore(ServiceApplicationStore, MachinePrincipalStore, MachineCredentialStore, Protocol):

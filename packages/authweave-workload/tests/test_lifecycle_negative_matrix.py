@@ -320,7 +320,7 @@ async def test_lifecycle_translates_owner_state_store_conflicts_and_preserves_ot
         )
 
 
-async def test_credential_registration_rotation_and_revocation_matrix() -> None:  # ruff: ignore[too-many-statements]
+async def test_credential_registration_rotation_and_revocation_matrix() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     store = MemoryStore()
     service = _service(store, issuer="urn:test", maximum_rotation_lead=timedelta(days=1))

@@ -96,7 +96,11 @@ class IntrospectionEndpoint:
     maximum_response_bytes: int = _MAX_RESPONSE_BYTES
 
     def __post_init__(self) -> None:
-        """Reject non-HTTPS or non-positive ceilings."""
+        """Reject non-HTTPS or non-positive ceilings.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         _validate_introspection_url(self.url)
         if self.timeout_seconds <= 0 or self.maximum_response_bytes < 1:
             msg = "introspection network ceilings must be positive"
@@ -116,7 +120,11 @@ class IntrospectionIssuerProfile:
     payment_authorization: PaymentAuthorizationPolicy | None = None
 
     def __post_init__(self) -> None:
-        """Reject human principals or empty issuer labels."""
+        """Reject human principals or empty issuer labels.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.issuer or not self.environment:
             msg = "introspection issuer and environment are required"
             raise ValueError(msg)
@@ -176,7 +184,11 @@ class StaticBearerClientAuth:
     token: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        """Require a non-empty outbound credential."""
+        """Require a non-empty outbound credential.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.token or len(self.token.encode()) > _MAX_TOKEN_BYTES:
             msg = "outbound introspection client token is invalid"
             raise ValueError(msg)
@@ -184,8 +196,8 @@ class StaticBearerClientAuth:
     async def authorize(
         self,
         *,
-        endpoint: str,  # ruff: ignore[unused-method-argument] - protocol keyword name is public
-        form: dict[str, str],  # ruff: ignore[unused-method-argument] - protocol keyword name is public
+        endpoint: str,
+        form: dict[str, str],
         headers: dict[str, str],
     ) -> None:
         """Authorize the RS as an introspection client."""
@@ -206,7 +218,11 @@ class PrivateKeyJWTClientAuth:
     jti_source: Callable[[], str] = lambda: secrets.token_urlsafe(24)
 
     def __post_init__(self) -> None:
-        """Require exact HTTPS audience, bounded identifiers, and modern JOSE."""
+        """Require exact HTTPS audience, bounded identifiers, and modern JOSE.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         _validate_introspection_url(self.audience)
         identity_invalid = not self.client_id or len(self.client_id) > _MAX_CLIENT_ID_LENGTH
         key_invalid = not self.key_id or len(self.key_id) > _MAX_KEY_ID_LENGTH
@@ -220,11 +236,16 @@ class PrivateKeyJWTClientAuth:
     async def authorize(
         self,
         *,
-        endpoint: str,  # ruff: ignore[unused-method-argument] - protocol keyword name is public
+        endpoint: str,
         form: dict[str, str],
-        headers: dict[str, str],  # ruff: ignore[unused-method-argument] - protocol keyword name is public
+        headers: dict[str, str],
     ) -> None:
-        """Add a fresh, replay-resistant client assertion to the form body."""
+        """Add a fresh, replay-resistant client assertion to the form body.
+
+        Raises:
+            ValueError: If the call cannot complete.
+            IntrospectionValidationError: If the call cannot complete.
+        """
         now = self.time_source()
         if now.tzinfo is None:
             msg = "private_key_jwt time_source must return an aware datetime"
@@ -261,7 +282,11 @@ class SignedIntrospectionResponsePolicy:
     time_source: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def __post_init__(self) -> None:
-        """Reject open-ended or legacy signature policy."""
+        """Reject open-ended or legacy signature policy.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         identity_invalid = not self.issuer or not self.audience
         algorithms_invalid = not self.algorithms or not self.algorithms <= _JOSE_ALGORITHMS
         time_invalid = self.maximum_age <= timedelta(0) or self.clock_skew < timedelta(0)
@@ -294,7 +319,11 @@ class IntrospectionCachePolicy:
     time_source: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def __post_init__(self) -> None:
-        """Reject negative or unscoped cache ceilings."""
+        """Reject negative or unscoped cache ceilings.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if (
             not self.issuer
             or self.active_ttl_seconds < 0
@@ -308,7 +337,7 @@ class IntrospectionCachePolicy:
 class BoundedIntrospectionClient:
     """POST ``application/x-www-form-urlencoded`` introspection with hard response bounds."""
 
-    def __init__(  # ruff: ignore[too-many-arguments]
+    def __init__(
         self,
         *,
         endpoint: IntrospectionEndpoint,
@@ -318,7 +347,11 @@ class BoundedIntrospectionClient:
         cache_policy: IntrospectionCachePolicy | None = None,
         poster: IntrospectionPoster | None = None,
     ) -> None:
-        """Bind endpoint policy and optional outbound client authentication."""
+        """Bind endpoint policy and optional outbound client authentication.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         self.endpoint = endpoint
         self.client_auth = client_auth
         self.signed_response = signed_response
@@ -367,15 +400,19 @@ class BoundedIntrospectionClient:
         except IntrospectionValidationError:
             raise
         except Exception as exc:
-            raise IntrospectionUnavailableError("introspection request failed") from exc
+            msg_0 = "introspection request failed"
+            raise IntrospectionUnavailableError(msg_0) from exc
         if len(content) > self.endpoint.maximum_response_bytes:
-            raise IntrospectionValidationError("introspection response exceeds the configured size limit")
+            msg_0 = "introspection response exceeds the configured size limit"
+            raise IntrospectionValidationError(msg_0)
         if status != _HTTP_OK:
-            raise IntrospectionUnavailableError("introspection endpoint returned a non-success status")
+            msg_0 = "introspection endpoint returned a non-success status"
+            raise IntrospectionUnavailableError(msg_0)
         media = content_type.split(";", 1)[0].strip().lower()
         if self.signed_response is None:
             if media != "application/json":
-                raise IntrospectionValidationError("introspection Content-Type must be application/json")
+                msg_0 = "introspection Content-Type must be application/json"
+                raise IntrospectionValidationError(msg_0)
             claims = parse_plain_introspection(content)
             await self._cache(token, claims)
             return claims
@@ -392,7 +429,7 @@ class BoundedIntrospectionClient:
         try:
             content = await self.cache.get(self._cache_key(token))
             return None if content is None else _parse_cached_claims(content)
-        except Exception:  # ruff: ignore[blind-except] - cache is an optional optimization
+        except Exception:
             return None
 
     async def _cache(self, token: str, claims: IntrospectionClaims) -> None:
@@ -403,7 +440,7 @@ class BoundedIntrospectionClient:
             return
         try:
             await self.cache.set(self._cache_key(token), _encode_cached_claims(claims), ttl_seconds=ttl)
-        except Exception:  # ruff: ignore[blind-except] - cache is an optional optimization
+        except Exception:
             return
 
     def _cache_key(self, token: str) -> str:
@@ -423,15 +460,19 @@ def parse_plain_introspection(content: bytes) -> IntrospectionClaims:
     try:
         decoded = json.loads(content)
     except (TypeError, ValueError) as exc:
-        raise IntrospectionValidationError("introspection response is not valid JSON") from exc
+        msg = "introspection response is not valid JSON"
+        raise IntrospectionValidationError(msg) from exc
     if not isinstance(decoded, dict):
-        raise IntrospectionValidationError("introspection response must be an object")
+        msg = "introspection response must be an object"
+        raise IntrospectionValidationError(msg)
     active = decoded.get("active")
     if not isinstance(active, bool):
-        raise IntrospectionValidationError("introspection active claim must be boolean")
+        msg = "introspection active claim must be boolean"
+        raise IntrospectionValidationError(msg)
     if not active:
         if set(decoded) - _INACTIVE_ONLY_KEYS:
-            raise IntrospectionValidationError("inactive introspection must not include token metadata")
+            msg = "inactive introspection must not include token metadata"
+            raise IntrospectionValidationError(msg)
         return IntrospectionClaims(active=False)
     subject = _optional_string(decoded.get("sub"), maximum=_MAX_SUBJECT_LENGTH)
     client_id = _optional_string(decoded.get("client_id"), maximum=_MAX_CLIENT_ID_LENGTH)
@@ -443,7 +484,8 @@ def parse_plain_introspection(content: bytes) -> IntrospectionClaims:
         issued_at = _optional_numeric_date(decoded.get("iat"))
         not_before = _optional_numeric_date(decoded.get("nbf"))
     except (TypeError, ValueError, OverflowError) as exc:
-        raise IntrospectionValidationError("introspection time claims are invalid") from exc
+        msg = "introspection time claims are invalid"
+        raise IntrospectionValidationError(msg) from exc
     confirmation_thumbprint, confirmation_jkt = _parse_confirmation(decoded.get("cnf"))
     raw_authorization_details = decoded.get("authorization_details")
     if raw_authorization_details is None:
@@ -476,27 +518,42 @@ async def parse_signed_introspection(
     *,
     now: datetime | None = None,
 ) -> IntrospectionClaims:
-    """Verify and parse an RFC 9701 signed introspection response."""
+    """Verify and parse an RFC 9701 signed introspection response.
+
+    Returns:
+        The parsed signed introspection.
+
+    Raises:
+        ValueError: If the call cannot complete.
+        IntrospectionUnavailableError: If the call cannot complete.
+        IntrospectionValidationError: If the call cannot complete.
+    """
     jwt = _load_jwt()
     try:
         compact = content.decode("ascii")
         header = jwt.get_unverified_header(compact)
     except (UnicodeDecodeError, jwt.PyJWTError) as exc:
-        raise IntrospectionValidationError("signed introspection response is not a compact JWT") from exc
+        msg = "signed introspection response is not a compact JWT"
+        raise IntrospectionValidationError(msg) from exc
     if header.get("typ") != "token-introspection+jwt":
-        raise IntrospectionValidationError("signed introspection JWT typ is invalid")
+        msg = "signed introspection JWT typ is invalid"
+        raise IntrospectionValidationError(msg)
     algorithm = header.get("alg")
     kid = header.get("kid")
     if algorithm not in policy.algorithms:
-        raise IntrospectionValidationError("signed introspection JWT algorithm is invalid")
+        msg = "signed introspection JWT algorithm is invalid"
+        raise IntrospectionValidationError(msg)
     if not isinstance(kid, str):
-        raise IntrospectionValidationError("signed introspection JWT kid is missing")
+        msg = "signed introspection JWT kid is missing"
+        raise IntrospectionValidationError(msg)
     try:
         key = await policy.jwks.get_key(kid, algorithm)
     except JWKSUnavailableError as exc:
-        raise IntrospectionUnavailableError("signed introspection keys are unavailable") from exc
+        msg = "signed introspection keys are unavailable"
+        raise IntrospectionUnavailableError(msg) from exc
     except JWKSValidationError as exc:
-        raise IntrospectionValidationError("signed introspection key is invalid") from exc
+        msg = "signed introspection key is invalid"
+        raise IntrospectionValidationError(msg) from exc
     try:
         claims = jwt.decode(
             compact,
@@ -511,25 +568,33 @@ async def parse_signed_introspection(
             },
         )
     except jwt.InvalidIssuerError as exc:
-        raise IntrospectionValidationError("signed introspection issuer is invalid") from exc
+        msg = "signed introspection issuer is invalid"
+        raise IntrospectionValidationError(msg) from exc
     except jwt.InvalidAudienceError as exc:
-        raise IntrospectionValidationError("signed introspection audience is invalid") from exc
+        msg = "signed introspection audience is invalid"
+        raise IntrospectionValidationError(msg) from exc
     except jwt.PyJWTError as exc:
-        raise IntrospectionValidationError("signed introspection signature or claims are invalid") from exc
+        msg = "signed introspection signature or claims are invalid"
+        raise IntrospectionValidationError(msg) from exc
     audience = claims.get("aud")
     if audience not in (policy.audience, [policy.audience]):
-        raise IntrospectionValidationError("signed introspection audience is invalid")
+        msg = "signed introspection audience is invalid"
+        raise IntrospectionValidationError(msg)
     checked_at = policy.time_source() if now is None else now
     if checked_at.tzinfo is None:
-        raise ValueError("signed introspection now must be timezone-aware")
+        msg = "signed introspection now must be timezone-aware"
+        raise ValueError(msg)
     try:
         issued_at = _optional_numeric_date(claims["iat"])
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise IntrospectionValidationError("signed introspection iat is invalid") from exc
+        msg = "signed introspection iat is invalid"
+        raise IntrospectionValidationError(msg) from exc
     if issued_at is None or issued_at > checked_at + policy.clock_skew:
-        raise IntrospectionValidationError("signed introspection response is not yet valid")
+        msg = "signed introspection response is not yet valid"
+        raise IntrospectionValidationError(msg)
     if issued_at < checked_at - policy.maximum_age - policy.clock_skew:
-        raise IntrospectionValidationError("signed introspection response is stale")
+        msg = "signed introspection response is stale"
+        raise IntrospectionValidationError(msg)
     encoded = json.dumps(claims.get("token_introspection"), separators=(",", ":")).encode()
     return parse_plain_introspection(encoded)
 
@@ -579,7 +644,8 @@ def _json_authorization_value(value: object) -> object:
 
 def _parse_cached_claims(content: bytes) -> IntrospectionClaims:
     if len(content) > _MAX_RESPONSE_BYTES:
-        raise IntrospectionValidationError("cached introspection response is oversized")
+        msg = "cached introspection response is oversized"
+        raise IntrospectionValidationError(msg)
     return parse_plain_introspection(content)
 
 
@@ -600,7 +666,7 @@ class DPoPBoundIntrospectionProvider:
 
     profile = "dpop_bound_introspection"
 
-    def __init__(  # ruff: ignore[too-many-arguments]
+    def __init__(
         self,
         *,
         name: str,
@@ -619,7 +685,11 @@ class DPoPBoundIntrospectionProvider:
         self.event_callback = event_callback
 
     def match(self, request: RequestView) -> CredentialMatch:
-        """Own exactly one DPoP authorization plus proof header."""
+        """Own exactly one DPoP authorization plus proof header.
+
+        Returns:
+            The match.
+        """
         authorization = request.header_values(b"authorization")
         proofs = request.header_values(b"dpop")
         if not authorization and not proofs:
@@ -644,7 +714,11 @@ class DPoPBoundIntrospectionProvider:
         request: RequestView,
         runtime: AuthenticationRuntime,
     ) -> AuthenticationDecision:
-        """Verify proof, introspection binding, replay, and mapped identity fail-closed."""
+        """Verify proof, introspection binding, replay, and mapped identity fail-closed.
+
+        Returns:
+            The authenticate.
+        """
         try:
             return await self._authenticate(request, runtime)
         except EventDeliveryError:
@@ -787,7 +861,11 @@ class MTLSBoundIntrospectionProvider:
         self.event_callback = event_callback
 
     def match(self, request: RequestView) -> CredentialMatch:
-        """Own exactly one Bearer presentation without cookies or DPoP proofs."""
+        """Own exactly one Bearer presentation without cookies or DPoP proofs.
+
+        Returns:
+            The match.
+        """
         authorization = request.header_values(b"authorization")
         if not authorization:
             return CredentialMatch.NOT_APPLICABLE
@@ -958,14 +1036,16 @@ async def _post_introspection(
                 async for chunk in response.aiter_bytes():
                     content.extend(chunk)
                     if len(content) > maximum_response_bytes:
+                        msg_0 = "introspection response exceeds the configured size limit"
                         raise IntrospectionValidationError(
-                            "introspection response exceeds the configured size limit",
+                            msg_0,
                         )
                 return response.status_code, bytes(content), content_type
     except IntrospectionValidationError:
         raise
     except (httpx.HTTPError, TimeoutError) as exc:
-        raise IntrospectionUnavailableError("introspection request failed") from exc
+        msg_0 = "introspection request failed"
+        raise IntrospectionUnavailableError(msg_0) from exc
 
 
 def _extract_bearer_token(request: RequestView) -> str | None:
@@ -1027,10 +1107,12 @@ def _parse_confirmation(value: object) -> tuple[str | None, str | None]:
     if value is None:
         return None, None
     if not isinstance(value, dict) or len(value) != 1 or not set(value) <= {"x5t#S256", "jkt"}:
-        raise IntrospectionValidationError("introspection cnf must contain exactly one supported confirmation")
+        msg = "introspection cnf must contain exactly one supported confirmation"
+        raise IntrospectionValidationError(msg)
     name, confirmation = next(iter(value.items()))
     if not isinstance(confirmation, str) or _THUMBPRINT_PATTERN.fullmatch(confirmation) is None:
-        raise IntrospectionValidationError("introspection confirmation thumbprint is invalid")
+        msg = "introspection confirmation thumbprint is invalid"
+        raise IntrospectionValidationError(msg)
     return (confirmation, None) if name == "x5t#S256" else (None, confirmation)
 
 
@@ -1038,7 +1120,8 @@ def _parse_scopes(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, str):
-        raise IntrospectionValidationError("introspection scope must be a space-delimited string")
+        msg = "introspection scope must be a space-delimited string"
+        raise IntrospectionValidationError(msg)
     if not value:
         return ()
     scopes = tuple(value.split(" "))
@@ -1047,7 +1130,8 @@ def _parse_scopes(value: object) -> tuple[str, ...]:
         or len(scopes) != len(set(scopes))
         or any(_optional_string(scope, maximum=_MAX_VALUE_LENGTH) is None for scope in scopes)
     ):
-        raise IntrospectionValidationError("introspection scope list is invalid")
+        msg = "introspection scope list is invalid"
+        raise IntrospectionValidationError(msg)
     return scopes
 
 
@@ -1059,13 +1143,15 @@ def _optional_string_list(value: object, *, maximum_items: int) -> tuple[str, ..
     elif isinstance(value, list) and all(isinstance(item, str) for item in value):
         values = tuple(value)
     else:
-        raise IntrospectionValidationError("introspection aud claim is invalid")
+        msg = "introspection aud claim is invalid"
+        raise IntrospectionValidationError(msg)
     if (
         len(values) > maximum_items
         or len(values) != len(set(values))
         or any(_optional_string(item, maximum=_MAX_VALUE_LENGTH) is None for item in values)
     ):
-        raise IntrospectionValidationError("introspection aud claim is invalid")
+        msg = "introspection aud claim is invalid"
+        raise IntrospectionValidationError(msg)
     return cast("tuple[str, ...]", values)
 
 
@@ -1073,7 +1159,8 @@ def _optional_string(value: object, *, maximum: int) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or value != value.strip() or not value or len(value) > maximum:
-        raise IntrospectionValidationError("introspection string claim is invalid")
+        msg = "introspection string claim is invalid"
+        raise IntrospectionValidationError(msg)
     return value
 
 

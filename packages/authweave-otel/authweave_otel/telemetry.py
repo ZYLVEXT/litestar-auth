@@ -199,7 +199,7 @@ class AuthWeaveTelemetry:
                 scope.record_unexpected_exception(exc)
                 raise
             finally:
-                scope._finalize()  # ruff: ignore[private-member-access] - scope is owned by this facade
+                scope._finalize()
 
     @contextmanager
     def observe(
@@ -230,7 +230,7 @@ class AuthWeaveTelemetry:
                 scope.set_outcome(Outcome.ERROR)
                 raise
             finally:
-                if scope._outcome is not None:  # ruff: ignore[private-member-access] - owned observer scope
+                if scope._outcome is not None:
                     self._record_observation(scope, perf_counter() - started)
 
     @staticmethod
@@ -242,17 +242,17 @@ class AuthWeaveTelemetry:
         return TraceCorrelation(trace_id=f"{context.trace_id:032x}", span_id=f"{context.span_id:016x}")
 
     def _record_observation(self, scope: OperationScope, duration_seconds: float) -> None:
-        operation = scope._operation  # ruff: ignore[private-member-access] - owned observer scope
-        outcome = scope._outcome  # ruff: ignore[private-member-access] - owned observer scope
+        operation = scope._operation
+        outcome = scope._outcome
         if outcome is None:
             return
         if operation is Operation.AUTHENTICATE:
             self.record_authentication(
-                profile=scope._profile,  # ruff: ignore[private-member-access] - owned observer scope
+                profile=scope._profile,
                 outcome=outcome,
-                reason_code=scope._reason_code,  # ruff: ignore[private-member-access] - owned observer scope
-                principal_kind=scope._principal_kind,  # ruff: ignore[private-member-access] - owned observer scope
-                credential_kind=scope._credential_kind,  # ruff: ignore[private-member-access] - owned observer scope
+                reason_code=scope._reason_code,
+                principal_kind=scope._principal_kind,
+                credential_kind=scope._credential_kind,
                 duration_seconds=duration_seconds,
             )
         elif operation in {
@@ -263,17 +263,17 @@ class AuthWeaveTelemetry:
         }:
             self.record_integrity(
                 operation=operation,
-                profile=scope._profile,  # ruff: ignore[private-member-access] - owned observer scope
+                profile=scope._profile,
                 outcome=outcome,
-                reason_code=scope._reason_code,  # ruff: ignore[private-member-access] - owned observer scope
-                credential_kind=scope._credential_kind,  # ruff: ignore[private-member-access] - owned observer scope
+                reason_code=scope._reason_code,
+                credential_kind=scope._credential_kind,
                 duration_seconds=duration_seconds,
             )
         elif operation is Operation.REPLAY_CHECK:
-            self.record_replay(profile=scope._profile, outcome=outcome)  # ruff: ignore[private-member-access]
+            self.record_replay(profile=scope._profile, outcome=outcome)
         elif operation is Operation.WEBHOOK_DELIVER:
             self.record_webhook_delivery(
-                profile=scope._profile,  # ruff: ignore[private-member-access] - owned observer scope
+                profile=scope._profile,
                 outcome=outcome,
                 duration_seconds=duration_seconds,
             )
@@ -281,11 +281,11 @@ class AuthWeaveTelemetry:
             self.record_remote_operation(
                 operation=operation,
                 outcome=outcome,
-                profile=scope._profile,  # ruff: ignore[private-member-access] - owned observer scope
+                profile=scope._profile,
                 duration_seconds=duration_seconds,
             )
 
-    def record_authentication(  # ruff: ignore[too-many-arguments] - each parameter is an explicit bounded label
+    def record_authentication(
         self,
         *,
         profile: str | None,
@@ -307,7 +307,7 @@ class AuthWeaveTelemetry:
         self._add("authweave.authentication.attempts", attributes)
         self._record("authweave.authentication.duration", duration_seconds, attributes)
 
-    def record_integrity(  # ruff: ignore[too-many-arguments] - each parameter is an explicit bounded label
+    def record_integrity(
         self,
         *,
         operation: Operation,
@@ -412,7 +412,7 @@ class AuthWeaveTelemetry:
             self._histograms[name].record(value, attributes)
 
 
-def _build_attributes(  # ruff: ignore[too-many-arguments] - each label is an explicit bounded dimension
+def _build_attributes(
     *,
     profile: str | None,
     operation: Operation,

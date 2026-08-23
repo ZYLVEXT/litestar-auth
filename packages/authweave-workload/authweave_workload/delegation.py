@@ -29,7 +29,11 @@ def map_rfc8693_actor(
     credential_scopes: tuple[str, ...],
     maximum_depth: int,
 ) -> Delegation | FailureCode:
-    """Map a signed actor claim without deriving authority from metadata or kind."""
+    """Map a signed actor claim without deriving authority from metadata or kind.
+
+    Returns:
+        The mapped rfc8693 actor.
+    """
     if maximum_depth < 1:
         return FailureCode.INTERNAL_INVARIANT
     if not isinstance(claim, Mapping):

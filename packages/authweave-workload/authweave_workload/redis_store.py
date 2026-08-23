@@ -23,6 +23,10 @@ class RedisIntrospectionCache:
 
         Returns:
             Cached bytes or ``None``.
+
+        Raises:
+            RuntimeError: If the call cannot complete.
+            ValueError: If the call cannot complete.
         """
         try:
             value = await self._redis.get(key)
@@ -39,7 +43,12 @@ class RedisIntrospectionCache:
         return value
 
     async def set(self, key: str, value: bytes, *, ttl_seconds: int) -> None:
-        """Store one bounded claim snapshot with an explicit TTL."""
+        """Store one bounded claim snapshot with an explicit TTL.
+
+        Raises:
+            RuntimeError: If the call cannot complete.
+            ValueError: If the call cannot complete.
+        """
         if not key.startswith("authweave:introspection:") or not 0 < len(value) <= _MAX_INTROSPECTION_CACHE_BYTES:
             msg = "introspection cache entry is invalid"
             raise ValueError(msg)
@@ -86,7 +95,7 @@ class RedisDPoPReplayStore:
                 nx=True,
                 ex=max(1, int(ttl_seconds)),
             )
-        except Exception:  # ruff: ignore[blind-except] - any client/transport failure is Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if created else ReplayOutcome.REPLAY
 
@@ -141,7 +150,7 @@ class RedisDPoPNonceStore:
         key = f"dpop-nonce:{origin}:{jkt}:{nonce}"
         try:
             deleted = await self._redis.delete(key)
-        except Exception:  # ruff: ignore[blind-except] - any client/transport failure is Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if deleted else ReplayOutcome.REPLAY
 

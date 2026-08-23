@@ -23,6 +23,9 @@ class RedisReplayStore:
 
         Returns:
             The typed put-if-absent outcome.
+
+        Raises:
+            ValueError: If the call cannot complete.
         """
         validate_replay_key(key)
         if ttl_seconds <= 0:
@@ -30,6 +33,6 @@ class RedisReplayStore:
             raise ValueError(msg)
         try:
             created = await self._redis.set(key, "1", nx=True, ex=int(ttl_seconds))
-        except Exception:  # ruff: ignore[blind-except] - any client/transport failure is Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if created else ReplayOutcome.REPLAY

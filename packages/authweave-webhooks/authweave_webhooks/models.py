@@ -25,13 +25,21 @@ class Ed25519PublicKey:
     public_key: bytes
 
     def __post_init__(self) -> None:
-        """Reject non-Ed25519 key material."""
+        """Reject non-Ed25519 key material.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if len(self.public_key) != ED25519_PUBLIC_KEY_BYTES:
             msg = "Ed25519 public key must be 32 bytes"
             raise ValueError(msg)
 
     def __repr__(self) -> str:
-        """Omit raw key bytes from representations."""
+        """Omit raw key bytes from representations.
+
+        Returns:
+            The repr  .
+        """
         return "Ed25519PublicKey(public_key=...)"
 
 
@@ -52,7 +60,11 @@ class PublicKeyDocument:
     keys: tuple[Ed25519PublicKey, ...]
 
     def __post_init__(self) -> None:
-        """Enforce rotation cardinality and identity bounds."""
+        """Enforce rotation cardinality and identity bounds.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.version or not self.environment or not self.owner or not self.endpoint:
             msg = "version, environment, owner, and endpoint are required"
             raise ValueError(msg)
@@ -78,7 +90,11 @@ class VerifiedWebhook:
     replay_detected: bool = False
 
     def __repr__(self) -> str:
-        """Omit raw body bytes from representations."""
+        """Omit raw body bytes from representations.
+
+        Returns:
+            The repr  .
+        """
         return (
             "VerifiedWebhook("
             f"webhook_id={self.webhook_id!r}, timestamp={self.timestamp}, "
@@ -107,7 +123,11 @@ class WebhookDelivery:
         }
 
     def __repr__(self) -> str:
-        """Omit raw body and signature material from representations."""
+        """Omit raw body and signature material from representations.
+
+        Returns:
+            The repr  .
+        """
         return (
             "WebhookDelivery("
             f"webhook_id={self.webhook_id!r}, timestamp={self.timestamp}, "

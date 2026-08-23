@@ -377,7 +377,7 @@ class SPIFFEProvider:
                 observation.set_outcome(SecurityOutcome.UNAVAILABLE, reason_code=decision.code.value)
             return decision
 
-    async def _authenticate(  # ruff: ignore[complex-structure, too-many-return-statements] - fail-closed profile matrix
+    async def _authenticate(
         self,
         request: RequestView,
         _runtime: AuthenticationRuntime,
@@ -491,9 +491,19 @@ def project_spiffe_peer(
 
 def _load_cryptography() -> dict[str, Any]:
     try:
-        from cryptography import x509
-        from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
-        from cryptography.x509.verification import PolicyBuilder, Store, VerificationError
+        from cryptography import (
+            x509,
+        )
+        from cryptography.hazmat.primitives.asymmetric import (
+            ec,
+            ed25519,
+            rsa,
+        )
+        from cryptography.x509.verification import (
+            PolicyBuilder,
+            Store,
+            VerificationError,
+        )
     except ImportError as exc:
         msg = "SPIFFE X.509 validation requires the 'authweave-workload[spiffe]' extra."
         raise ImportError(msg) from exc

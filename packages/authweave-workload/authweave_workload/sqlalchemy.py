@@ -145,7 +145,11 @@ class SQLAlchemyWorkloadStore:
         environment: str | None = None,
         status: EntityStatus | None = None,
     ) -> tuple[tuple[ServiceApplication, ...], int]:
-        """Return a deterministic filtered page and total application count."""
+        """Return a deterministic filtered page and total application count.
+
+        Raises:
+            StoreUnavailableError: If the call cannot complete.
+        """
         filters = []
         if owner_ref is not None:
             filters.append(ServiceApplicationRow.owner_ref == owner_ref)
@@ -165,11 +169,16 @@ class SQLAlchemyWorkloadStore:
                 )
             ).all()
         except SQLAlchemyError as exc:
-            raise StoreUnavailableError("workload application inventory lookup failed") from exc
+            msg = "workload application inventory lookup failed"
+            raise StoreUnavailableError(msg) from exc
         return tuple(_application(row) for row in rows), int(total or 0)
 
     async def set_application_status(self, application_id: str, status: EntityStatus) -> None:
-        """Update only application status, without replaying a stale aggregate."""
+        """Update only application status, without replaying a stale aggregate.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         result = cast(
             "CursorResult[Any]",
             await self.session.execute(
@@ -179,10 +188,15 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if result.rowcount != 1:
-            raise StoreConflictError("application does not exist")
+            msg = "application does not exist"
+            raise StoreConflictError(msg)
 
     async def set_application_metadata(self, application_id: str, metadata: Mapping[str, str]) -> None:
-        """Update only application metadata, preserving concurrent status changes."""
+        """Update only application metadata, preserving concurrent status changes.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         result = cast(
             "CursorResult[Any]",
             await self.session.execute(
@@ -192,10 +206,15 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if result.rowcount != 1:
-            raise StoreConflictError("application does not exist")
+            msg = "application does not exist"
+            raise StoreConflictError(msg)
 
     async def create_principal(self, principal: MachinePrincipal) -> None:
-        """Insert one principal while serializing against application disablement."""
+        """Insert one principal while serializing against application disablement.
+
+        Raises:
+            StoreOwnerStateConflictError: If the call cannot complete.
+        """
         application = await self.session.scalar(
             select(ServiceApplicationRow)
             .where(ServiceApplicationRow.id == principal.application_id)
@@ -203,9 +222,11 @@ class SQLAlchemyWorkloadStore:
             .execution_options(populate_existing=True),
         )
         if application is None:
-            raise StoreOwnerStateConflictError("application does not exist")
+            msg = "application does not exist"
+            raise StoreOwnerStateConflictError(msg)
         if application.status != EntityStatus.ACTIVE.value:
-            raise StoreOwnerStateConflictError("application is disabled")
+            msg = "application is disabled"
+            raise StoreOwnerStateConflictError(msg)
         self.session.add(_principal_row(principal))
         await self._flush_conflict("principal already exists")
 
@@ -222,7 +243,11 @@ class SQLAlchemyWorkloadStore:
         limit: int,
         status: EntityStatus | None = None,
     ) -> tuple[tuple[MachinePrincipal, ...], int]:
-        """Return a deterministic filtered page and total principal count."""
+        """Return a deterministic filtered page and total principal count.
+
+        Raises:
+            StoreUnavailableError: If the call cannot complete.
+        """
         filters = [MachinePrincipalRow.application_id == application_id]
         if status is not None:
             filters.append(MachinePrincipalRow.status == status.value)
@@ -238,11 +263,16 @@ class SQLAlchemyWorkloadStore:
                 )
             ).all()
         except SQLAlchemyError as exc:
-            raise StoreUnavailableError("workload principal inventory lookup failed") from exc
+            msg = "workload principal inventory lookup failed"
+            raise StoreUnavailableError(msg) from exc
         return tuple(_principal(row) for row in rows), int(total or 0)
 
     async def set_principal_status(self, principal_id: str, status: EntityStatus) -> None:
-        """Update only principal status, without replaying a stale aggregate."""
+        """Update only principal status, without replaying a stale aggregate.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         result = cast(
             "CursorResult[Any]",
             await self.session.execute(
@@ -250,10 +280,15 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if result.rowcount != 1:
-            raise StoreConflictError("principal does not exist")
+            msg = "principal does not exist"
+            raise StoreConflictError(msg)
 
     async def set_principal_metadata(self, principal_id: str, metadata: Mapping[str, str]) -> None:
-        """Update only principal metadata, preserving concurrent status changes."""
+        """Update only principal metadata, preserving concurrent status changes.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         result = cast(
             "CursorResult[Any]",
             await self.session.execute(
@@ -263,10 +298,16 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if result.rowcount != 1:
-            raise StoreConflictError("principal does not exist")
+            msg = "principal does not exist"
+            raise StoreConflictError(msg)
 
     async def register_credential(self, credential: MachineCredential, *, active_limit: int) -> None:
-        """Atomically validate the owner, enforce the active limit, and insert."""
+        """Atomically validate the owner, enforce the active limit, and insert.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+            StoreOwnerStateConflictError: If the call cannot complete.
+        """
         owner = (
             await self.session.execute(
                 select(MachinePrincipalRow, ServiceApplicationRow)
@@ -280,12 +321,15 @@ class SQLAlchemyWorkloadStore:
             )
         ).one_or_none()
         if owner is None:
-            raise StoreOwnerStateConflictError("principal does not exist")
+            msg = "principal does not exist"
+            raise StoreOwnerStateConflictError(msg)
         principal, application = owner
         if application.status != EntityStatus.ACTIVE.value or principal.status != EntityStatus.ACTIVE.value:
-            raise StoreOwnerStateConflictError("credential owner is disabled")
+            msg = "credential owner is disabled"
+            raise StoreOwnerStateConflictError(msg)
         if application.environment != credential.environment:
-            raise StoreOwnerStateConflictError("credential environment does not match its application")
+            msg = "credential environment does not match its application"
+            raise StoreOwnerStateConflictError(msg)
         active_count = await self.session.scalar(
             select(func.count())
             .select_from(MachineCredentialRow)
@@ -295,7 +339,8 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if int(active_count or 0) >= active_limit:
-            raise StoreConflictError("active credential limit reached")
+            msg = "active credential limit reached"
+            raise StoreConflictError(msg)
         self.session.add(_credential_row(credential))
         await self._flush_conflict("credential already exists")
 
@@ -311,7 +356,14 @@ class SQLAlchemyWorkloadStore:
         reason: str,
         revoked_at: datetime,
     ) -> MachineCredential:
-        """Lock and revoke one non-revoked credential."""
+        """Lock and revoke one non-revoked credential.
+
+        Returns:
+            The revoke credential.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         row = await self.session.scalar(
             select(MachineCredentialRow)
             .where(MachineCredentialRow.id == credential_id)
@@ -319,7 +371,8 @@ class SQLAlchemyWorkloadStore:
             .execution_options(populate_existing=True),
         )
         if row is None or row.status == CredentialStatus.REVOKED.value:
-            raise StoreConflictError("credential does not exist or is already revoked")
+            msg = "credential does not exist or is already revoked"
+            raise StoreConflictError(msg)
         current = _credential(row)
         revoked = replace(
             current,
@@ -342,7 +395,14 @@ class SQLAlchemyWorkloadStore:
         return tuple(_credential(row) for row in rows)
 
     async def resolve_by_thumbprint(self, thumbprint: str) -> ResolvedMachineIdentity | None:
-        """Atomically read credential, principal, and application status."""
+        """Atomically read credential, principal, and application status.
+
+        Returns:
+            The resolved by thumbprint.
+
+        Raises:
+            StoreUnavailableError: If the call cannot complete.
+        """
         try:
             row = (
                 await self.session.execute(
@@ -359,7 +419,8 @@ class SQLAlchemyWorkloadStore:
                 )
             ).one_or_none()
         except SQLAlchemyError as exc:
-            raise StoreUnavailableError("workload identity lookup failed") from exc
+            msg = "workload identity lookup failed"
+            raise StoreUnavailableError(msg) from exc
         if row is None:
             return None
         credential, principal, application = row
@@ -370,10 +431,15 @@ class SQLAlchemyWorkloadStore:
                 credential=_credential(credential),
             )
         except (TypeError, ValueError) as exc:
-            raise StoreUnavailableError("workload identity data is invalid") from exc
+            msg = "workload identity data is invalid"
+            raise StoreUnavailableError(msg) from exc
 
     async def record_last_used(self, credential_id: str, *, used_at_epoch: int, minimum_interval: int) -> None:
-        """Update last-used at most once per configured interval."""
+        """Update last-used at most once per configured interval.
+
+        Raises:
+            StoreUnavailableError: If the call cannot complete.
+        """
         used_at = datetime.fromtimestamp(used_at_epoch, tz=UTC)
         threshold = datetime.fromtimestamp(used_at_epoch - minimum_interval, tz=UTC)
         try:
@@ -389,7 +455,8 @@ class SQLAlchemyWorkloadStore:
                 .values(last_used_at=used_at),
             )
         except SQLAlchemyError as exc:
-            raise StoreUnavailableError("workload last-used update failed") from exc
+            msg = "workload last-used update failed"
+            raise StoreUnavailableError(msg) from exc
 
     async def complete_rotation(
         self,
@@ -398,7 +465,14 @@ class SQLAlchemyWorkloadStore:
         *,
         completed_at: datetime,
     ) -> tuple[MachineCredential, MachineCredential]:
-        """Validate and complete both sides of one rotation under row locks."""
+        """Validate and complete both sides of one rotation under row locks.
+
+        Returns:
+            The complete rotation.
+
+        Raises:
+            StoreConflictError: If the call cannot complete.
+        """
         rows = (
             await self.session.scalars(
                 select(MachineCredentialRow)
@@ -412,7 +486,8 @@ class SQLAlchemyWorkloadStore:
         replacement_row = by_id.get(replacement_id)
         previous_row = by_id.get(previous_id)
         if replacement_row is None or previous_row is None:
-            raise StoreConflictError("credentials do not form one rotation")
+            msg = "credentials do not form one rotation"
+            raise StoreConflictError(msg)
         replacement = _credential(replacement_row)
         previous = _credential(previous_row)
         if (
@@ -421,9 +496,11 @@ class SQLAlchemyWorkloadStore:
             or replacement.status not in {CredentialStatus.PENDING, CredentialStatus.ACTIVE}
             or previous.status is not CredentialStatus.ACTIVE
         ):
-            raise StoreConflictError("credentials do not form one rotation")
+            msg = "credentials do not form one rotation"
+            raise StoreConflictError(msg)
         if not (replacement.not_before <= completed_at < replacement.expires_at):
-            raise StoreConflictError("replacement credential is not currently valid")
+            msg = "replacement credential is not currently valid"
+            raise StoreConflictError(msg)
         activated = replace(replacement, status=CredentialStatus.ACTIVE)
         revoked = replace(
             previous,
@@ -453,7 +530,8 @@ class SQLAlchemyWorkloadStore:
             ),
         )
         if result.rowcount != 1:
-            raise StoreConflictError("credential state changed concurrently")
+            msg = "credential state changed concurrently"
+            raise StoreConflictError(msg)
 
     async def _flush_conflict(self, message: str) -> None:
         try:
@@ -553,7 +631,11 @@ def _credential(row: MachineCredentialRow) -> MachineCredential:
 
 
 def _as_utc(value: datetime) -> datetime:
-    """Normalize SQLite's timezone-naive round-trip while preserving aware database values."""
+    """Normalize SQLite's timezone-naive round-trip while preserving aware database values.
+
+    Returns:
+        The as utc.
+    """
     return value.replace(tzinfo=UTC) if value.utcoffset() is None else value.astimezone(UTC)
 
 

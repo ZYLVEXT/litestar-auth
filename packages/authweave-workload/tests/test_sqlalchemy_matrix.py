@@ -52,7 +52,7 @@ def _credential(
 pytestmark = pytest.mark.integration
 
 
-async def test_sqlalchemy_store_full_crud_rotation_and_last_used() -> None:  # ruff: ignore[too-many-statements]
+async def test_sqlalchemy_store_full_crud_rotation_and_last_used() -> None:
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as connection:
         await connection.run_sync(WorkloadBase.metadata.create_all)

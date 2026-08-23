@@ -21,7 +21,11 @@ class SignatureKeyBinding:
     environment: str
 
     def __post_init__(self) -> None:
-        """Reject empty binding components."""
+        """Reject empty binding components.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.key_id or not self.application_id or not self.principal_subject or not self.environment:
             msg = "signature key binding fields are required"
             raise ValueError(msg)
