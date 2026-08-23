@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
+from litestar_auth._plugin.startup import require_secure_oauth_redirect_in_production
 from litestar_auth.oauth_encryption import _build_oauth_token_encryption, require_oauth_token_encryption
 
 if TYPE_CHECKING:
@@ -41,9 +42,6 @@ class _OAuthExtension:
         from litestar_auth._plugin._oauth_controllers import (  # ruff: ignore[import-outside-top-level]
             _append_oauth_associate_controllers,
             _append_oauth_login_controllers,
-        )
-        from litestar_auth._plugin.startup import (  # ruff: ignore[import-outside-top-level]
-            require_secure_oauth_redirect_in_production,
         )
 
         require_secure_oauth_redirect_in_production(config=context.config, app_config=context.app_config)

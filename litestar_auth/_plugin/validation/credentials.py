@@ -8,6 +8,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
+from litestar_auth._plugin.user_manager_builder import (
+    _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
+    _build_default_user_manager_contract,
+    _build_default_user_manager_validation_kwargs,
+)
 from litestar_auth._plugin.validation._core import format_configuration_message
 from litestar_auth._plugin.validation.login_identifier import validate_user_model_login_identifier_fields
 from litestar_auth._plugin.validation.roles import (
@@ -110,12 +115,6 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
     """
     if config.user_manager_factory is not None:
         return
-
-    from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
-        _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
-        _build_default_user_manager_contract,
-        _build_default_user_manager_validation_kwargs,
-    )
 
     manager_class = config.user_manager_class
     if manager_class is None:

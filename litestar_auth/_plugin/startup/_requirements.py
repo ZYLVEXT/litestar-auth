@@ -10,6 +10,7 @@ from litestar_auth._plugin.startup._warnings import (
     _has_process_local_account_lockout_store,
     _has_process_local_account_token_replay_store,
 )
+from litestar_auth.authentication.strategy.base import RefreshableStrategy
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
@@ -155,8 +156,6 @@ def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[
     """
     if not config.enable_refresh:
         return
-
-    from litestar_auth.authentication.strategy.base import RefreshableStrategy  # ruff: ignore[import-outside-top-level]
 
     for backend in config.resolve_startup_backends():
         strategy = backend.strategy
