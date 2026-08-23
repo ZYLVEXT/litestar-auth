@@ -7,6 +7,7 @@ import base64
 import json
 import subprocess
 import sys
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Self
 
 import pytest
@@ -642,7 +643,7 @@ def test_constructor_guards() -> None:
             _method: str,
             _url: str,
             **_kwargs: object,
-        ) -> object:
+        ) -> AbstractAsyncContextManager[Any]:
             msg = "unreachable"
             raise AssertionError(msg)
 

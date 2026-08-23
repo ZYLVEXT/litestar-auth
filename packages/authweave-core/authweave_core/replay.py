@@ -10,10 +10,10 @@ outages and capacity exhaustion to the same fail-closed decisions.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 _MAX_KEY_LENGTH = 512
 
@@ -25,6 +25,46 @@ class ReplayOutcome(StrEnum):
     REPLAY = "replay"
     UNAVAILABLE = "unavailable"
     CAPACITY_EXCEEDED = "capacity_exceeded"
+
+
+@runtime_checkable
+class AsyncRedisSet(Protocol):
+    """The put-if-absent command a replay adapter issues.
+
+    Each protocol is declared structurally, and narrowed to exactly the commands
+    and value types its adapter uses, so a caller supplies a client (or a double)
+    without this package importing the optional ``redis`` dependency.
+    """
+
+    def set(self, name: str, value: str, /, *, nx: bool, ex: int) -> Awaitable[Any]:
+        """Write one key with an expiry and put-if-absent semantics."""
+        ...
+
+
+@runtime_checkable
+class AsyncRedisGetSet(Protocol):
+    """The read and bounded write a cache adapter issues."""
+
+    def get(self, name: str, /) -> Awaitable[Any]:
+        """Read one key."""
+        ...
+
+    def set(self, name: str, value: bytes, /, *, ex: int) -> Awaitable[Any]:
+        """Write one key with an expiry."""
+        ...
+
+
+@runtime_checkable
+class AsyncRedisSetDelete(Protocol):
+    """The put-if-absent and removal a single-use nonce adapter issues."""
+
+    def set(self, name: str, value: str, /, *, nx: bool, ex: int) -> Awaitable[Any]:
+        """Write one key with an expiry and put-if-absent semantics."""
+        ...
+
+    def delete(self, name: str, /) -> Awaitable[Any]:
+        """Delete one key."""
+        ...
 
 
 @runtime_checkable

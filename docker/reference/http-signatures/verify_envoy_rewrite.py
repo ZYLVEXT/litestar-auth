@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise DPoP authentication, identity binding, and Envoy message integrity."""
-# ruff: file-ignore[f-string-in-exception, hardcoded-password-string, print, raise-vanilla-args, raw-string-in-exception, too-many-locals]
+# ruff: file-ignore[f-string-in-exception, print, raise-vanilla-args, raw-string-in-exception, too-many-locals]
 
 from __future__ import annotations
 

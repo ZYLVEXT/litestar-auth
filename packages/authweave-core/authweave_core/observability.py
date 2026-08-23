@@ -39,7 +39,7 @@ class SecurityOperation(StrEnum):
     OAUTH_INTROSPECT = "oauth.introspect"
     OAUTH_PAR = "oauth.par"
     OAUTH_VERIFY_JARM = "oauth.verify_jarm"
-    OAUTH_TOKEN_EXCHANGE = "oauth.token_exchange"  # ruff: ignore[hardcoded-password-string] - operation name
+    OAUTH_TOKEN_EXCHANGE = "oauth.token_exchange"
     KEY_REFRESH = "key.refresh"
     REPLAY_CHECK = "replay.check"
     WEBHOOK_DELIVER = "webhook.deliver"

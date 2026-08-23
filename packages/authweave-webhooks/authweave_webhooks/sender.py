@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from authweave_core import SecurityOperation, SecurityOutcome, observe_security
@@ -11,7 +11,8 @@ from authweave_core import SecurityOperation, SecurityOutcome, observe_security
 from authweave_webhooks.models import HEADER_ID, HEADER_SIGNATURE, HEADER_TIMESTAMP, WebhookDelivery
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
+    from collections.abc import AsyncIterator, Collection, Mapping, Sequence
+    from contextlib import AbstractAsyncContextManager
 
     from authweave_core import SecurityObserver, TraceCorrelation
 
@@ -54,6 +55,48 @@ def validate_https_endpoint(url: str) -> str:
     return url
 
 
+@runtime_checkable
+class AsyncStreamingResponse(Protocol):
+    """The streaming response surface this sender reads."""
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """Response headers."""
+        ...
+
+    @property
+    def status_code(self) -> int:
+        """HTTP status code."""
+        ...
+
+    def aiter_bytes(self) -> AsyncIterator[bytes]:
+        """Iterate the response body in bounded chunks."""
+        ...
+
+
+@runtime_checkable
+class AsyncStreamingClient(Protocol):
+    """The httpx-shaped client surface this sender borrows.
+
+    Declared structurally so the sender types its client without depending on
+    ``httpx`` itself.
+    """
+
+    def stream(  # ruff: ignore[too-many-arguments] - mirrors the httpx call this sender makes
+        self,
+        method: str,
+        url: str,
+        /,
+        *,
+        content: bytes = ...,
+        headers: Mapping[str, str] = ...,
+        timeout: float = ...,
+        follow_redirects: bool = ...,
+    ) -> AbstractAsyncContextManager[AsyncStreamingResponse]:
+        """Open one streaming request."""
+        ...
+
+
 class HttpxWebhookSender:
     """Send one bounded HTTPS delivery attempt.
 
@@ -67,7 +110,7 @@ class HttpxWebhookSender:
 
     def __init__(
         self,
-        client: object,
+        client: AsyncStreamingClient,
         *,
         allowed_endpoints: Collection[str],
         timeout_seconds: float = 5.0,
@@ -111,7 +154,7 @@ class HttpxWebhookSender:
             if validated_endpoint not in self._allowed_endpoints:
                 msg = "webhook endpoint is not in the configured exact allowlist"
                 raise ValueError(msg)
-            async with self._client.stream(  # ty: ignore[unresolved-attribute]
+            async with self._client.stream(
                 "POST",
                 validated_endpoint,
                 content=delivery.body,
@@ -134,9 +177,9 @@ class HttpxWebhookSender:
             return result
 
 
-async def _read_bounded_body(response: object) -> bytes:
+async def _read_bounded_body(response: AsyncStreamingResponse) -> bytes:
     body = bytearray()
-    async for raw_chunk in response.aiter_bytes():  # ty: ignore[unresolved-attribute]
+    async for raw_chunk in response.aiter_bytes():
         chunk = bytes(raw_chunk)
         remaining = _MAX_RESPONSE_BYTES - len(body)
         body.extend(chunk[:remaining])

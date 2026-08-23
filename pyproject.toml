@@ -88,8 +88,8 @@ reference = [
 python-version = "3.12"
 
 [tool.ty.src]
-# Type-check the library and tests only (exclude docs snippets and tooling).
-include = ["litestar_auth", "tests"]
+# Type-check the library, the workspace distributions, and tests (exclude docs snippets and tooling).
+include = ["litestar_auth", "tests", "packages"]
 
 [tool.deptry]
 experimental_namespace_package = true
@@ -139,6 +139,7 @@ line-ending = "auto"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+    "hardcoded-password-string",  # S105 matches constant names (token/secret/key), never a real credential
     "line-too-long",  # handled by ruff-format
     "missing-trailing-comma",  # conflicts with ruff-format
     "missing-copyright-notice",
