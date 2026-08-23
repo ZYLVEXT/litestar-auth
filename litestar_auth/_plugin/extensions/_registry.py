@@ -11,6 +11,7 @@ from litestar_auth._plugin.extensions._context import (
     build_extension_validation_context,
 )
 from litestar_auth._plugin.extensions._contracts import EXTENSION_API_VERSION, AuthEventSubscriberExtension
+from litestar_auth._plugin.openapi import merge_openapi_security_components
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -155,10 +156,6 @@ def register_extension_openapi_security(
 
     if not schemes or not app_config.openapi_config:
         return schemes
-
-    from litestar_auth._plugin.openapi import (  # ruff: ignore[import-outside-top-level]
-        merge_openapi_security_components,
-    )
 
     merge_openapi_security_components(app_config, schemes)
     return schemes

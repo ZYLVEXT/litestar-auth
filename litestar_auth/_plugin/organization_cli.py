@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar.cli._utils import ClickException, Context, Group  # ruff: ignore[import-private-name]
 
+from litestar_auth._plugin.organization_admin import OrganizationAdmin
+from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
 from litestar_auth.exceptions import ConfigurationError, OrganizationAdminError
 
 if TYPE_CHECKING:
@@ -431,13 +433,6 @@ def _run_organization_invitation_cli_operation[T, ID: Hashable](
     """
 
     async def _run() -> T:
-        from litestar_auth._plugin.organization_admin import (  # ruff: ignore[import-outside-top-level]
-            OrganizationAdmin,
-        )
-        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
-            resolve_user_manager_factory,
-        )
-
         session_context = cast("Any", context.session_maker())
         if not hasattr(session_context, "__aenter__") or not hasattr(session_context, "__aexit__"):
             msg = "Organization admin CLI requires session_maker() to return an async context manager."

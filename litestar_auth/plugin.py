@@ -82,6 +82,8 @@ if TYPE_CHECKING:
 
     _ScopedUserDatabaseProxy = ScopedUserDatabaseProxyImpl
 
+from litestar_auth._plugin.extensions import register_extension_exception_handlers
+from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
 from litestar_auth.manager import FernetKeyringConfig
 
 AccountLockoutConfig = _plugin_config.AccountLockoutConfig
@@ -118,9 +120,6 @@ class LitestarAuth[UP: UserProtocol[Any], ID: Hashable](InitPlugin, CLIPlugin):
                 session_maker=self.config.session_maker,
                 session_scope_key=self._session_scope_key,
             )
-        )
-        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
-            resolve_user_manager_factory,
         )
 
         self._user_manager_factory = resolve_user_manager_factory(self.config)
@@ -460,9 +459,6 @@ class LitestarAuth[UP: UserProtocol[Any], ID: Hashable](InitPlugin, CLIPlugin):
     def _register_extension_exception_handlers(self) -> None:
         if self._extension_registration_context is None:
             return
-        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
-            register_extension_exception_handlers,
-        )
 
         register_extension_exception_handlers(
             self._extension_registration_context.app_config,
@@ -479,8 +475,10 @@ class LitestarAuth[UP: UserProtocol[Any], ID: Hashable](InitPlugin, CLIPlugin):
         return self.config.user_model
 
     def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
+        # ruff: ignore[import-outside-top-level] - keeps the TOTP controller off the public facade import path
+        from litestar_auth._plugin.totp_controller import totp_backend
+
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
-        from litestar_auth._plugin.totp_controller import totp_backend  # ruff: ignore[import-outside-top-level]
 
         return totp_backend(self.config, backend_inventory=backend_inventory)
 
