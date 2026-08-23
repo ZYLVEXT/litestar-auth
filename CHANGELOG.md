@@ -1,3 +1,16 @@
+## Unreleased
+
+### Fixed
+
+- Stopped caching request-scoped dependency values for the lifetime of the application. Litestar
+  stores a `use_cache=True` result on the `Provide` instance itself, so the plugin-owned
+  `resolved_permissions`, `current_principal`, `authentication_context`, `current_organization`, and
+  `organization_store` dependencies — along with every extension-contributed dependency — served the
+  first request's value to every later request, leaking one caller's permissions, principal, and
+  organization context into other requests. Only the request-independent `config` and `user_model`
+  dependencies remain cached; guards were never affected because they resolve permissions from the
+  connection instead of dependency injection.
+
 ## 7.3.3 (2026-08-09)
 
 ### Fixed
