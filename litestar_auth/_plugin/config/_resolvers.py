@@ -89,7 +89,7 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     return SQLAlchemyUserDatabase(session, user_model=user_model)
 
 
-def _resolve_plugin_managed_totp_secret_storage_policy[UP: UserProtocol[Any], ID: Hashable](
+def _resolve_plugin_managed_totp_secret_storage_policy[ID: Hashable](
     config: _TotpSecretPolicyConfig[ID],
 ) -> _PluginSecurityNotice | None:
     """Resolve the TOTP storage policy owned by plugin-managed manager wiring.
@@ -128,7 +128,7 @@ def _normalize_config_superuser_role_name(role_name: str) -> str:
         raise ConfigurationError(str(exc)) from exc
 
 
-def require_session_maker[UP: UserProtocol[Any], ID: Hashable](
+def require_session_maker(
     config: _SessionMakerConfig,
 ) -> SessionFactory:
     """Return the configured session factory or fail when it is omitted.

@@ -7,7 +7,7 @@ from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from litestar_auth.types import ID, UserProtocol
+from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
