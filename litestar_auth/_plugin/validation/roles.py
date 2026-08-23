@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.config import _normalize_config_superuser_role_name
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def _role_schema_surfaces_requiring_role_capability[UP: UserProtocol[Any], ID](
+def _role_schema_surfaces_requiring_role_capability[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> tuple[str, ...]:
     """Return plugin-owned schema surfaces that require ``user_model.roles``."""
@@ -39,7 +40,9 @@ def _role_schema_surfaces_requiring_role_capability[UP: UserProtocol[Any], ID](
     return tuple(required_surfaces)
 
 
-def validate_role_capable_user_model_surfaces[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_role_capable_user_model_surfaces[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Fail fast when plugin-owned schemas require ``roles`` but ``user_model`` does not expose it.
 
     Raises:
@@ -63,6 +66,8 @@ def validate_role_capable_user_model_surfaces[UP: UserProtocol[Any], ID](config:
     raise ConfigurationError(format_configuration_message(msg))
 
 
-def validate_superuser_role_name_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_superuser_role_name_config[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Validate and normalize the configured superuser role name."""
     config.superuser_role_name = _normalize_config_superuser_role_name(config.superuser_role_name)

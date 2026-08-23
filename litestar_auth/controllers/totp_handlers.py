@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Never, cast
 
@@ -53,7 +54,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class _TotpPasswordStepUpRequest[UP: UserProtocol[Any], ID]:
+class _TotpPasswordStepUpRequest[UP: UserProtocol[Any], ID: Hashable]:
     """Runtime inputs for a TOTP current-password step-up check."""
 
     request: Request[Any, Any, Any]
@@ -63,7 +64,7 @@ class _TotpPasswordStepUpRequest[UP: UserProtocol[Any], ID]:
     ctx: _TotpControllerContext[UP, ID]
 
 
-async def _totp_require_authenticated_user[UP: UserProtocol[Any], ID](
+async def _totp_require_authenticated_user[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],
@@ -165,7 +166,7 @@ async def _totp_resolve_regenerate_payload(
     return decoded
 
 
-async def _totp_verify_current_password[UP: UserProtocol[Any], ID](
+async def _totp_verify_current_password[UP: UserProtocol[Any], ID: Hashable](
     step_up: _TotpPasswordStepUpRequest[UP, ID],
     *,
     password: str,
@@ -284,7 +285,7 @@ async def _totp_verify_confirm_enable_code(
     )
 
 
-async def _totp_persist_confirmed_secret[UP: UserProtocol[Any], ID](
+async def _totp_persist_confirmed_secret[UP: UserProtocol[Any], ID: Hashable](
     user: UP,
     *,
     secret: str,
@@ -317,7 +318,7 @@ async def _totp_persist_confirmed_secret[UP: UserProtocol[Any], ID](
     return recovery_codes
 
 
-async def _totp_handle_enable[UP: UserProtocol[Any], ID](
+async def _totp_handle_enable[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],
@@ -357,7 +358,7 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
     return response
 
 
-async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
+async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],

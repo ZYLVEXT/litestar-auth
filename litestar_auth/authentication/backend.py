@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar.exceptions import ClientException, NotAuthorizedException
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from litestar_auth.types import StrategyProtocol, TransportProtocol
 
 
-class AuthenticationBackend[UP: UserProtocol[Any], ID]:
+class AuthenticationBackend[UP: UserProtocol[Any], ID: Hashable]:
     """Compose session issuance, revocation, and transport lifecycle operations."""
 
     def __init__(self, *, name: str, transport: TransportProtocol, strategy: StrategyProtocol[UP, ID]) -> None:
@@ -108,7 +109,7 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
         return await self.logout(user, token)
 
 
-def _bind_strategy_session[UP: UserProtocol[Any], ID, S](
+def _bind_strategy_session[UP: UserProtocol[Any], ID: Hashable, S](
     strategy: StrategyProtocol[UP, ID],
     session: S,
 ) -> StrategyProtocol[UP, ID]:

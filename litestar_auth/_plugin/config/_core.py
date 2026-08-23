@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
@@ -117,7 +117,7 @@ def _default_account_token_denylist_store() -> InMemoryJWTDenylistStore:
 
 
 @dataclass(slots=True)
-class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
+class LitestarAuthConfig[UP: UserProtocol[Any], ID: Hashable](_ConfigValidationMixin):
     """Configuration for the :class:`~litestar_auth.plugin.LitestarAuth` plugin.
 
     Field declarations below hold defaults and types for manager construction,

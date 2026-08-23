@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, cast, overload, override
 
@@ -80,7 +80,7 @@ type ProviderBindingsFactory = Callable[[AsyncSession], Sequence[LitestarProvide
 
 
 @dataclass(frozen=True, slots=True)
-class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
+class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :class:`LitestarAuthMiddleware`."""
 
     get_request_session: RequestSessionProvider
@@ -114,7 +114,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
             raise ValueError(msg)
 
 
-class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
+class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :class:`LitestarAuthMiddleware`."""
 
     get_request_session: Required[RequestSessionProvider]
@@ -138,7 +138,7 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     scopes: NotRequired[Scopes | None]
 
 
-class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMiddleware):
+class LitestarAuthMiddleware[UP: UserProtocol[Any], ID: Hashable](AbstractAuthenticationMiddleware):
     """Run one principal-neutral authentication pipeline for every route."""
 
     @overload

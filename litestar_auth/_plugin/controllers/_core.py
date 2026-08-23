@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.auth_controller import PluginAuthControllerSettings, create_auth_controller
@@ -36,7 +37,7 @@ __all__ = (
 )
 
 
-def build_controllers[UP: UserProtocol[Any], ID](
+def build_controllers[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     security: Sequence[SecurityRequirement] | None = None,
@@ -57,7 +58,7 @@ def build_controllers[UP: UserProtocol[Any], ID](
     return controllers
 
 
-def _build_auth_controllers[UP: UserProtocol[Any], ID](
+def _build_auth_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: LitestarAuthConfig[UP, ID],
     backend_inventory: StartupBackendInventory[UP, ID] | None = None,
@@ -106,7 +107,7 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
     return controllers
 
 
-def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
+def _append_optional_feature_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
@@ -123,7 +124,7 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
     )
 
 
-def _append_account_feature_controllers[UP: UserProtocol[Any], ID](
+def _append_account_feature_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
@@ -176,7 +177,7 @@ def _append_account_feature_controllers[UP: UserProtocol[Any], ID](
         )
 
 
-def _append_session_feature_controllers[UP: UserProtocol[Any], ID](
+def _append_session_feature_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],

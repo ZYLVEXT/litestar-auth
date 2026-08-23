@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class ControllerFactoryKit[UP: UserProtocol[Any], ID]:
+class ControllerFactoryKit[UP: UserProtocol[Any], ID: Hashable]:
     """Common request-backend and generated-controller helpers for plugin factories."""
 
     backend_inventory: StartupBackendInventory[UP, ID]

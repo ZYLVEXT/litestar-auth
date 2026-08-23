@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Hashable
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -39,7 +40,7 @@ _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE = (
 )
 
 
-def default_password_validator_factory[UP: UserProtocol[Any], ID](
+def default_password_validator_factory[UP: UserProtocol[Any], ID: Hashable](
     _config: LitestarAuthConfig[UP, ID],
 ) -> Callable[[str], None]:
     """Build the default plugin password validator.
@@ -51,7 +52,7 @@ def default_password_validator_factory[UP: UserProtocol[Any], ID](
 
 
 @dataclass(frozen=True, slots=True)
-class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
+class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID: Hashable]:
     """Shared internal contract for plugin-owned default user-manager construction."""
 
     config: LitestarAuthConfig[UP, ID]
@@ -125,7 +126,7 @@ def _manager_accepts_account_token_store(manager_class: type[Any] | None) -> boo
     )
 
 
-def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
+def _build_default_user_manager_contract[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     password_helper: PasswordHelper,
@@ -141,7 +142,7 @@ def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
+def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     backends: tuple[object, ...] = (),
@@ -162,7 +163,7 @@ def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
     ).build_kwargs()
 
 
-def build_user_manager[UP: UserProtocol[Any], ID](
+def build_user_manager[UP: UserProtocol[Any], ID: Hashable](
     *,
     session: AsyncSession,
     user_db: BaseUserStore[UP, ID],
@@ -205,7 +206,7 @@ def build_user_manager[UP: UserProtocol[Any], ID](
     return user_manager_class(user_db, **constructor_kwargs)
 
 
-def resolve_password_validator[UP: UserProtocol[Any], ID](
+def resolve_password_validator[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> Callable[[str], None] | None:
     """Resolve the password validator requested by plugin configuration.
@@ -219,7 +220,7 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
     return default_password_validator_factory(config)
 
 
-def resolve_user_manager_factory[UP: UserProtocol[Any], ID](
+def resolve_user_manager_factory[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> UserManagerFactory[UP, ID]:
     """Resolve the explicit builder used to create request-scoped user managers.
@@ -232,7 +233,7 @@ def resolve_user_manager_factory[UP: UserProtocol[Any], ID](
     return build_user_manager
 
 
-def attach_extension_manager_hook_subscribers[UP: UserProtocol[Any], ID](
+def attach_extension_manager_hook_subscribers[UP: UserProtocol[Any], ID: Hashable](
     manager: BaseUserManager[UP, ID],
     subscribers: tuple[ExtensionManagerHookSubscriber, ...],
 ) -> None:

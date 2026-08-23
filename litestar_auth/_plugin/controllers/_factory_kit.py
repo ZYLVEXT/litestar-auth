@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import msgspec  # ruff: ignore[typing-only-third-party-import]
@@ -49,7 +50,7 @@ class _UsersSchemaKwargs(_UserReadSchemaKwargs, total=False):
     user_update_schema: type[msgspec.Struct]
 
 
-def user_read_schema_kwargs[UP: UserProtocol[Any], ID](
+def user_read_schema_kwargs[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _UserReadSchemaKwargs:
     """Return non-null read-schema kwargs for controller factories."""
@@ -59,7 +60,7 @@ def user_read_schema_kwargs[UP: UserProtocol[Any], ID](
     return result
 
 
-def register_schema_kwargs[UP: UserProtocol[Any], ID](
+def register_schema_kwargs[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _RegisterSchemaKwargs:
     """Return non-null register-schema kwargs for controller factories."""
@@ -71,7 +72,7 @@ def register_schema_kwargs[UP: UserProtocol[Any], ID](
     return result
 
 
-def users_schema_kwargs[UP: UserProtocol[Any], ID](
+def users_schema_kwargs[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _UsersSchemaKwargs:
     """Return non-null users-schema kwargs for controller factories."""
@@ -92,7 +93,7 @@ def backend_auth_path(*, auth_path: str, backend_name: str, index: int) -> str:
     return f"{base_path}/{backend_name}"
 
 
-def create_session_devices_controller[UP: UserProtocol[Any], ID](
+def create_session_devices_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: LitestarAuthConfig[UP, ID],
     backend_inventory: StartupBackendInventory[UP, ID] | None = None,
@@ -122,7 +123,7 @@ def create_session_devices_controller[UP: UserProtocol[Any], ID](
     return _mark_litestar_auth_route_handler(generated_controller)
 
 
-def _resolve_plugin_cookie_transport[UP: UserProtocol[Any], ID](
+def _resolve_plugin_cookie_transport[UP: UserProtocol[Any], ID: Hashable](
     backend: AuthBackendProto[UP, ID],
 ) -> CookieTransport | None:
     """Return the backend cookie transport when refresh-cookie behavior is available."""
@@ -130,7 +131,7 @@ def _resolve_plugin_cookie_transport[UP: UserProtocol[Any], ID](
     return transport if isinstance(transport, CookieTransport) else None
 
 
-def _resolve_session_devices_request_backend[UP: UserProtocol[Any], ID](
+def _resolve_session_devices_request_backend[UP: UserProtocol[Any], ID: Hashable](
     inventory: StartupBackendInventory[UP, ID],
     startup_backend: StartupBackendTemplate[UP, ID],
     *,

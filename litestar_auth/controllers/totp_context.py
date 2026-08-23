@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(slots=True)
-class _TotpControllerRuntimeContext[UP: UserProtocol[Any], ID]:
+class _TotpControllerRuntimeContext[UP: UserProtocol[Any], ID: Hashable]:
     """Backend and rate-limit dependencies shared by generated TOTP handlers."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -47,7 +48,7 @@ class _TotpControllerSecurityContext:
 
 
 @dataclass(slots=True)
-class _TotpPendingTokenContext[ID]:
+class _TotpPendingTokenContext[ID: Hashable]:
     """Pending-login token signing, replay storage, and client-binding settings."""
 
     totp_pending_secret: str = field(repr=False)
@@ -69,7 +70,7 @@ class _TotpEnrollmentContext:
 
 
 @dataclass(slots=True)
-class _TotpControllerContext[UP: UserProtocol[Any], ID]:
+class _TotpControllerContext[UP: UserProtocol[Any], ID: Hashable]:
     """Runtime dependencies for generated TOTP controller handlers."""
 
     runtime: _TotpControllerRuntimeContext[UP, ID]
@@ -79,7 +80,7 @@ class _TotpControllerContext[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(slots=True)
-class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
+class _TotpControllerContextSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Raw TOTP controller dependencies before they are grouped by concern."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -193,7 +194,7 @@ def _warn_totp_pending_client_binding_disabled() -> None:
     )
 
 
-def _build_totp_controller_context[UP: UserProtocol[Any], ID](
+def _build_totp_controller_context[UP: UserProtocol[Any], ID: Hashable](
     settings: _TotpControllerContextSettings[UP, ID],
 ) -> _TotpControllerContext[UP, ID]:
     """Assemble grouped TOTP controller dependencies.

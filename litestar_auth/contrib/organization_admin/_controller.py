@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, TypedDict, Unpack, cast, overload
 
@@ -102,7 +102,7 @@ class OrganizationAdminAuthorizationPolicy:
 
 
 @dataclass(frozen=True, slots=True)
-class OrganizationAdminControllerConfig[ID]:
+class OrganizationAdminControllerConfig[ID: Hashable]:
     """Configuration for :func:`create_organization_admin_controller`."""
 
     config: LitestarAuthConfig[Any, ID] | None = None
@@ -112,7 +112,7 @@ class OrganizationAdminControllerConfig[ID]:
     authorization_policy: OrganizationAdminAuthorizationPolicy = OrganizationAdminAuthorizationPolicy()
 
 
-class OrganizationAdminControllerOptions[ID](TypedDict, total=False):
+class OrganizationAdminControllerOptions[ID: Hashable](TypedDict, total=False):
     """Keyword options accepted by :func:`create_organization_admin_controller`."""
 
     config: LitestarAuthConfig[Any, ID] | None
@@ -123,7 +123,7 @@ class OrganizationAdminControllerOptions[ID](TypedDict, total=False):
 
 
 @dataclass(frozen=True, slots=True)
-class _OrganizationAdminControllerContext[ID]:
+class _OrganizationAdminControllerContext[ID: Hashable]:
     id_parser: IdParser[ID]
     organization_page_schema_type: type[msgspec.Struct]
     membership_page_schema_type: type[msgspec.Struct]
@@ -190,7 +190,7 @@ def _normalize_route_prefix(route_prefix: str) -> str:
     raise ConfigurationError(msg)
 
 
-def _resolve_settings[ID](
+def _resolve_settings[ID: Hashable](
     *,
     controller_config: OrganizationAdminControllerConfig[ID] | None,
     options: OrganizationAdminControllerOptions[ID],
@@ -201,7 +201,7 @@ def _resolve_settings[ID](
     return OrganizationAdminControllerConfig(**options) if controller_config is None else controller_config
 
 
-def _resolve_id_parser[ID](settings: OrganizationAdminControllerConfig[ID]) -> IdParser[ID]:
+def _resolve_id_parser[ID: Hashable](settings: OrganizationAdminControllerConfig[ID]) -> IdParser[ID]:
     if settings.id_parser is not None:
         return settings.id_parser
     if settings.config is not None and settings.config.id_parser is not None:
@@ -273,11 +273,11 @@ def _create_invitation_page_schema_type() -> type[msgspec.Struct]:
     )
 
 
-def _context[ID](controller: _OrganizationAdminControllerBase) -> _OrganizationAdminControllerContext[ID]:
+def _context[ID: Hashable](controller: _OrganizationAdminControllerBase) -> _OrganizationAdminControllerContext[ID]:
     return cast("_OrganizationAdminControllerContext[ID]", controller.organization_admin_context)
 
 
-def _admin[ORG, MEMBERSHIP, INVITATION, ID](
+def _admin[ORG, MEMBERSHIP, INVITATION, ID: Hashable](
     store: BaseOrganizationStore[ORG, MEMBERSHIP, INVITATION, ID],
 ) -> SQLAlchemyOrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID]:
     return SQLAlchemyOrganizationAdmin(store=store)
@@ -317,21 +317,21 @@ def _to_organization_invitation_manager(user_manager: object) -> _OrganizationIn
     return cast("_OrganizationInvitationManager", user_manager)
 
 
-def _parse_id[ID](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
+def _parse_id[ID: Hashable](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
     try:
         return context.id_parser(raw_id)
     except (TypeError, ValueError) as exc:
         raise _map_organization_admin_error(OrganizationNotFoundError()) from exc
 
 
-def _parse_user_id[ID](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
+def _parse_user_id[ID: Hashable](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
     try:
         return context.id_parser(raw_id)
     except (TypeError, ValueError) as exc:
         raise _map_organization_admin_error(OrganizationMembershipNotFoundError()) from exc
 
 
-def _parse_invitation_id[ID](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
+def _parse_invitation_id[ID: Hashable](context: _OrganizationAdminControllerContext[ID], raw_id: str) -> ID:
     try:
         return context.id_parser(raw_id)
     except (TypeError, ValueError) as exc:
@@ -828,7 +828,7 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
     return OrganizationAdminController
 
 
-def _finalize_controller[ID](
+def _finalize_controller[ID: Hashable](
     controller_cls: type[_OrganizationAdminControllerBase],
     *,
     settings: OrganizationAdminControllerConfig[ID],
@@ -996,7 +996,7 @@ def create_organization_invitation_controller(
 
 
 @overload
-def create_organization_admin_controller[ID](  # ruff: ignore[overload-with-docstring]
+def create_organization_admin_controller[ID: Hashable](  # ruff: ignore[overload-with-docstring]
     *,
     controller_config: OrganizationAdminControllerConfig[ID],
 ) -> type[Controller]:
@@ -1004,13 +1004,13 @@ def create_organization_admin_controller[ID](  # ruff: ignore[overload-with-docs
 
 
 @overload
-def create_organization_admin_controller[ID](  # ruff: ignore[overload-with-docstring]
+def create_organization_admin_controller[ID: Hashable](  # ruff: ignore[overload-with-docstring]
     **options: Unpack[OrganizationAdminControllerOptions[ID]],
 ) -> type[Controller]:
     """Build an organization-admin controller from keyword settings."""
 
 
-def create_organization_admin_controller[ID](
+def create_organization_admin_controller[ID: Hashable](
     *,
     controller_config: OrganizationAdminControllerConfig[ID] | None = None,
     **options: Unpack[OrganizationAdminControllerOptions[ID]],

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -108,7 +108,7 @@ def _make_db_session_provide(
     return provide_db_session
 
 
-def _resolve_session_scope_key[UP: UserProtocol[Any], ID](
+def _resolve_session_scope_key[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> str:
     return config.session_scope_key if config.session_scope_key is not None else SESSION_SCOPE_KEY
@@ -180,7 +180,7 @@ def _make_user_manager_dependency_provider[TManager](
     return cast("Callable[..., AsyncGenerator[TManager, None]]", _provide_user_manager)
 
 
-def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
+def _make_backends_dependency_provider[UP: UserProtocol[Any], ID: Hashable](
     build_backends: Callable[[AsyncSession], Sequence[AuthenticationBackend[UP, ID]]],
     db_session_key: str,
 ) -> Callable[..., Sequence[AuthenticationBackend[UP, ID]]]:
@@ -260,7 +260,7 @@ def provide_authentication_context(
     return request.auth if isinstance(request.auth, AuthenticationContext) else None
 
 
-def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
+def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
     if config.request_session_provider is not None or config.db_session_dependency_provided_externally:
@@ -283,7 +283,7 @@ def _wrap_registered_dependency(key: str, provider: object) -> Provide:
     return _to_dependency_provider(provider, use_cache=False)
 
 
-def register_dependencies[UP: UserProtocol[Any], ID](
+def register_dependencies[UP: UserProtocol[Any], ID: Hashable](
     app_config: AppConfig,
     config: LitestarAuthConfig[UP, ID],
     *,
@@ -373,7 +373,7 @@ def _validate_extension_dependency_contributions(
             raise ValueError(msg)
 
 
-def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
+def _reserved_dependency_keys[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     dependency_keys: Sequence[str],
@@ -395,7 +395,7 @@ def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
     )
 
 
-def _iter_dependency_registrations[UP: UserProtocol[Any], ID](
+def _iter_dependency_registrations[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     providers: DependencyProviders,
@@ -409,7 +409,7 @@ def _iter_dependency_registrations[UP: UserProtocol[Any], ID](
     return tuple(registrations)
 
 
-def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
+def _resolve_dependency_registration[UP: UserProtocol[Any], ID: Hashable](
     provider_name: str,
     *,
     config: LitestarAuthConfig[UP, ID],
@@ -459,7 +459,7 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
     raise RuntimeError(msg)
 
 
-def _resolve_db_session_registration[UP: UserProtocol[Any], ID](
+def _resolve_db_session_registration[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _DependencyRegistration | None:
     if config.request_session_provider is not None:
@@ -479,7 +479,7 @@ def _resolve_db_session_registration[UP: UserProtocol[Any], ID](
     )
 
 
-def _resolve_organization_store_registration[UP: UserProtocol[Any], ID](
+def _resolve_organization_store_registration[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _DependencyRegistration | None:
     organization_config = config.organization_config

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar.exceptions import ClientException
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     )
 
 
-class OAuthAccountUpserter[UP: UserProtocol[Any], ID]:
+class OAuthAccountUpserter[UP: UserProtocol[Any], ID: Hashable]:
     """Persist provider account links and validate association ownership."""
 
     def __init__(
@@ -91,7 +92,7 @@ def _is_owned_by_different_user(owner: object, user: object) -> bool:
     return owner_id is None or user_id is None or owner_id != user_id
 
 
-def require_oauth_account_store[UP: UserProtocol[Any], ID](
+def require_oauth_account_store[UP: UserProtocol[Any], ID: Hashable](
     user_manager: OAuthServiceUserManagerProtocol[UP, ID],
 ) -> OAuthAccountStoreProtocol[UP, ID]:
     """Return the configured OAuth-account store or fail with a clear contract error.

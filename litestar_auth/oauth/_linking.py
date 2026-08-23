@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar.exceptions import ClientException
@@ -43,7 +44,7 @@ class OAuthLinkingPolicy:
         raise ConfigurationError(msg)
 
     @staticmethod
-    async def resolve_candidate_user[UP: UserProtocol[Any], ID](
+    async def resolve_candidate_user[UP: UserProtocol[Any], ID: Hashable](
         *,
         provider_name: str,
         user_manager: OAuthServiceUserManagerProtocol[UP, ID],
@@ -63,7 +64,7 @@ class OAuthLinkingPolicy:
         existing_by_email = await user_manager.user_db.get_by_email(account_email)
         return existing_by_email, existing_by_email
 
-    async def materialize_or_validate_user[UP: UserProtocol[Any], ID](
+    async def materialize_or_validate_user[UP: UserProtocol[Any], ID: Hashable](
         self,
         *,
         user_manager: OAuthServiceUserManagerProtocol[UP, ID],
@@ -89,7 +90,7 @@ class OAuthLinkingPolicy:
         self.validate_existing_email_link_policy(email_verified=email_verified)
         return user
 
-    async def create_user_from_oauth[UP: UserProtocol[Any], ID](
+    async def create_user_from_oauth[UP: UserProtocol[Any], ID: Hashable](
         self,
         *,
         user_manager: OAuthServiceUserManagerProtocol[UP, ID],

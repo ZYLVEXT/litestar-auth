@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.database_token import (
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
+def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> None:
     """Ensure an HTTP request-session source is configured.
@@ -36,7 +37,7 @@ def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
         raise ValueError(msg)
 
 
-def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_core_session_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate constructor-time runtime-mode, backend, and session prerequisites.
 
     Raises:

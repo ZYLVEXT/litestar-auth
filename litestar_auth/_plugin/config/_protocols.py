@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config._core import LitestarAuthConfig
     from litestar_auth.manager import BaseUserManager
 
-type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
+type UserDatabaseFactory[UP: UserProtocol[Any], ID: Hashable] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
 
 
-class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
+class PasswordValidatorFactory[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Build a password validator callable for a plugin configuration."""
 
     def __call__(
@@ -28,7 +28,7 @@ class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
         pass
 
 
-class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
+class UserManagerFactory[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Build a request-scoped user manager for the plugin.
 
     Implementations receive ``backends`` session-bound to the current request; pass them

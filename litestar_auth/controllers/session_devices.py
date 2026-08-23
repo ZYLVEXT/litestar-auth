@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -98,7 +98,7 @@ _SESSION_DEVICES_OPENAPI_RESPONSES = {
 }
 
 
-class SessionDevicesControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class SessionDevicesControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_session_devices_controller`."""
 
     backend: Required[AuthenticationBackend[UP, ID]]
@@ -107,7 +107,7 @@ class SessionDevicesControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
-class SessionDevicesControllerConfig[UP: UserProtocol[Any], ID]:
+class SessionDevicesControllerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :func:`create_session_devices_controller`."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -262,18 +262,18 @@ async def _resolve_current_refresh_session_id[UP: UserProtocol[Any]](
 
 
 @overload
-def create_session_devices_controller[UP: UserProtocol[Any], ID](
+def create_session_devices_controller[UP: UserProtocol[Any], ID: Hashable](
     config: SessionDevicesControllerConfig[UP, ID],
 ) -> type[Controller]: ...
 
 
 @overload
-def create_session_devices_controller[UP: UserProtocol[Any], ID](
+def create_session_devices_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[SessionDevicesControllerOptions[UP, ID]],
 ) -> type[Controller]: ...
 
 
-def create_session_devices_controller[UP: UserProtocol[Any], ID](
+def create_session_devices_controller[UP: UserProtocol[Any], ID: Hashable](
     config: SessionDevicesControllerConfig[UP, ID] | None = None,
     **options: Unpack[SessionDevicesControllerOptions[UP, ID]],
 ) -> type[Controller]:
@@ -296,7 +296,7 @@ def create_session_devices_controller[UP: UserProtocol[Any], ID](
     return _mark_litestar_auth_route_handler(generated_controller)
 
 
-def _build_static_context[UP: UserProtocol[Any], ID](
+def _build_static_context[UP: UserProtocol[Any], ID: Hashable](
     backend: AuthenticationBackend[UP, ID],
 ) -> _RuntimeContextBuilder[UP]:
     """Build a context factory for manually mounted session/device controllers.

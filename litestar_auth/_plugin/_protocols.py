@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth.types import UserProtocol
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from litestar_auth.types import TransportProtocol
 
 
-class StrategyProto[UP: UserProtocol[Any], ID](Protocol):
+class StrategyProto[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Narrow session-lifecycle contract consumed by plugin backend factories."""
 
     async def write_token(self, user: UP) -> str:
@@ -28,7 +29,7 @@ class StrategyProto[UP: UserProtocol[Any], ID](Protocol):
         """Invalidate ``token`` for ``user``."""
 
 
-class AuthBackendProto[UP: UserProtocol[Any], ID](Protocol):
+class AuthBackendProto[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Narrow authentication-backend shape used by plugin controller helpers."""
 
     name: str

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -30,7 +31,7 @@ class _SessionBoundAccessTokenRow(Protocol):
     session_id: str | None
 
 
-class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
+class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID: Hashable](
     _DatabaseRefreshTokenRotationMixin[UP, ID],
 ):
     """Database refresh-token and refresh-session operations."""

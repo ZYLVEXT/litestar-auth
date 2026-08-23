@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, cast
 
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(slots=True)
-class _PluginTotpControllerSettings[UP: UserProtocol[Any], ID]:
+class _PluginTotpControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Raw plugin TOTP controller factory inputs."""
 
     backend: StartupBackendTemplate[UP, ID]
@@ -64,7 +65,7 @@ class _PluginTotpControllerSettings[UP: UserProtocol[Any], ID]:
     security: Sequence[SecurityRequirement] | None
 
 
-class PluginTotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class PluginTotpControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by plugin-managed ``create_totp_controller``."""
 
     backend: Required[StartupBackendTemplate[UP, ID]]
@@ -112,7 +113,7 @@ def _build_plugin_totp_rate_limit(
     )
 
 
-def _validate_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
+def _validate_plugin_totp_controller_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginTotpControllerSettings[UP, ID],
 ) -> None:
     """Validate plugin TOTP controller factory settings."""
@@ -132,7 +133,7 @@ def _validate_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID](
+def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginTotpControllerSettings[UP, ID],
     *,
     totp_rate_limit: TotpRateLimitOrchestrator,
@@ -185,7 +186,7 @@ def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_plugin_totp_startup_context[UP: UserProtocol[Any], ID](
+def _build_plugin_totp_startup_context[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginTotpControllerSettings[UP, ID],
 ) -> tuple[_TotpControllerContext[UP, ID], TotpRateLimitOrchestrator]:
     """Build plugin startup-scoped TOTP context.

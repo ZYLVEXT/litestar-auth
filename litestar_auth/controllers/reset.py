@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
-class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
+class ResetPasswordControllerUserProtocol[ID: Hashable](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after password reset."""
 
     email: str
@@ -39,7 +40,7 @@ class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Proto
 
 
 @runtime_checkable
-class ResetPasswordControllerUserManagerProtocol[UP: ResetPasswordControllerUserProtocol[Any], ID](Protocol):
+class ResetPasswordControllerUserManagerProtocol[UP: ResetPasswordControllerUserProtocol[Any], ID: Hashable](Protocol):
     """User-manager behavior required by the reset-password controller."""
 
     async def forgot_password(self, email: str) -> None:
@@ -65,7 +66,7 @@ class _ResetPasswordControllerContext:
     reset_password_reset: RequestHandler
 
 
-def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any], ID](
+def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any], ID: Hashable](
     *,
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",

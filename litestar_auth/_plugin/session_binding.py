@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from litestar_auth.oauth_encryption import OAuthTokenEncryption
 
 
-class _UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):  # ruff: ignore[unused-private-protocol]
+class _UserManagerFactory[UP: UserProtocol[Any], ID: Hashable](Protocol):  # ruff: ignore[unused-private-protocol]
     """Factory that builds a session-bound user manager."""
 
     def __call__(self, session: AsyncSession) -> BaseUserManager[UP, ID]:
@@ -53,7 +54,7 @@ class _TotpRecoveryCodeStore[UP](Protocol):
         """Consume the recovery code keyed by ``lookup_hex`` when still active."""
 
 
-class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):
+class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID: Hashable](BaseUserStore[UP, ID]):
     """Wrap a store and bind any explicit plugin-owned OAuth token policy once.
 
     The wrapped store must implement :class:`~litestar_auth.db.base.BaseUserStore`.

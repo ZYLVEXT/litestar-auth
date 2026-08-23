@@ -6,7 +6,7 @@ import hmac
 import logging
 import secrets
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -115,7 +115,7 @@ class _PendingJtiWarningState:
         self.logged = False
 
 
-class TotpFlowUserManagerProtocol[UP: TotpUserProtocol[Any], ID](Protocol):
+class TotpFlowUserManagerProtocol[UP: TotpUserProtocol[Any], ID: Hashable](Protocol):
     """User-manager behavior required by TOTP login-flow orchestration."""
 
     async def get(self, user_id: ID) -> UP | None:
@@ -156,7 +156,7 @@ class CompletedTotpLogin[UP: TotpUserProtocol[Any]]:
 
 
 @dataclass(frozen=True, slots=True)
-class TotpLoginFlowConfig[ID]:
+class TotpLoginFlowConfig[ID: Hashable]:
     """Configuration for pending-login TOTP issue and verification."""
 
     totp_pending_secret: str = field(repr=False)
@@ -170,7 +170,7 @@ class TotpLoginFlowConfig[ID]:
     unsafe_testing: bool = False
 
 
-class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
+class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
     """Issue and verify pending TOTP login challenges.
 
     Pending-login JWTs are single-use through JTI denial and, by default, carry

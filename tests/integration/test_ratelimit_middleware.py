@@ -273,7 +273,7 @@ def app() -> Litestar:
     return build_app()
 
 
-def assert_rate_limited(response: Response[Any]) -> None:
+def assert_rate_limited(response: Response) -> None:
     """Assert that a response carries the expected 429 rate-limit details."""
     assert response.status_code == HTTP_TOO_MANY_REQUESTS
     assert response.headers["Retry-After"].isdigit()

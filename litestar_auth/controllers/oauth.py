@@ -8,7 +8,7 @@ that envelope, validate ``state`` in constant time, and pass the verifier into t
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, Required, TypedDict, Unpack, cast, overload
 
@@ -161,7 +161,7 @@ def _make_oauth_callback_signature(dependency_parameter_name: str | None) -> ins
     )
 
 
-def _bind_oauth_callback_inputs[UP: UserProtocol[Any], ID](
+def _bind_oauth_callback_inputs[UP: UserProtocol[Any], ID: Hashable](
     *,
     signature: inspect.Signature,
     dependency_parameter_name: str | None,
@@ -188,7 +188,7 @@ def _bind_oauth_callback_inputs[UP: UserProtocol[Any], ID](
     )
 
 
-async def _complete_associate_callback[UP: UserProtocol[Any], ID](
+async def _complete_associate_callback[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     request: Request[Any, Any, Any],
@@ -233,7 +233,7 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
         return response
 
 
-def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
+def _create_associate_callback_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     responses: dict[int, ResponseSpec],
@@ -256,7 +256,7 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
     )
 
 
-def _create_oauth_callback_handler[UP: UserProtocol[Any], ID](
+def _create_oauth_callback_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     route_params_spec: _OAuthCallbackRouteParamsSpec,
@@ -317,7 +317,7 @@ def _oauth_callback_annotations(dependency_parameter_name: str | None) -> dict[s
     return annotations
 
 
-async def _complete_login_callback[UP: UserProtocol[Any], ID](
+async def _complete_login_callback[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     callback_inputs: _OAuthLoginCallbackInputs[UP, ID],
@@ -351,7 +351,7 @@ async def _complete_login_callback[UP: UserProtocol[Any], ID](
         return response
 
 
-def _create_login_callback_handler[UP: UserProtocol[Any], ID](
+def _create_login_callback_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     backend: AuthenticationBackend[UP, ID],
@@ -388,7 +388,7 @@ def _create_login_callback_handler[UP: UserProtocol[Any], ID](
     return callback
 
 
-async def _perform_authorize_redirect[UP: UserProtocol[Any], ID](
+async def _perform_authorize_redirect[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
@@ -416,7 +416,7 @@ async def _perform_authorize_redirect[UP: UserProtocol[Any], ID](
     return response
 
 
-def _create_authorize_handler[UP: UserProtocol[Any], ID](
+def _create_authorize_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     responses: OAuthResponses,
@@ -438,7 +438,7 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
     return authorize
 
 
-def _create_associate_authorize_handler[UP: UserProtocol[Any], ID](
+def _create_associate_authorize_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     responses: OAuthResponses,
@@ -472,7 +472,7 @@ def _cookie_settings_from_assembly(assembly: _OAuthControllerAssembly[Any, Any])
 
 
 @dataclass(frozen=True, slots=True)
-class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
+class OAuthControllerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :func:`create_oauth_controller`."""
 
     provider_name: str
@@ -492,7 +492,7 @@ class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
-class OAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class OAuthControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_oauth_controller`."""
 
     provider_name: Required[str]
@@ -511,7 +511,7 @@ class OAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
-class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
+class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :func:`create_oauth_associate_controller`."""
 
     provider_name: str
@@ -529,7 +529,7 @@ class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
-class OAuthAssociateControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class OAuthAssociateControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_oauth_associate_controller`."""
 
     provider_name: Required[str]
@@ -571,7 +571,7 @@ def _create_oauth_controller_type(
     return _mark_litestar_auth_route_handler(OAuthController)
 
 
-def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
+def _create_login_oauth_controller[UP: UserProtocol[Any], ID: Hashable](
     settings: _OAuthLoginControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Return a provider-specific login controller from a resolved client adapter."""
@@ -611,19 +611,19 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
 
 
 @overload
-def create_oauth_controller[UP: UserProtocol[Any], ID](
+def create_oauth_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: OAuthControllerConfig[UP, ID],
 ) -> type[Controller]: ...
 
 
 @overload
-def create_oauth_controller[UP: UserProtocol[Any], ID](
+def create_oauth_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[OAuthControllerOptions[UP, ID]],
 ) -> type[Controller]: ...
 
 
-def create_oauth_controller[UP: UserProtocol[Any], ID](
+def create_oauth_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: OAuthControllerConfig[UP, ID] | None = None,
     **options: Unpack[OAuthControllerOptions[UP, ID]],
@@ -667,7 +667,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](
     )
 
 
-def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
+def _create_oauth_associate_controller[UP: UserProtocol[Any], ID: Hashable](
     settings: _OAuthAssociateControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Build an OAuth associate controller with optional redirect-origin validation.
@@ -714,19 +714,19 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
 
 
 @overload
-def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
+def create_oauth_associate_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: OAuthAssociateControllerConfig[UP, ID],
 ) -> type[Controller]: ...
 
 
 @overload
-def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
+def create_oauth_associate_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[OAuthAssociateControllerOptions[UP, ID]],
 ) -> type[Controller]: ...
 
 
-def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
+def create_oauth_associate_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: OAuthAssociateControllerConfig[UP, ID] | None = None,
     **options: Unpack[OAuthAssociateControllerOptions[UP, ID]],

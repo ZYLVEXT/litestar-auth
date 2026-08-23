@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._plugin.extensions._context import (
@@ -64,7 +65,7 @@ def _validate_extension_api_versions(extensions: tuple[AuthExtension, ...]) -> N
         _validate_extension_api_version(extension)
 
 
-def resolve_version_gated_extensions[UP: UserProtocol[Any], ID](
+def resolve_version_gated_extensions[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> tuple[AuthExtension, ...]:
     """Return resolved extensions after enforcing extension API compatibility."""
@@ -73,7 +74,7 @@ def resolve_version_gated_extensions[UP: UserProtocol[Any], ID](
     return extensions
 
 
-def validate_extensions[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_extensions[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Run configured extension validation hooks in config order."""
     context = build_extension_validation_context(config)
     extensions = resolve_version_gated_extensions(config)
@@ -81,7 +82,7 @@ def validate_extensions[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP
         extension.validate(context)
 
 
-def register_extensions[UP: UserProtocol[Any], ID](
+def register_extensions[UP: UserProtocol[Any], ID: Hashable](
     *,
     app_config: AppConfig,
     config: LitestarAuthConfig[UP, ID],

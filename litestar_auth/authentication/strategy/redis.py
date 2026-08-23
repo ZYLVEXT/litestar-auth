@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Hashable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -143,7 +144,7 @@ class RedisClientProtocol(
 
 
 @dataclass(frozen=True, slots=True)
-class RedisTokenStrategyConfig[ID]:
+class RedisTokenStrategyConfig[ID: Hashable]:
     """Configuration for :class:`RedisTokenStrategy`."""
 
     redis: RedisClientProtocol
@@ -155,7 +156,7 @@ class RedisTokenStrategyConfig[ID]:
     subject_decoder: Callable[[str], ID] | None = None
 
 
-class RedisTokenStrategyOptions[ID](TypedDict):
+class RedisTokenStrategyOptions[ID: Hashable](TypedDict):
     """Keyword options accepted by :class:`RedisTokenStrategy`."""
 
     redis: Required[RedisClientProtocol]

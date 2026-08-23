@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -33,7 +34,7 @@ class _MembershipRoles(Protocol):
 
 
 @dataclass(slots=True)
-class SQLAlchemyOrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID](
+class SQLAlchemyOrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID: Hashable](
     _OrganizationAdminMutationMixin[ORG, MEMBERSHIP, INVITATION, ID],
     _OrganizationAdminInvariantMixin[ORG, MEMBERSHIP, ID],
     _OrganizationAdminQueryMixin[ORG, MEMBERSHIP, ID],

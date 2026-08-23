@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
@@ -78,7 +78,7 @@ class _PluginOAuthAssociateControllerSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class _PluginOAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
+class _PluginOAuthLoginControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Static settings for a plugin-owned OAuth login controller."""
 
     provider_name: str
@@ -115,7 +115,7 @@ def create_oauth_associate_controller(
     )
 
 
-def create_oauth_login_controller[UP: UserProtocol[Any], ID](
+def create_oauth_login_controller[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginOAuthLoginControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Return a plugin-owned OAuth login controller bound to request DI."""
@@ -135,7 +135,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_plugin_oauth_login_assembly[UP: UserProtocol[Any], ID](
+def _build_plugin_oauth_login_assembly[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginOAuthLoginControllerSettings[UP, ID],
 ) -> _OAuthControllerAssembly[UP, ID]:
     """Build shared assembly state for a plugin-owned OAuth login controller.
@@ -165,7 +165,7 @@ def _build_plugin_oauth_login_assembly[UP: UserProtocol[Any], ID](
     )
 
 
-def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
+def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID: Hashable](
     *,
     factory_kit: ControllerFactoryKit[UP, ID],
     assembly: _OAuthControllerAssembly[UP, ID],
@@ -199,7 +199,7 @@ def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
     return callback
 
 
-def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
+def _append_oauth_login_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
@@ -238,7 +238,7 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
     )
 
 
-def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
+def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID: Hashable](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],

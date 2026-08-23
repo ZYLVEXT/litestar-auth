@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast, override
 
@@ -95,7 +96,7 @@ StartupBackendTemplate = _plugin_config.StartupBackendTemplate
 TotpConfig = _plugin_config.TotpConfig
 
 
-class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
+class LitestarAuth[UP: UserProtocol[Any], ID: Hashable](InitPlugin, CLIPlugin):
     """Main auth orchestrator that wires middleware, controllers, and DI."""
 
     def __init__(self, config: LitestarAuthConfig[UP, ID]) -> None:

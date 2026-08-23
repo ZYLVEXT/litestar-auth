@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 import litestar_auth._plugin.validation.totp as _totp_validation
@@ -15,14 +16,14 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def validate_totp_domain_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_domain_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP feature-level configuration before deeper security checks."""
     validate_totp_user_model_protocol(config)
     validate_totp_stepup_policy_config(config)
     _totp_validation.validate_totp_config(config)
 
 
-def validate_totp_user_model_protocol[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_user_model_protocol[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Ensure TOTP-enabled configs use a user model that exposes TOTP fields.
 
     Raises:
@@ -48,7 +49,7 @@ def validate_totp_user_model_protocol[UP: UserProtocol[Any], ID](config: Litesta
     raise ConfigurationError(format_configuration_message(msg))
 
 
-def validate_totp_stepup_policy_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_stepup_policy_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate endpoint ids and modes for the TOTP step-up policy map.
 
     Raises:

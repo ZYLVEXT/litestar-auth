@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from authweave_core import (
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 _MAX_SESSION_TOKEN_BYTES = 1024
 
 
-class HumanSessionProvider[UP: UserProtocol[Any], ID]:
+class HumanSessionProvider[UP: UserProtocol[Any], ID: Hashable]:
     """Authenticate one opaque human session carried by a named cookie."""
 
     def __init__(  # ruff: ignore[too-many-arguments]

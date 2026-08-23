@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Hashable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -36,7 +37,7 @@ class _RefreshTokenRow(Protocol):
     user: object
 
 
-class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
+class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID: Hashable](
     _DatabaseTokenTimeMixin,
     _RefreshTokenMetadataMixin,
 ):
