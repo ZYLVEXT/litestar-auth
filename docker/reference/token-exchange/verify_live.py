@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real outbound RFC 8693 client against the HTTPS STS."""
-# ruff: file-ignore[async-function-with-timeout, hardcoded-password-string, magic-value-comparison, print, raise-vanilla-args, raw-string-in-exception]
+# ruff: file-ignore[async-function-with-timeout, magic-value-comparison, print, raise-vanilla-args, raw-string-in-exception]
 
 from __future__ import annotations
 

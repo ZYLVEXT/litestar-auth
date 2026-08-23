@@ -1,5 +1,5 @@
 """Independent HTTPS RFC 8693 security token service fixture."""
-# ruff: file-ignore[complex-structure, docstring-missing-exception, hardcoded-password-string, magic-value-comparison, raise-vanilla-args, raise-within-try, raw-string-in-exception, too-many-statements-in-try-clause]
+# ruff: file-ignore[complex-structure, docstring-missing-exception, magic-value-comparison, raise-vanilla-args, raise-within-try, raw-string-in-exception, too-many-statements-in-try-clause]
 
 from __future__ import annotations
 

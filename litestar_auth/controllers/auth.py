@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit._protocol import AccountLockoutKey, AccountLockoutStore
 
 INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
-INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # ruff: ignore[hardcoded-password-string]
+INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."
 TOTP_PENDING_AUDIENCE = _TOTP_PENDING_AUDIENCE
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS

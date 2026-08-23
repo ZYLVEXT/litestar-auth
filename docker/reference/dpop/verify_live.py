@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise an external test AS/JWKS and the live multi-worker DPoP RS."""
-# ruff: file-ignore[f-string-in-exception, hardcoded-password-string, print, raise-vanilla-args, raw-string-in-exception, too-many-arguments]
+# ruff: file-ignore[f-string-in-exception, print, raise-vanilla-args, raw-string-in-exception, too-many-arguments]
 
 from __future__ import annotations
 
