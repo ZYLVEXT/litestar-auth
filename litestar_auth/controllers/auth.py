@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import (
@@ -85,7 +86,7 @@ DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 
 
 @runtime_checkable
-class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](
+class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID: Hashable](
     UserManagerProtocol[UP, ID],
     AccountStateValidatorProvider[UP],
     Protocol,
@@ -112,7 +113,7 @@ _UserManagerDep = NamedDependency[AuthControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(slots=True)
-class _AuthControllerContext[UP: UserProtocol[Any], ID]:
+class _AuthControllerContext[UP: UserProtocol[Any], ID: Hashable]:
     """Runtime dependencies shared by generated auth controller handlers."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -137,7 +138,7 @@ class _AuthControllerContext[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class AuthControllerConfig[UP: UserProtocol[Any], ID]:
+class AuthControllerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :func:`create_auth_controller`."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -157,7 +158,7 @@ class AuthControllerConfig[UP: UserProtocol[Any], ID]:
     security: Sequence[SecurityRequirement] | None = None
 
 
-class AuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class AuthControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_auth_controller`."""
 
     backend: Required[AuthenticationBackend[UP, ID]]
@@ -178,7 +179,7 @@ class AuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
-class _AuthControllerSettings[UP: UserProtocol[Any], ID]:
+class _AuthControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Static settings used to assemble generated auth controller context."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -194,7 +195,7 @@ class _AuthControllerSettings[UP: UserProtocol[Any], ID]:
     account_lockout_key_secret: str | None = field(default=None, repr=False)
 
 
-def _make_auth_controller_context[UP: UserProtocol[Any], ID](
+def _make_auth_controller_context[UP: UserProtocol[Any], ID: Hashable](
     settings: _AuthControllerSettings[UP, ID],
 ) -> _AuthControllerContext[UP, ID]:
     """Assemble rate-limit handlers, optional refresh strategy, and TOTP settings.
@@ -266,7 +267,7 @@ def _resolve_account_lockout_store(
     return account_lockout_config.resolve_store()
 
 
-async def _handle_auth_logout[UP: UserProtocol[Any], ID](
+async def _handle_auth_logout[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _AuthControllerContext[UP, ID],
@@ -286,7 +287,7 @@ async def _handle_auth_logout[UP: UserProtocol[Any], ID](
     return response
 
 
-async def _handle_auth_login[UP: UserProtocol[Any], ID](
+async def _handle_auth_login[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     data: LoginCredentials,
     *,
@@ -345,7 +346,7 @@ class _RequestAccountLockout:
     key: AccountLockoutKey
 
 
-async def _authenticate_login_request[UP: UserProtocol[Any], ID](
+async def _authenticate_login_request[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     data: LoginCredentials,
     *,
@@ -394,7 +395,7 @@ async def _authenticate_login_request[UP: UserProtocol[Any], ID](
     return user
 
 
-async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
+async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     user: UP,
     *,
@@ -447,7 +448,7 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
     )
 
 
-async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
+async def _build_authenticated_login_response[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     user: UP,
     *,
@@ -481,7 +482,7 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
     )
 
 
-async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
+async def _handle_auth_refresh[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _AuthControllerContext[UP, ID],
@@ -532,7 +533,7 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
     return _attach_refresh_token(response, rotated_refresh_token, cookie_transport=cookie_transport)
 
 
-def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
+def _define_auth_controller_class_di[UP: UserProtocol[Any], ID: Hashable](
     ctx: _AuthControllerContext[UP, ID],
     *,
     security: Sequence[SecurityRequirement] | None = None,
@@ -584,7 +585,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
     return auth_cls
 
 
-def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
+def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID: Hashable](
     base_cls: type[Controller],
     ctx: _AuthControllerContext[UP, ID],
 ) -> type[Controller]:
@@ -624,19 +625,19 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
 
 
 @overload
-def create_auth_controller[UP: UserProtocol[Any], ID](
+def create_auth_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: AuthControllerConfig[UP, ID],
 ) -> type[Controller]: ...
 
 
 @overload
-def create_auth_controller[UP: UserProtocol[Any], ID](
+def create_auth_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[AuthControllerOptions[UP, ID]],
 ) -> type[Controller]: ...
 
 
-def create_auth_controller[UP: UserProtocol[Any], ID](
+def create_auth_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: AuthControllerConfig[UP, ID] | None = None,
     **options: Unpack[AuthControllerOptions[UP, ID]],

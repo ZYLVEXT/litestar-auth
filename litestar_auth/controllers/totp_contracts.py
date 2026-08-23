@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE as _CONFIG_TOTP_ENROLL_AUDIENCE
@@ -29,7 +30,7 @@ logger = logging.getLogger("litestar_auth.controllers.totp")
 
 
 @runtime_checkable
-class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorProvider[UP], Protocol):
+class TotpUserManagerProtocol[UP: UserProtocol[Any], ID: Hashable](AccountStateValidatorProvider[UP], Protocol):
     """User-manager behavior required by the TOTP controller."""
 
     backends: tuple[object, ...]

@@ -26,6 +26,11 @@ from litestar.connection import ASGIConnection
 from litestar.datastructures.state import State
 from litestar.exceptions import ClientException, InternalServerException, NotAuthorizedException
 
+from litestar_auth._current_organization import (
+    CurrentOrganizationContext,
+    read_scope_current_organization_context,
+    set_scope_current_organization_context,
+)
 from litestar_auth.authentication.middleware import (
     AUTHENTICATION_PROVIDERS_KEY,
     LitestarAuthMiddleware,
@@ -39,6 +44,8 @@ from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from litestar.middleware.authentication import AuthenticationResult
 
 pytestmark = pytest.mark.unit
 SERVICE_UNAVAILABLE = 503
@@ -162,6 +169,7 @@ def _middleware(  # ruff: ignore[too-many-arguments]
     correlation_id_factory: object | None = None,
     external_request_target_factory: object | None = None,
     observer: object | None = None,
+    authentication_result_hook: object | None = None,
 ) -> LitestarAuthMiddleware[ExampleUser, object]:
     """Build middleware with one request-scoped provider.
 
@@ -183,6 +191,7 @@ def _middleware(  # ruff: ignore[too-many-arguments]
         observer=cast("Any", observer),
         organization_store_factory=cast("Any", organization_store_factory),
         tenant_resolver=cast("Any", tenant_resolver),
+        authentication_result_hook=cast("Any", authentication_result_hook),
     )
 
 
@@ -488,7 +497,7 @@ async def test_human_organization_postprocessing_stops_on_unverified_state(
         _Provider(Authenticated(_context())),
         loader=lambda _context: user,
         organization_store_factory=lambda _session: store,
-        tenant_resolver=lambda _connection: "tenant",
+        tenant_resolver=lambda connection: "tenant",  # ruff: ignore[unused-lambda-argument]
     )
     connection = _connection()
 
@@ -514,3 +523,153 @@ async def test_human_organization_postprocessing_publishes_verified_membership()
     await middleware.authenticate_request(connection)
 
     assert store.membership_args == ("org", user.id)
+
+
+async def test_borrowed_async_session_is_shared_across_auth_hook_organization_and_handler() -> None:
+    """The authoritative provider supplies one borrowed session across the full request path."""
+    events: list[str] = []
+    session = SimpleNamespace(commit_calls=0, rollback_calls=0, close_calls=0)
+    user = ExampleUser(id=uuid4())
+    context = _context()
+    provider = _Provider(Authenticated(context))
+    organization = SimpleNamespace(id="org")
+    membership = SimpleNamespace(roles=["member"])
+    store = _Store(organization, membership)
+    binding = LitestarProviderBinding(provider=cast("Any", provider), load_principal=lambda _context: user)
+
+    async def request_session_provider(_state: State, scope: object) -> object:
+        await anyio.lowlevel.checkpoint()
+        events.append("session")
+        cast("dict[str, object]", scope).setdefault("borrowed_session", session)
+        return cast("dict[str, object]", scope)["borrowed_session"]
+
+    def provider_bindings_factory(bound_session: object) -> tuple[LitestarProviderBinding]:
+        assert bound_session is session
+        events.append("auth")
+        return (binding,)
+
+    async def authentication_result_hook(
+        connection: ASGIConnection[Any, Any, Any, Any],
+        bound_session: object,
+        result: AuthenticationResult,
+    ) -> None:
+        await anyio.lowlevel.checkpoint()
+        assert bound_session is session
+        assert result.user is user
+        assert read_scope_current_organization_context(connection) is None
+        events.append("hook")
+
+    def organization_store_factory(bound_session: object) -> _Store:
+        assert bound_session is session
+        events.append("organization")
+        return store
+
+    middleware = LitestarAuthMiddleware[ExampleUser, object](
+        cast("Any", _app),
+        get_request_session=cast("Any", request_session_provider),
+        provider_bindings_factory=cast("Any", provider_bindings_factory),
+        default_policy=RouteProviderPolicy((provider.name,)),
+        authentication_result_hook=cast("Any", authentication_result_hook),
+        organization_store_factory=cast("Any", organization_store_factory),
+        tenant_resolver=lambda connection: "tenant",  # ruff: ignore[unused-lambda-argument]
+    )
+    connection = _connection()
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=object(), membership=SimpleNamespace(roles=[])),
+    )
+
+    result = await middleware.authenticate_request(connection)
+    handler_session = await request_session_provider(connection.app.state, connection.scope)
+
+    assert result.user is user
+    assert handler_session is session
+    assert read_scope_current_organization_context(connection) is not None
+    assert events == ["session", "auth", "hook", "organization", "session"]
+    assert (session.commit_calls, session.rollback_calls, session.close_calls) == (0, 0, 0)
+
+
+async def test_authentication_result_hook_runs_once_for_anonymous_result() -> None:
+    """Anonymous requests run the synchronous result hook once after stale organization cleanup."""
+    calls: list[AuthenticationResult] = []
+    middleware = _middleware(
+        _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE),
+        loader=lambda _context: object(),
+        authentication_result_hook=lambda connection, _session, result: (
+            calls.append(result) if read_scope_current_organization_context(connection) is None else None
+        ),
+    )
+    connection = _connection()
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=object(), membership=SimpleNamespace(roles=[])),
+    )
+
+    result = await middleware.authenticate_request(connection)
+
+    assert calls == [result]
+    assert result.user is None
+
+
+async def test_authentication_result_hook_failure_fails_closed() -> None:
+    """Authentication never reaches downstream handling when the result hook fails."""
+
+    async def fail_hook(*_args: object) -> None:
+        await anyio.lowlevel.checkpoint()
+        msg = "request context unavailable"
+        raise RuntimeError(msg)
+
+    middleware = _middleware(
+        _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE),
+        loader=lambda _context: object(),
+        authentication_result_hook=fail_hook,
+    )
+
+    with pytest.raises(RuntimeError, match="request context unavailable"):
+        await middleware.authenticate_request(_connection())
+
+
+async def test_authentication_result_hook_cannot_replace_result() -> None:
+    """A hook that violates its None-return contract fails closed."""
+    middleware = _middleware(
+        _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE),
+        loader=lambda _context: object(),
+        authentication_result_hook=lambda *_args: object(),
+    )
+
+    with pytest.raises(InternalServerException, match="hook returned an invalid result"):
+        await middleware.authenticate_request(_connection())
+
+
+async def test_authentication_result_hook_cannot_turn_anonymous_result_into_authenticated() -> None:
+    """A hook cannot mutate an anonymous result into a principal-bearing result."""
+
+    def mutate_result(_connection: object, _session: object, result: AuthenticationResult) -> None:
+        result.user = object()
+        result.auth = _context()
+
+    middleware = _middleware(
+        _Provider(NotApplicable(), match=CredentialMatch.NOT_APPLICABLE),
+        loader=lambda _context: object(),
+        authentication_result_hook=mutate_result,
+    )
+
+    with pytest.raises(InternalServerException, match="hook mutated the authentication result"):
+        await middleware.authenticate_request(_connection())
+
+
+@pytest.mark.parametrize("field_name", ["user", "auth"])
+async def test_authentication_result_hook_cannot_replace_authenticated_result_fields(field_name: str) -> None:
+    """A hook cannot replace either projected field of an authenticated result."""
+
+    def mutate_result(_connection: object, _session: object, result: AuthenticationResult) -> None:
+        setattr(result, field_name, object())
+
+    middleware = _middleware(
+        _Provider(Authenticated(_context())),
+        loader=lambda _context: ExampleUser(id=uuid4()),
+        authentication_result_hook=mutate_result,
+    )
+
+    with pytest.raises(InternalServerException, match="hook mutated the authentication result"):
+        await middleware.authenticate_request(_connection())

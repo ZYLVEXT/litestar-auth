@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -33,7 +34,7 @@ class OrganizationData:
 
 
 @dataclass(frozen=True, slots=True)
-class MembershipData[ID]:
+class MembershipData[ID: Hashable]:
     """Persistence fields required to create an organization membership row."""
 
     organization_id: ID
@@ -42,7 +43,7 @@ class MembershipData[ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class OrganizationInvitationData[ID]:
+class OrganizationInvitationData[ID: Hashable]:
     """Persistence fields required to create an organization invitation row."""
 
     organization_id: ID
@@ -53,7 +54,7 @@ class OrganizationInvitationData[ID]:
 
 
 @runtime_checkable
-class BaseUserStore[UP: UserProtocol[Any], ID](Protocol):
+class BaseUserStore[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Structural CRUD interface for user persistence backends."""
 
     async def get(self, user_id: ID) -> UP | None:
@@ -86,7 +87,7 @@ class BaseUserStore[UP: UserProtocol[Any], ID](Protocol):
 
 
 @runtime_checkable
-class BaseOAuthAccountStore[UP: UserProtocol[Any], ID](Protocol):
+class BaseOAuthAccountStore[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Structural contract for linked OAuth-account persistence backends."""
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
@@ -102,7 +103,7 @@ class BaseOAuthAccountStore[UP: UserProtocol[Any], ID](Protocol):
 
 
 @runtime_checkable
-class BaseOrganizationStore[ORG, MEMBERSHIP, INVITATION, ID](Protocol):
+class BaseOrganizationStore[ORG, MEMBERSHIP, INVITATION, ID: Hashable](Protocol):
     """Structural CRUD contract for organization persistence backends."""
 
     async def create_organization(self, data: OrganizationData) -> ORG:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, cast
 
@@ -57,7 +58,7 @@ class _DatabaseTokenStrategySettings:
 
 
 @dataclass(slots=True)
-class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
+class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID: Hashable]:
     """Fail-closed startup-only DB-token strategy metadata holder."""
 
     settings: _DatabaseTokenStrategySettings
@@ -156,7 +157,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         return self._raise_startup_only_runtime_error()
 
 
-def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
+def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID: Hashable](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     unsafe_testing: bool = False,
@@ -188,7 +189,7 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_database_token_backend[UP: UserProtocol[Any], ID](
+def _build_database_token_backend[UP: UserProtocol[Any], ID: Hashable](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     session: AsyncSession | None = None,
@@ -233,7 +234,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     )
 
 
-def build_database_token_backend[UP: UserProtocol[Any], ID](
+def build_database_token_backend[UP: UserProtocol[Any], ID: Hashable](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     session: AsyncSession,
@@ -254,7 +255,7 @@ def build_database_token_backend[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_database_token_backend_template[UP: UserProtocol[Any], ID](
+def _build_database_token_backend_template[UP: UserProtocol[Any], ID: Hashable](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     unsafe_testing: bool = False,

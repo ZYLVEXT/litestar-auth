@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Unpack, cast, overload
 
 from litestar_auth._concurrency import get_cached_dummy_hash as _get_cached_dummy_hash
@@ -78,7 +79,7 @@ logger = logging.getLogger(__name__)
 _login_identifier_digest = login_identifier_digest
 
 
-class BaseUserManager[UP: UserProtocol[Any], ID](
+class BaseUserManager[UP: UserProtocol[Any], ID: Hashable](
     UserManagerHooks[UP],
     _UserLifecycleManagerProtocol[UP, ID],
     _AccountTokensManagerProtocol[UP, ID],

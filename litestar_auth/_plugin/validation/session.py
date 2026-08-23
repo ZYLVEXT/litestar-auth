@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.database_token import (
@@ -16,25 +17,27 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
+def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> None:
-    """Ensure either a session factory or an external ``db_session`` DI binding exists.
+    """Ensure an HTTP request-session source is configured.
 
     Raises:
-        ValueError: If neither ``session_maker`` nor external session DI is configured.
+        ValueError: If no request-session source is configured.
     """
     has_session_maker = config.session_maker is not None
     has_external_db_session = config.db_session_dependency_provided_externally
-    if not has_session_maker and not has_external_db_session:
+    has_request_session_provider = config.request_session_provider is not None
+    if not has_session_maker and not has_external_db_session and not has_request_session_provider:
         msg = (
-            "LitestarAuth requires session_maker or db_session_dependency_provided_externally=True "
+            "LitestarAuth requires session_maker or db_session_dependency_provided_externally=True, "
+            "or request_session_provider "
             f"(inject AsyncSession under dependency key {config.db_session_dependency_key!r})."
         )
         raise ValueError(msg)
 
 
-def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_core_session_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate constructor-time runtime-mode, backend, and session prerequisites.
 
     Raises:

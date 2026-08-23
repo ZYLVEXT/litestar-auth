@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
@@ -56,7 +56,7 @@ TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE = ResponseSpec(
 )
 
 
-class PasswordStepUpUserProtocol[ID](UserProtocol[ID], Protocol):
+class PasswordStepUpUserProtocol[ID: Hashable](UserProtocol[ID], Protocol):
     """User fields required by current-password step-up checks."""
 
     email: str

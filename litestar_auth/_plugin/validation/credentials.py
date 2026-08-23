@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.session_binding import _AccountStateValidator as PluginAccountStateValidator
 
 
-def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_credential_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate credential and user-manager contracts needed during construction.
 
     Raises:
@@ -40,7 +41,9 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
         raise ValueError(msg)
 
 
-def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_user_manager_security_config[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Validate manager secret wiring and the supported production secret posture.
 
     Raises:
@@ -90,11 +93,13 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
     )
 
 
-def validate_password_validator_config[UP: UserProtocol[Any], ID](_config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_password_validator_config[UP: UserProtocol[Any], ID: Hashable](
+    _config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Validate password-validator wiring for the configured user-manager builder."""
 
 
-def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID](
+def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> None:
     """Fail fast when ``user_manager_class`` is incompatible with the default builder.

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, cast
 
 from advanced_alchemy.extensions.litestar.plugins.init.config.common import SESSION_SCOPE_KEY
-from litestar.datastructures.state import State  # ruff: ignore[typing-only-third-party-import]
-from litestar.types import Scope  # ruff: ignore[typing-only-third-party-import]
-from sqlalchemy.ext.asyncio import AsyncSession  # ruff: ignore[typing-only-third-party-import]
+from litestar.datastructures.state import State
+from litestar.types import Scope
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _AA_SCOPE_NAMESPACE: str = "_aa_connection_state"
+_AUTH_REQUEST_SCOPE_NAMESPACE = "_litestar_auth_request_state"
+_BORROWED_SESSION_KEY = "borrowed_session"
 
 
 class SessionFactory(Protocol):
@@ -17,6 +21,41 @@ class SessionFactory(Protocol):
 
     def __call__(self) -> AsyncSession:
         """Return the request-local AsyncSession instance."""
+
+
+type _RequestSessionProvider = Callable[[State, Scope], AsyncSession | Awaitable[AsyncSession]]
+type _ResolvedRequestSessionProvider = Callable[[State, Scope], Awaitable[AsyncSession]]
+
+
+def memoize_request_session_provider(provider: _RequestSessionProvider) -> _ResolvedRequestSessionProvider:
+    """Wrap an application provider with request-scope identity memoization.
+
+    The wrapper retains only a request-local reference. Session transaction and
+    close ownership remain with the application provider's integration.
+
+    Returns:
+        An async provider that resolves and memoizes one session identity per request scope.
+    """
+
+    async def provide_request_session(state: State, scope: Scope) -> AsyncSession:
+        raw_scope = cast("dict[str, Any]", scope)
+        request_state = cast(
+            "dict[str, Any]",
+            raw_scope.setdefault(_AUTH_REQUEST_SCOPE_NAMESPACE, {}),
+        )
+        cached_session = request_state.get(_BORROWED_SESSION_KEY)
+        if cached_session is not None:
+            return cast("AsyncSession", cached_session)
+
+        session_or_awaitable = provider(state, scope)
+        session = cast(
+            "AsyncSession",
+            await session_or_awaitable if inspect.isawaitable(session_or_awaitable) else session_or_awaitable,
+        )
+        request_state[_BORROWED_SESSION_KEY] = session
+        return session
+
+    return provide_request_session
 
 
 def _get_aa_namespace(scope: Scope) -> dict[str, Any]:
@@ -29,7 +68,7 @@ def _get_aa_namespace(scope: Scope) -> dict[str, Any]:
 def get_or_create_scoped_session(
     _state: State,
     scope: Scope,
-    session_maker: SessionFactory,
+    session_maker: SessionFactory | None,
     *,
     session_scope_key: str = SESSION_SCOPE_KEY,
 ) -> AsyncSession:
@@ -51,10 +90,16 @@ def get_or_create_scoped_session(
 
     Returns:
         The shared ``AsyncSession`` for this request.
+
+    Raises:
+        RuntimeError: If an external session was declared but is absent from request scope.
     """
     namespace = _get_aa_namespace(scope)
     session: AsyncSession | None = namespace.get(session_scope_key)
     if session is None:
+        if session_maker is None:
+            msg = "The externally provided request session is unavailable in the configured scope."
+            raise RuntimeError(msg)
         session = session_maker()
         namespace[session_scope_key] = session
     return session

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack
 
@@ -92,7 +93,7 @@ __all__ = (
 )
 
 
-class TotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class TotpControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_totp_controller`."""
 
     backend: Required[AuthenticationBackend[UP, ID]]
@@ -122,7 +123,7 @@ class TotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @dataclass(slots=True)
-class _TotpControllerFactorySettings[UP: UserProtocol[Any], ID]:
+class _TotpControllerFactorySettings[UP: UserProtocol[Any], ID: Hashable]:
     """Raw public factory inputs before validation and default resolution."""
 
     backend: AuthenticationBackend[UP, ID]
@@ -162,7 +163,7 @@ def _build_totp_rate_limit(rate_limit_config: AuthRateLimitConfig | None) -> Tot
     )
 
 
-def _validate_totp_factory_settings[UP: UserProtocol[Any], ID](
+def _validate_totp_factory_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _TotpControllerFactorySettings[UP, ID],
 ) -> None:
     """Validate public TOTP controller factory settings."""
@@ -182,7 +183,7 @@ def _validate_totp_factory_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def _create_totp_context_settings[UP: UserProtocol[Any], ID](
+def _create_totp_context_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _TotpControllerFactorySettings[UP, ID],
     *,
     totp_rate_limit: TotpRateLimitOrchestrator,
@@ -238,7 +239,7 @@ def _create_totp_context_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_totp_controller_context_from_factory_settings[UP: UserProtocol[Any], ID](
+def _build_totp_controller_context_from_factory_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _TotpControllerFactorySettings[UP, ID],
     *,
     totp_rate_limit: TotpRateLimitOrchestrator,
@@ -270,7 +271,7 @@ def _create_totp_verify_before_request(
     return totp_verify_before_request
 
 
-def _finalize_totp_controller[UP: UserProtocol[Any], ID](
+def _finalize_totp_controller[UP: UserProtocol[Any], ID: Hashable](
     settings: _TotpControllerFactorySettings[UP, ID],
     *,
     path: str,
@@ -295,7 +296,7 @@ def _finalize_totp_controller[UP: UserProtocol[Any], ID](
     return _mark_litestar_auth_route_handler(totp_controller_cls)
 
 
-def _resolve_totp_controller_factory_settings[UP: UserProtocol[Any], ID](
+def _resolve_totp_controller_factory_settings[UP: UserProtocol[Any], ID: Hashable](
     options: TotpControllerOptions[UP, ID],
 ) -> tuple[_TotpControllerFactorySettings[UP, ID], str, Sequence[SecurityRequirement] | None]:
     """Resolve public TOTP controller options into internal factory settings.
@@ -335,7 +336,7 @@ def _resolve_totp_controller_factory_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def create_totp_controller[UP: UserProtocol[Any], ID](
+def create_totp_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[TotpControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Return a controller with TOTP management and login-completion endpoints.

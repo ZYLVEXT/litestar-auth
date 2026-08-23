@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -149,7 +150,7 @@ class ExtensionDependencyKeys:
 
 
 @dataclass(slots=True)
-class ExtensionValidationContext[UP: UserProtocol[Any], ID]:
+class ExtensionValidationContext[UP: UserProtocol[Any], ID: Hashable]:
     """Concrete read-only context passed to extension validation hooks."""
 
     config: LitestarAuthConfig[UP, ID]
@@ -280,7 +281,7 @@ class ExtensionValidationContext[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(slots=True)
-class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidationContext[UP, ID]):
+class ExtensionRegistrationContext[UP: UserProtocol[Any], ID: Hashable](ExtensionValidationContext[UP, ID]):
     """Concrete context passed to extension registration hooks."""
 
     app_config: AppConfig
@@ -487,7 +488,7 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
         return self.state_for_extension(extension_name).get(key, default)
 
 
-def build_extension_validation_context[UP: UserProtocol[Any], ID](
+def build_extension_validation_context[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> ExtensionValidationContext[UP, ID]:
     """Build the concrete validation context for extension hooks.
@@ -498,7 +499,7 @@ def build_extension_validation_context[UP: UserProtocol[Any], ID](
     return ExtensionValidationContext.from_config(config)
 
 
-def build_extension_registration_context[UP: UserProtocol[Any], ID](
+def build_extension_registration_context[UP: UserProtocol[Any], ID: Hashable](
     *,
     app_config: AppConfig,
     config: LitestarAuthConfig[UP, ID],

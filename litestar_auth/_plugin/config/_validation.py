@@ -132,6 +132,7 @@ class _ConfigValidationMixin:
         self._validate_totp_stepup_configuration()
         self._validate_login_identifier()
         self._validate_db_session_dependency_key()
+        self._validate_request_session_hooks()
         self._validate_permission_configuration()
 
     def _validate_user_manager_configuration(self: Any) -> None:
@@ -227,6 +228,22 @@ class _ConfigValidationMixin:
             _valid_python_identifier_validator(self.db_session_dependency_key)
         except ValueError as exc:
             raise ValueError(*exc.args) from None
+
+    def _validate_request_session_hooks(self: Any) -> None:
+        """Reject ambiguous or non-callable request-session integration hooks.
+
+        Raises:
+            ConfigurationError: If request-session integration fields conflict or are not callable.
+        """
+        if self.request_session_provider is not None and self.db_session_dependency_provided_externally:
+            msg = "request_session_provider and db_session_dependency_provided_externally=True are mutually exclusive."
+            raise ConfigurationError(msg)
+        if self.request_session_provider is not None and not callable(self.request_session_provider):
+            msg = "request_session_provider must be callable when provided."
+            raise ConfigurationError(msg)
+        if self.authentication_result_hook is not None and not callable(self.authentication_result_hook):
+            msg = "authentication_result_hook must be callable when provided."
+            raise ConfigurationError(msg)
 
     def _validate_permission_configuration(self: Any) -> None:
         """Validate permission resolver configuration at startup.

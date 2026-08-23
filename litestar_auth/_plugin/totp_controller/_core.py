@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, resolve_backend_inventory
@@ -27,7 +28,7 @@ __all__ = (
 )
 
 
-def _resolve_request_backend[UP: UserProtocol[Any], ID](
+def _resolve_request_backend[UP: UserProtocol[Any], ID: Hashable](
     backend_inventory: StartupBackendInventory[UP, ID],
     request_backends: object,
     *,
@@ -41,7 +42,7 @@ def _resolve_request_backend[UP: UserProtocol[Any], ID](
     return backend_inventory.resolve_request_backend(request_backends, backend_index=backend_index)
 
 
-def build_totp_controller[UP: UserProtocol[Any], ID](
+def build_totp_controller[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     backend_inventory: StartupBackendInventory[UP, ID] | None = None,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -36,6 +36,7 @@ from litestar_auth._plugin.scoped_session import (
     SESSION_SCOPE_KEY,
     SessionFactory,
     get_or_create_scoped_session,
+    memoize_request_session_provider,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.types import UserProtocol
@@ -64,6 +65,12 @@ _NON_OVERRIDABLE_EXTENSION_DEPENDENCY_KEYS = frozenset(
         DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     ),
 )
+
+
+_REQUEST_INDEPENDENT_DEPENDENCY_KEYS = frozenset({
+    DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +108,7 @@ def _make_db_session_provide(
     return provide_db_session
 
 
-def _resolve_session_scope_key[UP: UserProtocol[Any], ID](
+def _resolve_session_scope_key[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> str:
     return config.session_scope_key if config.session_scope_key is not None else SESSION_SCOPE_KEY
@@ -173,7 +180,7 @@ def _make_user_manager_dependency_provider[TManager](
     return cast("Callable[..., AsyncGenerator[TManager, None]]", _provide_user_manager)
 
 
-def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
+def _make_backends_dependency_provider[UP: UserProtocol[Any], ID: Hashable](
     build_backends: Callable[[AsyncSession], Sequence[AuthenticationBackend[UP, ID]]],
     db_session_key: str,
 ) -> Callable[..., Sequence[AuthenticationBackend[UP, ID]]]:
@@ -253,32 +260,30 @@ def provide_authentication_context(
     return request.auth if isinstance(request.auth, AuthenticationContext) else None
 
 
-def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
+def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
-    if config.db_session_dependency_provided_externally:
+    if config.request_session_provider is not None or config.db_session_dependency_provided_externally:
         return None
     return config.session_maker
 
 
-def _wrap_registered_dependency[UP: UserProtocol[Any], ID](
-    key: str,
-    provider: object,
-    *,
-    config: LitestarAuthConfig[UP, ID],
-) -> Provide:
-    if key == config.db_session_dependency_key and _resolve_builtin_db_session_provider_factory(config) is not None:
-        return Provide(
-            cast("DependencyProvider", provider),
-            sync_to_thread=False,
-            use_cache=False,
-        )
-    if key == DEFAULT_BACKENDS_DEPENDENCY_KEY:
-        return _to_dependency_provider(provider, use_cache=False)
-    return _to_dependency_provider(provider)
+def _wrap_registered_dependency(key: str, provider: object) -> Provide:
+    """Register one dependency, caching only providers that cannot vary per request.
+
+    Litestar stores a ``use_cache=True`` value on the ``Provide`` instance, which lives for the
+    application's lifetime, so a cached request-scoped provider would serve the first request's
+    value to every later request.
+
+    Returns:
+        The dependency provider for ``key``.
+    """
+    if key in _REQUEST_INDEPENDENT_DEPENDENCY_KEYS:
+        return _to_dependency_provider(provider)
+    return _to_dependency_provider(provider, use_cache=False)
 
 
-def register_dependencies[UP: UserProtocol[Any], ID](
+def register_dependencies[UP: UserProtocol[Any], ID: Hashable](
     app_config: AppConfig,
     config: LitestarAuthConfig[UP, ID],
     *,
@@ -308,14 +313,12 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         app_config.dependencies[registration.key] = _wrap_registered_dependency(
             registration.key,
             registration.provider,
-            config=config,
         )
 
     for contribution in extension_dependencies:
         app_config.dependencies[contribution.key] = _wrap_registered_dependency(
             contribution.key,
             contribution.provider,
-            config=config,
         )
 
     session_maker = _resolve_builtin_db_session_provider_factory(config)
@@ -370,7 +373,7 @@ def _validate_extension_dependency_contributions(
             raise ValueError(msg)
 
 
-def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
+def _reserved_dependency_keys[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     dependency_keys: Sequence[str],
@@ -392,7 +395,7 @@ def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
     )
 
 
-def _iter_dependency_registrations[UP: UserProtocol[Any], ID](
+def _iter_dependency_registrations[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     providers: DependencyProviders,
@@ -406,7 +409,7 @@ def _iter_dependency_registrations[UP: UserProtocol[Any], ID](
     return tuple(registrations)
 
 
-def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
+def _resolve_dependency_registration[UP: UserProtocol[Any], ID: Hashable](
     provider_name: str,
     *,
     config: LitestarAuthConfig[UP, ID],
@@ -438,16 +441,7 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
     if static_registration is not None:
         return static_registration
     if provider_name == "db_session":
-        session_maker = _resolve_builtin_db_session_provider_factory(config)
-        if session_maker is None:
-            return None
-        return _DependencyRegistration(
-            config.db_session_dependency_key,
-            _make_db_session_provide(
-                session_maker,
-                session_scope_key=_resolve_session_scope_key(config),
-            ),
-        )
+        return _resolve_db_session_registration(config)
     if provider_name == "oauth_associate_user_manager":
         oauth_contract = _build_oauth_route_registration_contract(
             auth_path=config.auth_path,
@@ -465,7 +459,27 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
     raise RuntimeError(msg)
 
 
-def _resolve_organization_store_registration[UP: UserProtocol[Any], ID](
+def _resolve_db_session_registration[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> _DependencyRegistration | None:
+    if config.request_session_provider is not None:
+        return _DependencyRegistration(
+            config.db_session_dependency_key,
+            memoize_request_session_provider(config.request_session_provider),
+        )
+    session_maker = _resolve_builtin_db_session_provider_factory(config)
+    if session_maker is None:
+        return None
+    return _DependencyRegistration(
+        config.db_session_dependency_key,
+        _make_db_session_provide(
+            session_maker,
+            session_scope_key=_resolve_session_scope_key(config),
+        ),
+    )
+
+
+def _resolve_organization_store_registration[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> _DependencyRegistration | None:
     organization_config = config.organization_config

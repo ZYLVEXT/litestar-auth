@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from litestar_auth.types import ID, UserProtocol
+from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -38,7 +39,7 @@ class HumanSessionAuthenticated[UP: UserProtocol[Any]]:
 
 
 @runtime_checkable
-class HumanSessionStrategy[UP: UserProtocol[Any], ID](Protocol):
+class HumanSessionStrategy[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Typed authentication contract for supported server-side sessions."""
 
     async def authenticate_token(
@@ -49,14 +50,14 @@ class HumanSessionStrategy[UP: UserProtocol[Any], ID](Protocol):
         """Resolve one presented opaque token without collapsing failure states."""
 
 
-class UserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
+class UserManagerProtocol[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Protocol for user manager lookups used by token strategies."""
 
     async def get(self, user_id: ID) -> UP | None:
         """Return the user for the given identifier."""
 
 
-class Strategy[UP: UserProtocol[Any], ID](ABC):
+class Strategy[UP: UserProtocol[Any], ID: Hashable](ABC):
     """Abstract base class for server-side session token lifecycle."""
 
     @abstractmethod
@@ -69,7 +70,7 @@ class Strategy[UP: UserProtocol[Any], ID](ABC):
 
 
 @runtime_checkable
-class SessionBindable[UP: UserProtocol[Any], ID, S](Protocol):
+class SessionBindable[UP: UserProtocol[Any], ID: Hashable, S](Protocol):
     """Protocol for strategies that can be rebound to a request-local session."""
 
     def with_session(self, session: S) -> StrategyProtocol[UP, ID]:
@@ -77,7 +78,7 @@ class SessionBindable[UP: UserProtocol[Any], ID, S](Protocol):
 
 
 @runtime_checkable
-class RefreshableStrategy[UP: UserProtocol[Any], ID](Protocol):
+class RefreshableStrategy[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Protocol for strategies that support refresh-token rotation.
 
     Note:

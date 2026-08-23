@@ -63,6 +63,7 @@ from tests.conftest import project_version_from_pyproject
 AuthExtension = litestar_auth.AuthExtension
 AuthExtensionRegistrationContext = litestar_auth.AuthExtensionRegistrationContext
 AuthExtensionValidationContext = litestar_auth.AuthExtensionValidationContext
+AuthenticationResultHook = litestar_auth.AuthenticationResultHook
 BaseUserManager = litestar_auth.BaseUserManager
 BaseUserManagerConfig = litestar_auth.BaseUserManagerConfig
 CookieTransport = litestar_auth.CookieTransport
@@ -79,6 +80,7 @@ OAuthConfig = litestar_auth.OAuthConfig
 OAuthProviderConfig = litestar_auth.OAuthProviderConfig
 OrganizationConfig = litestar_auth.OrganizationConfig
 RoleCapableUserProtocol = litestar_auth.RoleCapableUserProtocol
+RequestSessionProvider = litestar_auth.RequestSessionProvider
 TotpConfig = litestar_auth.TotpConfig
 TotpUserProtocol = litestar_auth.TotpUserProtocol
 UserManagerSecurity = litestar_auth.UserManagerSecurity
@@ -476,6 +478,8 @@ def test_root_package_reexports_public_api() -> None:
     assert __version__ == project_version_from_pyproject()
     assert LitestarAuth is not None
     assert LitestarAuthConfig is not None
+    assert AuthenticationResultHook is not None
+    assert RequestSessionProvider is not None
     assert UserProtocol is not None
     assert UserProtocolStrict is not None
     assert GuardedUserProtocol is not None

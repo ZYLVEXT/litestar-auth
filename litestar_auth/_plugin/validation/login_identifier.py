@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.validation._core import format_configuration_message
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def validate_user_model_login_identifier_fields[UP: UserProtocol[Any], ID](
+def validate_user_model_login_identifier_fields[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> None:
     """Ensure ``user_model`` defines the attribute implied by ``login_identifier``.

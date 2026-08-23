@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
+class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :func:`create_provider_oauth_controller`."""
 
     provider_name: str
@@ -49,7 +50,7 @@ class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_redirect_dns_strict: bool = True
 
 
-class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :func:`create_provider_oauth_controller`."""
 
     provider_name: Required[str]
@@ -71,7 +72,7 @@ class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @overload
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # ruff: ignore[overload-with-docstring]
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID: Hashable](  # ruff: ignore[overload-with-docstring]
     *,
     config: ProviderOAuthControllerConfig[UP, ID],
 ) -> type[Controller]:
@@ -79,13 +80,13 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # ruff: ignore
 
 
 @overload
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # ruff: ignore[overload-with-docstring]
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID: Hashable](  # ruff: ignore[overload-with-docstring]
     **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Build a provider OAuth controller from keyword settings."""
 
 
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID: Hashable](
     *,
     config: ProviderOAuthControllerConfig[UP, ID] | None = None,
     **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],

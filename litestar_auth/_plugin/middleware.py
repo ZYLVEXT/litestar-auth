@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar.config.csrf import CSRFConfig
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.backend import AuthenticationBackend
 
 
-def get_cookie_transports[UP: UserProtocol[Any], ID](
+def get_cookie_transports[UP: UserProtocol[Any], ID: Hashable](
     backends: Sequence[StartupBackendTemplate[UP, ID] | AuthenticationBackend[UP, ID]],
 ) -> list[CookieTransport]:
     """Return configured cookie transports from the backend list."""
@@ -28,7 +29,7 @@ def get_cookie_transports[UP: UserProtocol[Any], ID](
     ]
 
 
-def build_csrf_config[UP: UserProtocol[Any], ID](
+def build_csrf_config[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     cookie_transports: Sequence[CookieTransport],
 ) -> CSRFConfig:

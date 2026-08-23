@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -53,7 +53,7 @@ _TotpUserManagerDep = NamedDependency[TotpUserManagerProtocol[Any, Any]]
 _TotpBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 
 
-def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID](
+def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     request_backend: AuthenticationBackend[UP, ID],
 ) -> _TotpControllerContext[UP, ID]:
@@ -76,7 +76,7 @@ def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID](
     )
 
 
-def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -103,7 +103,7 @@ def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
     return confirm_enable
 
 
-def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID: Hashable](
     *,
     factory_kit: ControllerFactoryKit[UP, ID],
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], object] | None,
@@ -132,7 +132,7 @@ def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID](
     return verify
 
 
-def _create_plugin_totp_disable_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_disable_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -159,7 +159,7 @@ def _create_plugin_totp_disable_handler[UP: UserProtocol[Any], ID](
     return disable
 
 
-def _create_plugin_totp_enable_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_enable_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> RequestBodyRouteHandler:
@@ -186,7 +186,7 @@ def _create_plugin_totp_enable_handler[UP: UserProtocol[Any], ID](
     return cast("RequestBodyRouteHandler", enable)
 
 
-def _create_plugin_totp_regenerate_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_regenerate_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> RequestBodyRouteHandler:
@@ -213,7 +213,7 @@ def _create_plugin_totp_regenerate_handler[UP: UserProtocol[Any], ID](
     return cast("RequestBodyRouteHandler", regenerate_recovery_codes)
 
 
-def _create_plugin_totp_enable_no_body_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_enable_no_body_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -238,7 +238,7 @@ def _create_plugin_totp_enable_no_body_handler[UP: UserProtocol[Any], ID](
     return enable
 
 
-def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -263,7 +263,7 @@ def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID](
     return regenerate_recovery_codes
 
 
-def _plugin_totp_controller_attrs[UP: UserProtocol[Any], ID](
+def _plugin_totp_controller_attrs[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     *,
     factory_kit: ControllerFactoryKit[UP, ID],
@@ -297,7 +297,7 @@ def _plugin_totp_controller_attrs[UP: UserProtocol[Any], ID](
     }
 
 
-def define_plugin_totp_controller_class[UP: UserProtocol[Any], ID](
+def define_plugin_totp_controller_class[UP: UserProtocol[Any], ID: Hashable](
     startup_ctx: _TotpControllerContext[UP, ID],
     *,
     backend_inventory: StartupBackendInventory[UP, ID],

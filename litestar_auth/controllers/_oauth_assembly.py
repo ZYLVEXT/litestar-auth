@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import keyword
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthUserManagerBinding[UP: UserProtocol[Any], ID]:
+class _OAuthUserManagerBinding[UP: UserProtocol[Any], ID: Hashable]:
     """Manager binding used by generated OAuth callback handlers."""
 
     user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None
@@ -45,7 +46,7 @@ class _OAuthUserManagerBinding[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthControllerAssembly[UP: UserProtocol[Any], ID]:
+class _OAuthControllerAssembly[UP: UserProtocol[Any], ID: Hashable]:
     """Shared provider-scoped controller assembly details."""
 
     controller_name: str
@@ -95,7 +96,7 @@ class _OAuthClientBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
+class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Resolved inputs for a provider-specific OAuth login controller."""
 
     provider_name: str
@@ -114,7 +115,7 @@ class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
+class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Resolved inputs for a provider-specific OAuth association controller."""
 
     provider_name: str
@@ -132,7 +133,7 @@ class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthLoginCallbackInputs[UP: UserProtocol[Any], ID]:
+class _OAuthLoginCallbackInputs[UP: UserProtocol[Any], ID: Hashable]:
     """Runtime inputs needed to complete an OAuth login callback."""
 
     request: Request[Any, Any, Any]
@@ -142,14 +143,14 @@ class _OAuthLoginCallbackInputs[UP: UserProtocol[Any], ID]:
     backend: AuthenticationBackend[UP, ID]
 
 
-def _build_direct_user_manager_binding[UP: UserProtocol[Any], ID](
+def _build_direct_user_manager_binding[UP: UserProtocol[Any], ID: Hashable](
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
 ) -> _OAuthUserManagerBinding[UP, ID]:
     """Return a binding for a directly supplied user manager."""
     return _OAuthUserManagerBinding(user_manager=user_manager)
 
 
-def _build_associate_user_manager_binding[UP: UserProtocol[Any], ID](
+def _build_associate_user_manager_binding[UP: UserProtocol[Any], ID: Hashable](
     *,
     user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None,
     user_manager_dependency_key: str | None,
@@ -180,7 +181,7 @@ def _build_associate_user_manager_binding[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](
+def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID: Hashable](
     *,
     settings: _OAuthControllerAssemblySettings,
     client_binding: _OAuthClientBinding,

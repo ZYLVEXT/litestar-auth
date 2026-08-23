@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from collections.abc import Mapping as MappingABC
 from collections.abc import Sequence as SequenceABC
 from types import MappingProxyType
@@ -52,7 +52,7 @@ class FernetKeyringConfig:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class UserManagerSecurity[ID]:
+class UserManagerSecurity[ID: Hashable]:
     """Typed public contract for manager secrets and related security inputs.
 
     Production deployments should keep verification, reset-password, login

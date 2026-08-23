@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Unpack
 
 from litestar_auth._plugin.config import resolve_backend_inventory
@@ -36,7 +37,7 @@ def _totp_verify_before_request_handler(
     return totp_verify_before_request
 
 
-def _create_plugin_totp_controller_from_settings[UP: UserProtocol[Any], ID](
+def _create_plugin_totp_controller_from_settings[UP: UserProtocol[Any], ID: Hashable](
     settings: _PluginTotpControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Create the plugin TOTP controller from grouped settings.
@@ -61,7 +62,7 @@ def _create_plugin_totp_controller_from_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def _resolve_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
+def _resolve_plugin_totp_controller_settings[UP: UserProtocol[Any], ID: Hashable](
     options: PluginTotpControllerOptions[UP, ID],
 ) -> _PluginTotpControllerSettings[UP, ID]:
     """Resolve public plugin TOTP options into internal factory settings.
@@ -99,7 +100,7 @@ def _resolve_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
     )
 
 
-def create_totp_controller[UP: UserProtocol[Any], ID](
+def create_totp_controller[UP: UserProtocol[Any], ID: Hashable](
     **options: Unpack[PluginTotpControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Return a plugin TOTP controller that resolves its backend from request DI."""
@@ -108,7 +109,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](
     )
 
 
-def totp_backend[UP: UserProtocol[Any], ID](
+def totp_backend[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     backend_inventory: StartupBackendInventory[UP, ID] | None = None,

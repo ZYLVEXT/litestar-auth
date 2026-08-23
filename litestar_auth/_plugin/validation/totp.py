@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
@@ -21,17 +22,19 @@ if TYPE_CHECKING:
 _SUPPORTED_TOTP_ALGORITHMS = ("SHA256", "SHA512")
 
 
-def validate_totp_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_secret_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP secret-material and algorithm requirements."""
     _validate_totp_pending_secret_config(config)
 
 
-def validate_totp_encryption_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_encryption_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate production encryption requirements for persisted TOTP secrets."""
     _validate_totp_encryption_key(config)
 
 
-def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Validate TOTP pending-secret and algorithm constraints.
 
     Raises:
@@ -70,7 +73,7 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     )
 
 
-def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def _validate_totp_encryption_key[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Require TOTP secret encryption key in production when TOTP is enabled.
 
     Raises:
@@ -89,7 +92,7 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     raise ConfigurationError(format_configuration_message(msg))
 
 
-def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_totp_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP-specific configuration knobs."""
     if config.totp_config is None:
         return

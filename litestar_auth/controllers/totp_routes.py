@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 import msgspec  # ruff: ignore[typing-only-third-party-import]
@@ -66,7 +67,7 @@ def _remove_request_body_handler_data_parameter(route_handler: RequestBodyRouteH
     )
 
 
-def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
+def _create_totp_enable_handler[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> RequestBodyRouteHandler:
@@ -93,7 +94,7 @@ def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
     return cast("RequestBodyRouteHandler", enable)
 
 
-def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
+def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -120,7 +121,7 @@ def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
     return confirm_enable
 
 
-def _create_totp_verify_handler[UP: UserProtocol[Any], ID](
+def _create_totp_verify_handler[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,
 ) -> object:
@@ -147,7 +148,7 @@ def _create_totp_verify_handler[UP: UserProtocol[Any], ID](
     return verify
 
 
-def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
+def _create_totp_disable_handler[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> object:
@@ -179,7 +180,7 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
     return disable
 
 
-def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
+def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     security: Sequence[SecurityRequirement] | None,
 ) -> RequestBodyRouteHandler:
@@ -211,7 +212,7 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
     return cast("RequestBodyRouteHandler", regenerate_recovery_codes)
 
 
-def _create_totp_controller_type[UP: UserProtocol[Any], ID](
+def _create_totp_controller_type[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     *,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,
@@ -239,7 +240,7 @@ def _create_totp_controller_type[UP: UserProtocol[Any], ID](
     return controller_cls
 
 
-def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
+def _define_totp_controller_class_di[UP: UserProtocol[Any], ID: Hashable](
     ctx: _TotpControllerContext[UP, ID],
     *,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,

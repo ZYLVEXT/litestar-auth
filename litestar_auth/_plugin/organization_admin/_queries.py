@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Any
 
 from litestar_auth._roles import normalize_role_name
 from litestar_auth.exceptions import OrganizationMembershipNotFoundError, OrganizationNotFoundError
 
 
-class _OrganizationAdminQueryMixin[ORG, MEMBERSHIP, ID]:
+class _OrganizationAdminQueryMixin[ORG, MEMBERSHIP, ID: Hashable]:
     """Store-backed organization and membership read helpers."""
 
     async def get_organization(self: Any, organization_id: ID) -> ORG:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 PRIVILEGED_FIELDS = _PRIVILEGED_FIELDS
 
 
-class _UserLifecycleManagerProtocol[UP, ID](
+class _UserLifecycleManagerProtocol[UP, ID: Hashable](
     UserDatabaseManagerProtocol[UP],
     Protocol,
 ):
@@ -42,7 +43,7 @@ class _StrategyBackendProtocol[UP](Protocol):
     strategy: object
 
 
-class UserLifecycleService[UP, ID]:
+class UserLifecycleService[UP, ID: Hashable]:
     """Handle persistence-oriented user lifecycle operations."""
 
     def __init__(

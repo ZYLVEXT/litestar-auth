@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -93,7 +94,7 @@ class DatabaseTokenStrategyOptions(TypedDict):
     unsafe_testing: NotRequired[bool]
 
 
-class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
+class DatabaseTokenStrategy[UP: UserProtocol[Any], ID: Hashable](
     _DatabaseRefreshSessionMixin[UP, ID],
     Strategy[UP, ID],
     RefreshableStrategy[UP, ID],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -89,7 +90,7 @@ class _OrganizationInvitationManager(Protocol):
         """The manager hook dispatcher."""
 
 
-class _OrganizationInvitationUser[ID](Protocol):
+class _OrganizationInvitationUser[ID: Hashable](Protocol):
     """Authenticated user fields required to accept or decline an invitation."""
 
     @property
@@ -106,7 +107,7 @@ def _normalize_invited_email(email: str) -> str:
     return normalize_email(email)
 
 
-class _OrganizationAdminMutationMixin[ORG, MEMBERSHIP, INVITATION, ID]:
+class _OrganizationAdminMutationMixin[ORG, MEMBERSHIP, INVITATION, ID: Hashable]:
     """Store-backed organization and membership mutations."""
 
     async def create_organization(self: Any, *, slug: str, name: str) -> ORG:

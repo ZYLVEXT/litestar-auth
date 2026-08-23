@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import litestar_auth._schema_fields as schema_fields
@@ -26,7 +27,7 @@ _LOGIN_USERNAME_MAX_LENGTH = 150
 _EMAIL_PATTERN = re.compile(schema_fields.EMAIL_PATTERN)
 
 
-def _get_refresh_strategy[UP: UserProtocol[Any], ID](strategy: object) -> RefreshableStrategy[UP, ID]:
+def _get_refresh_strategy[UP: UserProtocol[Any], ID: Hashable](strategy: object) -> RefreshableStrategy[UP, ID]:
     """Return the refresh-capable strategy or raise a configuration error.
 
     Raises:
@@ -56,7 +57,7 @@ def _record_refresh_token_request_context(
         refresh_strategy.set_refresh_token_request_context(request)
 
 
-async def _resolve_access_token_session_id[UP: UserProtocol[Any], ID](
+async def _resolve_access_token_session_id[UP: UserProtocol[Any], ID: Hashable](
     backend: AuthenticationBackend[UP, ID],
     refresh_strategy: RefreshableStrategy[UP, ID],
     user: UP,
@@ -100,7 +101,7 @@ def _attach_refresh_token(
     return cookie_transport.set_refresh_token(response, refresh_token)
 
 
-def _resolve_cookie_transport[UP: UserProtocol[Any], ID](
+def _resolve_cookie_transport[UP: UserProtocol[Any], ID: Hashable](
     backend: AuthenticationBackend[UP, ID],
 ) -> CookieTransport:
     """Return the required v7 cookie transport.

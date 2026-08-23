@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypedDict, Unpack, cast, overload, runtime_checkable
 
@@ -71,7 +72,7 @@ if TYPE_CHECKING:
 SELF_UPDATE_FORBIDDEN_FIELDS = _USERS_SELF_UPDATE_FORBIDDEN_FIELDS
 
 
-class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
+class UsersControllerUserProtocol[ID: Hashable](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned by the users controller."""
 
     email: str
@@ -80,7 +81,7 @@ class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
 
 
 @runtime_checkable
-class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], ID](
+class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     AccountStateValidatorProvider[UP],
     TotpStepUpVerifierProtocol[UP],
     Protocol,
@@ -119,7 +120,7 @@ _UserManagerDep = NamedDependency[UsersControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(frozen=True, slots=True)
-class UsersControllerConfig[ID]:
+class UsersControllerConfig[ID: Hashable]:
     """Configuration for :func:`create_users_controller`."""
 
     id_parser: Callable[[str], ID] | None = None
@@ -137,7 +138,7 @@ class UsersControllerConfig[ID]:
     admin_guards: Sequence[Guard] | None = None
 
 
-class UsersControllerOptions[ID](TypedDict, total=False):
+class UsersControllerOptions[ID: Hashable](TypedDict, total=False):
     """Keyword options accepted by :func:`create_users_controller`."""
 
     id_parser: Callable[[str], ID] | None
@@ -156,7 +157,7 @@ class UsersControllerOptions[ID](TypedDict, total=False):
 
 
 @dataclass(slots=True)
-class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID]:
+class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID: Hashable]:
     """Runtime dependencies for generated users controller handlers."""
 
     id_parser: Callable[[str], ID] | None
@@ -192,7 +193,7 @@ def _resolve_users_admin_guards(settings: UsersControllerConfig[Any]) -> tuple[G
     return tuple(settings.admin_guards)
 
 
-async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     user_id: str,
     *,
     user_manager: UsersControllerUserManagerProtocol[UP, ID],
@@ -218,7 +219,7 @@ async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID](
     raise NotFoundException(detail=msg)
 
 
-async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _UsersControllerContext[UP, ID],
@@ -236,7 +237,7 @@ async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID](
     return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
-async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     data: msgspec.Struct,
     *,
@@ -288,7 +289,7 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
-async def _require_sensitive_self_update_reauthentication[UP: UsersControllerUserProtocol[Any], ID](
+async def _require_sensitive_self_update_reauthentication[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     user: UP,
     *,
@@ -310,7 +311,7 @@ async def _require_sensitive_self_update_reauthentication[UP: UsersControllerUse
 
 
 @dataclass(frozen=True, slots=True)
-class _AdminMutationStepUpCheck[UP: UsersControllerUserProtocol[Any], ID]:
+class _AdminMutationStepUpCheck[UP: UsersControllerUserProtocol[Any], ID: Hashable]:
     """Inputs for admin user mutation step-up enforcement."""
 
     request: Request[Any, Any, Any]
@@ -322,7 +323,7 @@ class _AdminMutationStepUpCheck[UP: UsersControllerUserProtocol[Any], ID]:
     user_manager: UsersControllerUserManagerProtocol[UP, ID]
 
 
-async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     data: msgspec.Struct,
     *,
@@ -357,7 +358,7 @@ async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID
         )
 
 
-async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     user_id: str,
     request: Request[Any, Any, Any],
     data: AdminUserDeleteStepUpRequest,
@@ -405,7 +406,7 @@ async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
-async def _users_handle_get_user[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_get_user[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     user_id: str,
     *,
     ctx: _UsersControllerContext[UP, ID],
@@ -420,7 +421,7 @@ async def _users_handle_get_user[UP: UsersControllerUserProtocol[Any], ID](
     return _to_user_schema(loaded, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
-async def _users_handle_update_user[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_update_user[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     user_id: str,
     request: Request[Any, Any, Any],
     data: msgspec.Struct,
@@ -465,7 +466,7 @@ async def _users_handle_update_user[UP: UsersControllerUserProtocol[Any], ID](
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
-async def _require_admin_mutation_step_up[UP: UsersControllerUserProtocol[Any], ID](
+async def _require_admin_mutation_step_up[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     check: _AdminMutationStepUpCheck[UP, ID],
 ) -> None:
     """Require the authenticated admin's own password and TOTP proof before privileged mutation."""
@@ -503,7 +504,7 @@ def _build_admin_update_payload(data: msgspec.Struct) -> dict[str, Any]:
     return {str(key): value for key, value in builtins_payload.items() if key not in {"current_password", "totp_code"}}
 
 
-async def _users_handle_list_users[UP: UsersControllerUserProtocol[Any], ID](
+async def _users_handle_list_users[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     *,
     limit: int,
     offset: int,
@@ -660,7 +661,7 @@ def _list_users_handler_annotations(*, max_limit: int) -> dict[str, object]:
     }
 
 
-def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``GET /me`` route handler.
@@ -680,7 +681,7 @@ def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(get_me)
 
 
-def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``PATCH /me`` route handler.
@@ -716,7 +717,7 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(update_me)
 
 
-def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``POST /me/change-password`` route handler.
@@ -748,7 +749,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(change_password)
 
 
-def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``GET /{user_id}`` route handler.
@@ -772,7 +773,7 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(get_user)
 
 
-def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``PATCH /{user_id}`` route handler.
@@ -800,7 +801,7 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(update_user)
 
 
-def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``DELETE /{user_id}`` route handler.
@@ -828,7 +829,7 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(delete_user)
 
 
-def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
+def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> RequestBodyRouteHandler:
     """Create the generated ``GET /`` route handler.
@@ -860,7 +861,7 @@ def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
     return _finalize_route_handler(get(guards=list(ctx.admin_guards))(list_users))
 
 
-def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
+def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     ctx: _UsersControllerContext[UP, ID],
 ) -> type[Controller]:
     """Build the users controller with profile and admin routes (DI user manager).
@@ -910,19 +911,19 @@ def _create_users_page_schema_type() -> type[msgspec.Struct]:
 
 
 @overload
-def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
+def create_users_controller[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     *,
     config: UsersControllerConfig[ID],
 ) -> type[Controller]: ...
 
 
 @overload
-def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
+def create_users_controller[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     **options: Unpack[UsersControllerOptions[ID]],
 ) -> type[Controller]: ...
 
 
-def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
+def create_users_controller[UP: UsersControllerUserProtocol[Any], ID: Hashable](
     *,
     config: UsersControllerConfig[ID] | None = None,
     **options: Unpack[UsersControllerOptions[ID]],

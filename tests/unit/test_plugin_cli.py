@@ -314,6 +314,21 @@ def test_on_cli_init_keeps_role_admin_import_lazy_until_roles_group_runs(
     assert "Manage relational roles" in result.output
 
 
+def test_request_session_provider_does_not_replace_cli_session_maker() -> None:
+    """Borrowed HTTP sessions do not become an ownership source for CLI transactions."""
+    config = _minimal_config(user_model=User)
+    config.session_maker = None
+    config.request_session_provider = cast("Any", lambda _state, _scope: object())
+    plugin = LitestarAuth(config)
+    root_cli = _build_root_cli()
+
+    plugin.on_cli_init(root_cli)
+    result = CliRunner().invoke(root_cli, ["roles"])
+
+    assert result.exit_code != 0
+    assert "session_maker" in result.output
+
+
 def test_register_roles_cli_is_idempotent_when_group_already_exists() -> None:
     """Registering the CLI group twice preserves the first plugin-owned command."""
     root_cli = _build_root_cli()

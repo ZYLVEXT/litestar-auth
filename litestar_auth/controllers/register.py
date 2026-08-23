@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack, cast, overload, runtime_checkable
 
@@ -101,7 +102,7 @@ _REGISTER_OPENAPI_RESPONSES = {
 }
 
 
-class RegisterControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
+class RegisterControllerUserProtocol[ID: Hashable](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after registration."""
 
     email: str
@@ -110,7 +111,7 @@ class RegisterControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
 
 
 @runtime_checkable
-class RegisterControllerUserManagerProtocol[UP: RegisterControllerUserProtocol[Any], ID](Protocol):
+class RegisterControllerUserManagerProtocol[UP: RegisterControllerUserProtocol[Any], ID: Hashable](Protocol):
     """User-manager behavior required by the register controller."""
 
     async def create(
@@ -248,19 +249,19 @@ def _create_register_controller_type(settings: _RegisterControllerSettings) -> t
 
 
 @overload
-def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
+def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID: Hashable](
     *,
     config: RegisterControllerConfig,
 ) -> type[Controller]: ...
 
 
 @overload
-def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
+def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID: Hashable](
     **options: Unpack[RegisterControllerOptions],
 ) -> type[Controller]: ...
 
 
-def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
+def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID: Hashable](
     *,
     config: RegisterControllerConfig | None = None,
     **options: Unpack[RegisterControllerOptions],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
-class VerifyControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
+class VerifyControllerUserProtocol[ID: Hashable](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after verification."""
 
     email: str
@@ -42,7 +43,7 @@ class VerifyControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
 
 
 @runtime_checkable
-class VerifyControllerUserManagerProtocol[UP: VerifyControllerUserProtocol[Any], ID](Protocol):
+class VerifyControllerUserManagerProtocol[UP: VerifyControllerUserProtocol[Any], ID: Hashable](Protocol):
     """User-manager behavior required by the verify controller."""
 
     async def verify(self, token: str) -> UP:
@@ -70,7 +71,7 @@ class _VerifyControllerContext:
     request_verify_increment: RequestHandler
 
 
-def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # ruff: ignore[too-many-arguments]
+def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID: Hashable](  # ruff: ignore[too-many-arguments]
     *,
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",

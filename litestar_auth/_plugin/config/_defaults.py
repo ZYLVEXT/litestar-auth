@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedAuthConfigDefaults[UP: UserProtocol[Any], ID]:
+class ResolvedAuthConfigDefaults[UP: UserProtocol[Any], ID: Hashable]:
     """Resolved defaults for one ``LitestarAuthConfig`` instance."""
 
     user_db_factory: UserDatabaseFactory[UP, ID] | UnsetType
@@ -25,7 +26,7 @@ class ResolvedAuthConfigDefaults[UP: UserProtocol[Any], ID]:
     features: _features.ResolvedFeatureDefaults
 
 
-def _resolve_config_defaults[UP: UserProtocol[Any], ID](
+def _resolve_config_defaults[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> ResolvedAuthConfigDefaults[UP, ID]:
     """Resolve top-level plugin defaults in one place.

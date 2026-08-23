@@ -7,6 +7,7 @@ provider token exchange proceeds.
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth.oauth._account_state import require_account_state
@@ -33,7 +34,7 @@ __all__ = (
 )
 
 
-class OAuthService[UP: UserProtocol[Any], ID]:
+class OAuthService[UP: UserProtocol[Any], ID: Hashable]:
     """Coordinate PKCE-bound provider callbacks, user bootstrap, and account linking."""
 
     def __init__(

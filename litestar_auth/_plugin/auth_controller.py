@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -52,7 +52,7 @@ _AuthBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 
 
 @dataclass(frozen=True, slots=True)
-class PluginAuthControllerSettings[UP: UserProtocol[Any], ID]:
+class PluginAuthControllerSettings[UP: UserProtocol[Any], ID: Hashable]:
     """Static settings for a plugin-owned auth controller."""
 
     backend: StartupBackendTemplate[UP, ID]
@@ -74,7 +74,7 @@ class PluginAuthControllerSettings[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class _PluginAuthControllerAssembly[UP: UserProtocol[Any], ID]:
+class _PluginAuthControllerAssembly[UP: UserProtocol[Any], ID: Hashable]:
     """Runtime pieces used to define a plugin-owned auth controller class."""
 
     settings: PluginAuthControllerSettings[UP, ID]
@@ -84,7 +84,7 @@ class _PluginAuthControllerAssembly[UP: UserProtocol[Any], ID]:
     factory_kit: ControllerFactoryKit[UP, ID]
 
 
-def create_auth_controller[UP: UserProtocol[Any], ID](
+def create_auth_controller[UP: UserProtocol[Any], ID: Hashable](
     settings: PluginAuthControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Return a plugin auth controller bound to request-scoped backends via DI."""
@@ -114,7 +114,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_plugin_auth_controller_assembly[UP: UserProtocol[Any], ID](
+def _build_plugin_auth_controller_assembly[UP: UserProtocol[Any], ID: Hashable](
     settings: PluginAuthControllerSettings[UP, ID],
 ) -> _PluginAuthControllerAssembly[UP, ID]:
     """Assemble request handlers and runtime context builder for plugin auth routes.
@@ -165,7 +165,7 @@ def _build_plugin_auth_controller_assembly[UP: UserProtocol[Any], ID](
     )
 
 
-def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
+def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID: Hashable](
     assembly: _PluginAuthControllerAssembly[UP, ID],
 ) -> type[Controller]:
     """Define the plugin auth controller without refresh-token routes.
@@ -210,7 +210,7 @@ def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
     return AuthController
 
 
-def _define_plugin_refresh_auth_controller_class[UP: UserProtocol[Any], ID](
+def _define_plugin_refresh_auth_controller_class[UP: UserProtocol[Any], ID: Hashable](
     base_controller: type[Controller],
     assembly: _PluginAuthControllerAssembly[UP, ID],
 ) -> type[Controller]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._plugin.middleware import get_cookie_transports
@@ -20,18 +21,20 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
 
 
-def validate_request_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_request_security_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate request-facing rate-limit and cookie-auth prerequisites."""
     validate_rate_limit_config(config.rate_limit_config)
     validate_cookie_auth_config(config)
 
 
-def validate_backend_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_backend_security_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend-strategy security posture for constructor-time setup."""
     _validate_backend_strategy_security(config)
 
 
-def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def _validate_backend_strategy_security[UP: UserProtocol[Any], ID: Hashable](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
     """Validate backend strategy security posture for non-test environments."""
     config.resolve_startup_backends()
 
@@ -48,7 +51,7 @@ def validate_rate_limit_config(rate_limit_config: object) -> None:
         resolve_trusted_proxy_hops(trusted_proxy_hops=endpoint_limit.trusted_proxy_hops)
 
 
-def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_cookie_auth_config[UP: UserProtocol[Any], ID: Hashable](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate cookie-auth prerequisites for production deployments.
 
     Raises:

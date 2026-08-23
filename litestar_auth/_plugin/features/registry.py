@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -91,7 +92,7 @@ __all__ = (
 
 
 @dataclass(frozen=True, slots=True)
-class FeatureRegistry[UP: UserProtocol[Any], ID]:
+class FeatureRegistry[UP: UserProtocol[Any], ID: Hashable]:
     """Resolved plugin feature state for startup, route assembly, and request binding."""
 
     config_snapshot: FeatureConfigSnapshot
@@ -121,7 +122,7 @@ class FeatureRegistry[UP: UserProtocol[Any], ID]:
         return self.backend_inventory.bind_request_backends(session)
 
 
-def resolve_feature_registry[UP: UserProtocol[Any], ID](
+def resolve_feature_registry[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> FeatureRegistry[UP, ID]:
     """Return the canonical feature registry for plugin assembly and request binding.
@@ -155,7 +156,7 @@ def resolve_feature_registry[UP: UserProtocol[Any], ID](
     )
 
 
-def resolve_feature_defaults[UP: UserProtocol[Any], ID](
+def resolve_feature_defaults[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
 ) -> ResolvedFeatureDefaults:
     """Resolve omitted feature settings into one startup snapshot.
@@ -195,7 +196,7 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_startup_backend_templates[UP: UserProtocol[Any], ID](
+def _build_startup_backend_templates[UP: UserProtocol[Any], ID: Hashable](
     config: LitestarAuthConfig[UP, ID],
     *,
     defaults: ResolvedFeatureDefaults,

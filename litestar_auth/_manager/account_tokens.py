@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -80,7 +81,7 @@ class OrganizationInvitationToken:
 
 
 @dataclass(frozen=True, slots=True)
-class AccountTokensServiceDependencies[UP, ID]:
+class AccountTokensServiceDependencies[UP, ID: Hashable]:
     """Dependencies required by account-token flow orchestration."""
 
     audiences: AccountTokenAudiences
@@ -166,14 +167,14 @@ class TokenWriter:
         return jwt.encode(payload, request.secret, algorithm="HS256", headers=jwt_encode_headers())
 
 
-class _AccountTokenSecurityManagerProtocol[ID](Protocol):
+class _AccountTokenSecurityManagerProtocol[ID: Hashable](Protocol):
     """Manager surface required by token security operations."""
 
     account_token_secrets: AccountTokenSecrets
     id_parser: Any
 
 
-class _AccountTokensManagerProtocol[UP, ID](
+class _AccountTokensManagerProtocol[UP, ID: Hashable](
     UserDatabaseManagerProtocol[UP],
     _AccountTokenSecurityManagerProtocol[ID],
     Protocol,
@@ -188,7 +189,7 @@ class _AccountTokensManagerProtocol[UP, ID](
         pass
 
 
-class AccountTokenSecurityService[UP, ID]:
+class AccountTokenSecurityService[UP, ID: Hashable]:
     """Handle JWT encoding/decoding and password-fingerprint concerns."""
 
     def __init__(
@@ -403,7 +404,7 @@ class AccountTokenSecurityService[UP, ID]:
         return user, payload
 
 
-class AccountTokensService[UP, ID]:
+class AccountTokensService[UP, ID: Hashable]:
     """Handle verify and reset token flows for the manager facade."""
 
     def __init__(

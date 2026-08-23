@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar_auth.types import UserProtocol
@@ -12,14 +13,14 @@ if TYPE_CHECKING:
     from litestar_auth.db import OAuthAccountData
 
 
-class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
+class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """User persistence operations required by OAuth flow orchestration."""
 
     async def get_by_email(self, email: str) -> UP | None:
         """Return a user by email address."""
 
 
-class OAuthAccountStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
+class OAuthAccountStoreProtocol[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """OAuth-account persistence operations required by OAuth flow orchestration."""
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
@@ -35,7 +36,7 @@ class OAuthAccountStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
 
 
 @runtime_checkable
-class OAuthServiceUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
+class OAuthServiceUserManagerProtocol[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """User-manager behavior required by OAuth service orchestration."""
 
     user_db: OAuthServiceUserStoreProtocol[UP, ID]

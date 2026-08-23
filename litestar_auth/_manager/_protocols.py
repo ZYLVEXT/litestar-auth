@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Any, Protocol
 
 from litestar_auth.types import GuardedUserProtocol
 
 
-class ManagedUserProtocol[ID](GuardedUserProtocol[ID], Protocol):
+class ManagedUserProtocol[ID: Hashable](GuardedUserProtocol[ID], Protocol):
     """User fields required by password-sensitive manager flows."""
 
     email: str
     hashed_password: str
 
 
-class AccountStateUserProtocol[ID](GuardedUserProtocol[ID], Protocol):
+class AccountStateUserProtocol[ID: Hashable](GuardedUserProtocol[ID], Protocol):
     """User fields required by account-state checks."""
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from litestar_auth.manager import UserManagerSecurity
 
 
-class _FeatureRegistryWithInventory[UP: UserProtocol[Any], ID](Protocol):
+class _FeatureRegistryWithInventory[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Feature registry surface needed by backend inventory resolution."""
 
     @property
@@ -33,14 +34,14 @@ class _FeatureRegistryWithInventory[UP: UserProtocol[Any], ID](Protocol):
         ...
 
 
-class _BackendInventoryConfig[UP: UserProtocol[Any], ID](Protocol):
+class _BackendInventoryConfig[UP: UserProtocol[Any], ID: Hashable](Protocol):
     """Config surface needed by ``resolve_backend_inventory``."""
 
     def resolve_feature_registry(self) -> _FeatureRegistryWithInventory[UP, ID]:
         """Return the resolved feature registry."""
 
 
-class _TotpSecretPolicyConfig[ID](Protocol):
+class _TotpSecretPolicyConfig[ID: Hashable](Protocol):
     """Config surface needed by plugin-managed TOTP secret policy resolution."""
 
     @property
@@ -66,7 +67,7 @@ class _SessionMakerConfig(Protocol):
     session_maker: SessionFactory | None
 
 
-def resolve_backend_inventory[UP: UserProtocol[Any], ID](
+def resolve_backend_inventory[UP: UserProtocol[Any], ID: Hashable](
     config: _BackendInventoryConfig[UP, ID],
 ) -> StartupBackendInventory[UP, ID]:
     """Return the resolved backend inventory for ``config``."""
@@ -88,7 +89,7 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     return SQLAlchemyUserDatabase(session, user_model=user_model)
 
 
-def _resolve_plugin_managed_totp_secret_storage_policy[UP: UserProtocol[Any], ID](
+def _resolve_plugin_managed_totp_secret_storage_policy[ID: Hashable](
     config: _TotpSecretPolicyConfig[ID],
 ) -> _PluginSecurityNotice | None:
     """Resolve the TOTP storage policy owned by plugin-managed manager wiring.
@@ -127,7 +128,7 @@ def _normalize_config_superuser_role_name(role_name: str) -> str:
         raise ConfigurationError(str(exc)) from exc
 
 
-def require_session_maker[UP: UserProtocol[Any], ID](
+def require_session_maker(
     config: _SessionMakerConfig,
 ) -> SessionFactory:
     """Return the configured session factory or fail when it is omitted.

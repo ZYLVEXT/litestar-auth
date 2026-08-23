@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
+class StartupBackendTemplate[UP: UserProtocol[Any], ID: Hashable]:
     """Startup-only backend template used for plugin assembly and validation."""
 
     name: str
@@ -63,7 +64,7 @@ class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class StartupBackendInventory[UP: UserProtocol[Any], ID]:
+class StartupBackendInventory[UP: UserProtocol[Any], ID: Hashable]:
     """Central startup inventory reused by plugin assembly and request binding."""
 
     startup_backend_templates: tuple[StartupBackendTemplate[UP, ID], ...]

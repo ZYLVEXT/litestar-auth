@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
+from collections.abc import Hashable
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -54,7 +55,7 @@ class _InvitationCLIRow(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class OrganizationCLIContext[ID]:
+class OrganizationCLIContext[ID: Hashable]:
     """Resolved CLI context for the active plugin-owned organizations command group."""
 
     config: LitestarAuthConfig[Any, ID]
@@ -63,7 +64,7 @@ class OrganizationCLIContext[ID]:
     id_parser: Callable[[str], ID] | None
 
 
-def register_organizations_cli[ID](
+def register_organizations_cli[ID: Hashable](
     cli: Group,
     config: LitestarAuthConfig[Any, ID],
 ) -> None:
@@ -94,12 +95,12 @@ class _OrganizationCliExtension:
         """CLI registration is separate from app-startup wiring."""
 
     @staticmethod
-    def register_cli[ID](cli: Group, config: LitestarAuthConfig[Any, ID]) -> None:
+    def register_cli[ID: Hashable](cli: Group, config: LitestarAuthConfig[Any, ID]) -> None:
         """Register the organization CLI group through the extension CLI contract."""
         register_organizations_cli(cli, config)
 
 
-def build_organizations_group[ID](
+def build_organizations_group[ID: Hashable](
     cli: Group,
     config: LitestarAuthConfig[Any, ID],
 ) -> Group:
@@ -131,7 +132,7 @@ def build_organizations_group[ID](
     return group
 
 
-def _resolve_organization_cli_context[ID](
+def _resolve_organization_cli_context[ID: Hashable](
     ctx: Context,
     config: LitestarAuthConfig[Any, ID],
 ) -> OrganizationCLIContext[ID]:
@@ -168,7 +169,7 @@ def _resolve_organization_cli_context[ID](
     return organization_cli_context
 
 
-def _register_organization_commands[ID](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
+def _register_organization_commands[ID: Hashable](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
     """Register organization catalog commands on the plugin-owned group."""
     click_module = cast("Any", _load_click_module())
 
@@ -238,7 +239,7 @@ def _register_organization_commands[ID](group: Group, config: LitestarAuthConfig
         click_module.echo("deleted")
 
 
-def _register_membership_commands[ID](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
+def _register_membership_commands[ID: Hashable](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
     """Register organization-membership commands on the plugin-owned group."""
     click_module = cast("Any", _load_click_module())
 
@@ -307,7 +308,7 @@ def _register_membership_commands[ID](group: Group, config: LitestarAuthConfig[A
         click_module.echo(_format_membership(membership))
 
 
-def _register_invitation_commands[ID](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
+def _register_invitation_commands[ID: Hashable](group: Group, config: LitestarAuthConfig[Any, ID]) -> None:
     """Register organization-invitation commands on the plugin-owned group."""
     click_module = cast("Any", _load_click_module())
 
@@ -364,7 +365,7 @@ def _load_click_module() -> ModuleType:
         return importlib.import_module("click")
 
 
-def _parse_cli_id[ID](context: OrganizationCLIContext[ID], raw_id: str) -> ID:
+def _parse_cli_id[ID: Hashable](context: OrganizationCLIContext[ID], raw_id: str) -> ID:
     """Parse a CLI identifier through the configured application id parser.
 
     Returns:
@@ -382,7 +383,7 @@ def _parse_cli_id[ID](context: OrganizationCLIContext[ID], raw_id: str) -> ID:
         raise ClickException(msg) from exc
 
 
-def _run_organization_cli_operation[T, ID](
+def _run_organization_cli_operation[T, ID: Hashable](
     context: OrganizationCLIContext[ID],
     operation_factory: Callable[[Any], Coroutine[Any, Any, T]],
 ) -> T:
@@ -416,7 +417,7 @@ def _run_organization_cli_operation[T, ID](
         raise ClickException(str(exc)) from exc
 
 
-def _run_organization_invitation_cli_operation[T, ID](
+def _run_organization_invitation_cli_operation[T, ID: Hashable](
     context: OrganizationCLIContext[ID],
     operation_factory: Callable[[Any, Any], Coroutine[Any, Any, T]],
 ) -> T:

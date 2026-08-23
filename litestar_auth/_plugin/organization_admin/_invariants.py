@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Any
 
 from litestar_auth._roles import normalize_roles
 
 
-class _OrganizationAdminInvariantMixin[ORG, MEMBERSHIP, ID]:
+class _OrganizationAdminInvariantMixin[ORG, MEMBERSHIP, ID: Hashable]:
     """Fail-closed organization membership invariants."""
 
     def _has_privileged_role(self: Any, roles: object) -> bool:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Hashable
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
@@ -51,7 +51,7 @@ class AccountTokenSecrets:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedSecretInputs[ID]:
+class ResolvedSecretInputs[ID: Hashable]:
     """Resolved user-manager secret inputs used during construction."""
 
     security: UserManagerSecurity[ID]
@@ -60,7 +60,7 @@ class ResolvedSecretInputs[ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class ConstructorAttributes[UP: UserProtocol[Any], ID]:
+class ConstructorAttributes[UP: UserProtocol[Any], ID: Hashable]:
     """Constructor values assigned directly to manager instance attributes."""
 
     user_db: BaseUserStore[UP, ID]
@@ -80,7 +80,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
+class BaseUserManagerConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :class:`~litestar_auth.manager.BaseUserManager`."""
 
     user_db: BaseUserStore[UP, ID]
@@ -109,7 +109,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
         )
 
 
-class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, total=False):
+class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID: Hashable](TypedDict, total=False):
     """Keyword options accepted by :class:`~litestar_auth.manager.BaseUserManager`."""
 
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
@@ -129,7 +129,7 @@ class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, tot
     account_token_denylist_store: JWTReplayStore | None
 
 
-def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
+def resolve_oauth_account_store[UP: UserProtocol[Any], ID: Hashable](
     user_db: object,
 ) -> BaseOAuthAccountStore[UP, ID] | None:
     """Return an OAuth-account store when the user store also exposes that boundary."""
@@ -150,7 +150,7 @@ def login_identifier_digest(identifier: str, *, key: str) -> str:
     ).hexdigest()
 
 
-def _build_user_manager_security[ID](
+def _build_user_manager_security[ID: Hashable](
     *,
     verification_token_secret: str | None = None,
     reset_password_token_secret: str | None = None,
@@ -170,7 +170,7 @@ def _build_user_manager_security[ID](
     )
 
 
-def resolve_account_token_secrets[ID](
+def resolve_account_token_secrets[ID: Hashable](
     manager_security: UserManagerSecurity[ID],
     *,
     secret_factory: SecretFactory,
@@ -215,7 +215,7 @@ def resolve_account_token_secrets[ID](
     )
 
 
-def resolve_secret_inputs[ID](
+def resolve_secret_inputs[ID: Hashable](
     security: UserManagerSecurity[ID] | None,
     *,
     secret_factory: SecretFactory,
@@ -255,7 +255,7 @@ def resolve_secret_inputs[ID](
     )
 
 
-def validate_secret_distinctness[ID](
+def validate_secret_distinctness[ID: Hashable](
     resolved_secret_inputs: ResolvedSecretInputs[ID],
     *,
     unsafe_testing: bool,
@@ -283,7 +283,7 @@ def validate_secret_distinctness[ID](
 
 
 @dataclass(frozen=True, slots=True)
-class ManagerConstructorInputs[ID]:
+class ManagerConstructorInputs[ID: Hashable]:
     """Typed plugin-owned inputs for request-scoped manager construction.
 
     The constructor contract is now fully driven by ``UserManagerSecurity`` plus the

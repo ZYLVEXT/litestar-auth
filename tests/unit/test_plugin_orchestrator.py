@@ -18,6 +18,8 @@ from cryptography.fernet import Fernet
 from fakeredis import FakeAsyncRedis
 from litestar.config.app import AppConfig
 from litestar.config.csrf import CSRFConfig
+from litestar.datastructures.state import State
+from litestar.di import Provide
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 
@@ -266,6 +268,47 @@ def test_litestar_auth_init_delegates_to_validate_config() -> None:
         LitestarAuth(config)
 
     validate_config_mock.assert_called_once_with(config)
+
+
+async def test_web_wiring_accepts_request_session_provider_without_session_maker() -> None:
+    """HTTP assembly borrows one session per request for middleware and dependency injection."""
+    session = object()
+    calls = 0
+
+    async def request_session_provider(_state: object, _scope: object) -> object:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        return session
+
+    config = _minimal_config()
+    config.session_maker = None
+    config.request_session_provider = cast("Any", request_session_provider)
+
+    plugin = LitestarAuth(config)
+    app_config = plugin.on_app_init(AppConfig())
+
+    db_dependency = app_config.dependencies[config.db_session_dependency_key]
+    scope = cast("Any", {})
+    borrowed_session_provider = cast("Any", plugin._request_session_provider)
+    assert isinstance(db_dependency, Provide)
+    assert db_dependency.dependency is not request_session_provider
+    assert await borrowed_session_provider(State(), scope) is session
+    assert await db_dependency.dependency(State(), scope) is session
+    assert calls == 1
+    assert app_config.before_send == []
+
+
+def test_legacy_external_db_session_flag_still_uses_session_maker_for_middleware() -> None:
+    """The legacy external-DI flag keeps its collision-free HTTP assembly behavior."""
+    config = _minimal_config()
+    config.db_session_dependency_provided_externally = True
+
+    plugin = LitestarAuth(config)
+    app_config = plugin.on_app_init(AppConfig())
+
+    assert config.db_session_dependency_key not in app_config.dependencies
+    assert app_config.before_send == []
 
 
 def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPatch) -> None:

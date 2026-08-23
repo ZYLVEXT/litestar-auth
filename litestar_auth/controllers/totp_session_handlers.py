@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
@@ -86,7 +87,7 @@ async def _totp_fail_invalid_pending(
     )
 
 
-def _build_totp_login_flow[ID](
+def _build_totp_login_flow[ID: Hashable](
     *,
     ctx: _TotpControllerContext[Any, ID],
     user_manager: TotpUserManagerProtocol[TotpUserProtocol[Any], ID],
@@ -134,7 +135,7 @@ def _totp_pending_client_binding(
     )
 
 
-async def _totp_validate_pending_user[UP: UserProtocol[Any], ID](
+async def _totp_validate_pending_user[UP: UserProtocol[Any], ID: Hashable](
     user: TotpUserProtocol[Any],
     *,
     request: Request[Any, Any, Any],
@@ -150,7 +151,7 @@ async def _totp_validate_pending_user[UP: UserProtocol[Any], ID](
     )
 
 
-async def _totp_handle_verify[UP: UserProtocol[Any], ID](
+async def _totp_handle_verify[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],
@@ -234,7 +235,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
     return response
 
 
-async def _totp_handle_disable[UP: UserProtocol[Any], ID](
+async def _totp_handle_disable[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],
@@ -294,7 +295,7 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
     await runtime.rate_limit.on_success("disable", request)
 
 
-async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
+async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID: Hashable](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],

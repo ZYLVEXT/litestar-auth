@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Hashable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload, override
+from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, cast, overload, override
 
 import anyio
 from authweave_core import (
@@ -23,6 +23,7 @@ from authweave_core import (
     TlsPeerEvidence,
     Unavailable,
 )
+from litestar.connection import ASGIConnection
 from litestar.datastructures.state import State
 from litestar.exceptions import ClientException, InternalServerException, NotAuthorizedException
 from litestar.middleware.authentication import AbstractAuthenticationMiddleware, AuthenticationResult
@@ -44,7 +45,6 @@ from litestar_auth.types import PermissionResolver, UserProtocol
 
 if TYPE_CHECKING:
     from authweave_core import SecurityObserver
-    from litestar.connection import ASGIConnection
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth._tenant_resolution import TenantResolver
@@ -60,7 +60,11 @@ type TlsPeerEvidenceFactory = Callable[[Scope], TlsPeerEvidence | None]
 type SpiffePeerEvidenceFactory = Callable[[Scope], SpiffePeerEvidence | None]
 type ExternalRequestTargetFactory = Callable[[Scope], str | None]
 type CorrelationIdFactory = Callable[[Scope], str | None]
-type RequestSessionProvider = Callable[[State, Scope], AsyncSession]
+type RequestSessionProvider = Callable[[State, Scope], AsyncSession | Awaitable[AsyncSession]]
+type AuthenticationResultHook = Callable[
+    [ASGIConnection[Any, Any, Any, Any], AsyncSession, AuthenticationResult],
+    Awaitable[None] | None,
+]
 type OrganizationStoreFactory = Callable[[AsyncSession], BaseOrganizationStore[Any, Any, Any, Any]]
 
 
@@ -76,7 +80,7 @@ type ProviderBindingsFactory = Callable[[AsyncSession], Sequence[LitestarProvide
 
 
 @dataclass(frozen=True, slots=True)
-class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
+class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID: Hashable]:
     """Configuration for :class:`LitestarAuthMiddleware`."""
 
     get_request_session: RequestSessionProvider
@@ -93,6 +97,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     organization_store_factory: OrganizationStoreFactory | None = None
     tenant_resolver: TenantResolver | None = None
     elevated_membership_resolver: ElevatedMembershipResolver[Any, Any, Any] | None = None
+    authentication_result_hook: AuthenticationResultHook | None = None
     exclude: str | list[str] | None = None
     exclude_from_auth_key: str = "exclude_from_auth"
     exclude_http_methods: Sequence[Method] | None = None
@@ -109,7 +114,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
             raise ValueError(msg)
 
 
-class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
+class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID: Hashable](TypedDict):
     """Keyword options accepted by :class:`LitestarAuthMiddleware`."""
 
     get_request_session: Required[RequestSessionProvider]
@@ -126,13 +131,14 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     organization_store_factory: NotRequired[OrganizationStoreFactory | None]
     tenant_resolver: NotRequired[TenantResolver | None]
     elevated_membership_resolver: NotRequired[ElevatedMembershipResolver[Any, Any, Any] | None]
+    authentication_result_hook: NotRequired[AuthenticationResultHook | None]
     exclude: NotRequired[str | list[str] | None]
     exclude_from_auth_key: NotRequired[str]
     exclude_http_methods: NotRequired[Sequence[Method] | None]
     scopes: NotRequired[Scopes | None]
 
 
-class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMiddleware):
+class LitestarAuthMiddleware[UP: UserProtocol[Any], ID: Hashable](AbstractAuthenticationMiddleware):
     """Run one principal-neutral authentication pipeline for every route."""
 
     @overload
@@ -182,6 +188,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.organization_store_factory = settings.organization_store_factory
         self.tenant_resolver = settings.tenant_resolver
         self.elevated_membership_resolver = settings.elevated_membership_resolver
+        self.authentication_result_hook = settings.authentication_result_hook
 
     @override
     async def authenticate_request(
@@ -200,7 +207,11 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         """
         set_scope_superuser_role_name(connection.scope, self)
         set_scope_permission_resolver(connection.scope, self.permission_resolver)
-        session = self.get_request_session(connection.app.state, connection.scope)
+        session_or_awaitable = self.get_request_session(connection.app.state, connection.scope)
+        session = cast(
+            "AsyncSession",
+            await session_or_awaitable if inspect.isawaitable(session_or_awaitable) else session_or_awaitable,
+        )
         bindings = tuple(self.provider_bindings_factory(session))
         coordinator = AuthenticationCoordinator(binding.provider for binding in bindings)
         policy = _resolve_route_policy(connection, default=self.default_policy)
@@ -236,7 +247,9 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
 
         if isinstance(decision, NotApplicable):
             clear_scope_current_organization_context(connection.scope)
-            return AuthenticationResult(user=None, auth=None)
+            result = AuthenticationResult(user=None, auth=None)
+            await self._run_authentication_result_hook(connection, session=session, result=result)
+            return result
         if isinstance(decision, Invalid):
             raise NotAuthorizedException(
                 detail="Authentication credentials are invalid.",
@@ -263,15 +276,40 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         if principal is None:
             raise InternalServerException(detail="Authentication principal projection failed.")
 
+        result = AuthenticationResult(user=principal, auth=decision.context)
+        clear_scope_current_organization_context(connection.scope)
+        await self._run_authentication_result_hook(connection, session=session, result=result)
         if decision.context.subject.kind == "human":
             await self._publish_current_organization_context_if_applicable(
                 connection,
                 session=session,
                 user=principal,
             )
-        else:
-            clear_scope_current_organization_context(connection.scope)
-        return AuthenticationResult(user=principal, auth=decision.context)
+        return result
+
+    async def _run_authentication_result_hook(
+        self,
+        connection: ASGIConnection[Any, Any, Any, Any],
+        *,
+        session: AsyncSession,
+        result: AuthenticationResult,
+    ) -> None:
+        """Run the application hook without allowing it to replace the authentication result.
+
+        Raises:
+            InternalServerException: If the hook mutates or returns a value instead of ``None``.
+        """
+        if self.authentication_result_hook is None:
+            return
+        expected_user = result.user
+        expected_auth = result.auth
+        hook_result = self.authentication_result_hook(connection, session, result)
+        if inspect.isawaitable(hook_result):
+            hook_result = await hook_result
+        if result.user is not expected_user or result.auth is not expected_auth:
+            raise InternalServerException(detail="Authentication result hook mutated the authentication result.")
+        if hook_result is not None:
+            raise InternalServerException(detail="Authentication result hook returned an invalid result.")
 
     async def _publish_current_organization_context_if_applicable(
         self,
@@ -281,7 +319,6 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         user: object,
     ) -> None:
         """Publish verified organization membership for one authenticated human request."""
-        clear_scope_current_organization_context(connection.scope)
         if self.organization_store_factory is None or self.tenant_resolver is None:
             return
 
