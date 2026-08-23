@@ -66,6 +66,12 @@ _NON_OVERRIDABLE_EXTENSION_DEPENDENCY_KEYS = frozenset(
 )
 
 
+_REQUEST_INDEPENDENT_DEPENDENCY_KEYS = frozenset({
+    DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+})
+
+
 @dataclass(frozen=True, slots=True)
 class DependencyProviders:
     """Bound dependency provider callables used during app init."""
@@ -261,21 +267,19 @@ def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
     return config.session_maker
 
 
-def _wrap_registered_dependency[UP: UserProtocol[Any], ID](
-    key: str,
-    provider: object,
-    *,
-    config: LitestarAuthConfig[UP, ID],
-) -> Provide:
-    if key == config.db_session_dependency_key and _resolve_builtin_db_session_provider_factory(config) is not None:
-        return Provide(
-            cast("DependencyProvider", provider),
-            sync_to_thread=False,
-            use_cache=False,
-        )
-    if key == DEFAULT_BACKENDS_DEPENDENCY_KEY:
-        return _to_dependency_provider(provider, use_cache=False)
-    return _to_dependency_provider(provider)
+def _wrap_registered_dependency(key: str, provider: object) -> Provide:
+    """Register one dependency, caching only providers that cannot vary per request.
+
+    Litestar stores a ``use_cache=True`` value on the ``Provide`` instance, which lives for the
+    application's lifetime, so a cached request-scoped provider would serve the first request's
+    value to every later request.
+
+    Returns:
+        The dependency provider for ``key``.
+    """
+    if key in _REQUEST_INDEPENDENT_DEPENDENCY_KEYS:
+        return _to_dependency_provider(provider)
+    return _to_dependency_provider(provider, use_cache=False)
 
 
 def register_dependencies[UP: UserProtocol[Any], ID](
@@ -308,14 +312,12 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         app_config.dependencies[registration.key] = _wrap_registered_dependency(
             registration.key,
             registration.provider,
-            config=config,
         )
 
     for contribution in extension_dependencies:
         app_config.dependencies[contribution.key] = _wrap_registered_dependency(
             contribution.key,
             contribution.provider,
-            config=config,
         )
 
     session_maker = _resolve_builtin_db_session_provider_factory(config)

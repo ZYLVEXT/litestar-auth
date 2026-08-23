@@ -32,6 +32,7 @@ from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
     DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+    DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
@@ -1174,12 +1175,12 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
 
     permissions_provider = app_config.dependencies[DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY]
     assert isinstance(permissions_provider, Provide)
-    assert permissions_provider.use_cache is True
+    assert permissions_provider.use_cache is False
     assert permissions_provider.sync_to_thread is False
 
     current_organization_provider = app_config.dependencies[DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY]
     assert isinstance(current_organization_provider, Provide)
-    assert current_organization_provider.use_cache is True
+    assert current_organization_provider.use_cache is False
     assert current_organization_provider.sync_to_thread is False
 
 
@@ -1227,6 +1228,37 @@ def test_register_dependencies_skips_db_session_provider_and_autocommit_when_ext
 
     assert config.db_session_dependency_key not in app_config.dependencies
     assert app_config.before_send == []
+
+
+def test_register_dependencies_caches_only_request_independent_providers() -> None:
+    """Litestar caches Provide values for the app lifetime, so request-scoped keys stay uncached."""
+    app_config = AppConfig()
+    config = _minimal_config()
+    config.organization_config = OrganizationConfig(
+        enabled=True,
+        store_factory=cast("Any", lambda _session: object()),
+        tenant_resolver=cast("Any", lambda _connection: "tenant"),
+    )
+
+    register_dependencies(
+        app_config,
+        config,
+        providers=_providers(),
+        extension_dependencies=(
+            ExtensionDependencyContribution(
+                extension_name="alpha",
+                key="alpha_request_state",
+                provider=lambda: None,
+            ),
+        ),
+    )
+
+    cached = {
+        key for key, provider in app_config.dependencies.items() if isinstance(provider, Provide) and provider.use_cache
+    }
+
+    assert DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY in app_config.dependencies
+    assert cached == {DEFAULT_CONFIG_DEPENDENCY_KEY, DEFAULT_USER_MODEL_DEPENDENCY_KEY}
 
 
 def test_register_dependencies_wraps_sync_providers_without_sync_to_thread() -> None:
