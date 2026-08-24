@@ -18,12 +18,12 @@ import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth._manager._protocols as manager_protocols_module
 import litestar_auth._plugin._protocols as plugin_protocols_module
 import litestar_auth._plugin.security_policy as security_policy_module
-import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.controllers._step_up_payloads as step_up_payloads_module
 import litestar_auth.models.mixins as model_mixins_module
 import litestar_auth.payloads as payloads_module
+import litestar_auth.roles as roles_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
 from tests._helpers import ExampleUser, load_reloaded_test_alias

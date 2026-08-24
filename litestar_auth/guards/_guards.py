@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from authweave_core import AuthenticationContext
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
-from litestar_auth._roles import normalize_role_name as _normalize_role_name
-from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth._superuser_role import read_scope_superuser_role_name
 from litestar_auth.exceptions import InsufficientRolesError
 from litestar_auth.guards._protocol_narrowing import (
@@ -17,6 +15,8 @@ from litestar_auth.guards._protocol_narrowing import (
     _require_role_capable_user,
     _role_capable_protocol_denial_detail,
 )
+from litestar_auth.roles import normalize_role_name as _normalize_role_name
+from litestar_auth.roles import normalize_roles as _normalize_roles
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection

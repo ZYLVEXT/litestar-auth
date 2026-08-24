@@ -1,9 +1,11 @@
-"""Internal helpers for normalized flat role membership."""
+"""Public helpers for normalized flat role membership."""
 
 from __future__ import annotations
 
 import unicodedata
 from collections.abc import Iterable
+
+__all__ = ("normalize_role_name", "normalize_roles")
 
 
 def normalize_roles(roles: object) -> list[str]:

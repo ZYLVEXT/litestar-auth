@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth._plugin.organization_admin import OrganizationAdmin
     from litestar_auth.contrib.organization_admin._controller import (
         OrganizationAdminAuthorizationPolicy,
         OrganizationAdminControllerConfig,
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from litestar_auth.contrib.organization_admin._extension import OrganizationAdminExtension
 
 __all__ = (
+    "OrganizationAdmin",
     "OrganizationAdminAuthorizationPolicy",
     "OrganizationAdminControllerConfig",
     "OrganizationAdminExtension",
@@ -44,6 +46,9 @@ def __getattr__(name: str) -> Callable[..., object]:
     Raises:
         AttributeError: If ``name`` is not part of the public package surface.
     """
+    if name == "OrganizationAdmin":
+        service_module = import_module("litestar_auth._plugin.organization_admin")
+        return service_module.OrganizationAdmin
     if name in {
         "OrganizationAdminAuthorizationPolicy",
         "OrganizationAdminControllerConfig",

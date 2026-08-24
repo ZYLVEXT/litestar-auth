@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, cast
 from litestar.exceptions import PermissionDeniedException
 
 from litestar_auth._organization_authz import resolve_current_organization_roles
-from litestar_auth._roles import normalize_role_name as _normalize_role_name
-from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
+from litestar_auth.roles import normalize_role_name as _normalize_role_name
+from litestar_auth.roles import normalize_roles as _normalize_roles
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping

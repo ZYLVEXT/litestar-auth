@@ -14,7 +14,7 @@ from litestar.exceptions import PermissionDeniedException
 from litestar.params import PathParameter, QueryParameter
 from litestar.status_codes import HTTP_200_OK, HTTP_204_NO_CONTENT
 
-from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
+from litestar_auth._plugin.organization_admin import OrganizationAdmin
 from litestar_auth._superuser_role import is_global_superuser
 from litestar_auth.contrib.organization_admin._error_responses import _map_organization_admin_error
 from litestar_auth.contrib.organization_admin._schemas import (
@@ -279,8 +279,8 @@ def _context[ID: Hashable](controller: _OrganizationAdminControllerBase) -> _Org
 
 def _admin[ORG, MEMBERSHIP, INVITATION, ID: Hashable](
     store: BaseOrganizationStore[ORG, MEMBERSHIP, INVITATION, ID],
-) -> SQLAlchemyOrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID]:
-    return SQLAlchemyOrganizationAdmin(store=store)
+) -> OrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID]:
+    return OrganizationAdmin(store=store)
 
 
 def _organization_read(organization: object) -> OrganizationRead:
@@ -391,7 +391,7 @@ async def _require_path_organization_authority(
     *,
     request: Request[Any, Any, Any],
     organization_id: object,
-    admin: SQLAlchemyOrganizationAdmin[Any, Any, Any, Any],
+    admin: OrganizationAdmin[Any, Any, Any, Any],
     operation: OrganizationAdminOperation,
     policy: OrganizationAdminAuthorizationPolicy,
 ) -> None:

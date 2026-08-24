@@ -115,7 +115,7 @@ class ExampleOrganizationMembership:
     roles: list[str]
 
 
-class RecordingOrganizationStore:
+class RecordingOrganizationStore:  # ruff: ignore[too-many-public-methods] - protocol fixture
     """Organization store fixture that records tenant and membership lookups."""
 
     def __init__(
@@ -339,6 +339,20 @@ class RecordingOrganizationStore:
 
     async def consume_invitation(self, invitation_id: UUID, *, consumed_at: datetime) -> object | None:
         """Current-organization dependency tests never consume invitations.
+
+        Returns:
+            ``None`` because this fixture has no invitations.
+        """
+        return None
+
+    async def finalize_invitation_acceptance(
+        self,
+        invitation_id: UUID,
+        *,
+        consumed_at: datetime,
+        membership_data: MembershipData[UUID],
+    ) -> ExampleOrganizationMembership | None:
+        """Current-organization dependency tests never accept invitations.
 
         Returns:
             ``None`` because this fixture has no invitations.

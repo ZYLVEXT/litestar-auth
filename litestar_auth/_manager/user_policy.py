@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any
 from litestar_auth._email import EMAIL_MAX_LENGTH as _EMAIL_MAX_LENGTH
 from litestar_auth._email import normalize_email as _normalize_email
 from litestar_auth._manager._coercions import _account_state_user
-from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import AuthorizationError, InactiveUserError, InvalidPasswordError, UnverifiedUserError
 from litestar_auth.password import PasswordHelper
+from litestar_auth.roles import normalize_roles as _normalize_roles
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
