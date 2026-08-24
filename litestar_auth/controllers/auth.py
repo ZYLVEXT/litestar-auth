@@ -68,7 +68,6 @@ from litestar_auth.ratelimit._config import (
 )
 from litestar_auth.ratelimit._key_derivation import account_lockout_key
 from litestar_auth.totp_flow import (
-    TotpFlowUserManagerProtocol,
     TotpLoginFlowConfig,
     TotpLoginFlowService,
     build_pending_totp_client_binding,
@@ -83,6 +82,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig
     from litestar_auth.ratelimit._protocol import AccountLockoutKey, AccountLockoutStore
+    from litestar_auth.totp_flow import TotpFlowUserManagerProtocol
 
 INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
 INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # ruff: ignore[hardcoded-password-string] - Public error detail.
