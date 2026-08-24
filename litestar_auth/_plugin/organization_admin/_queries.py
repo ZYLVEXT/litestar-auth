@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Hashable
 from typing import Any
 
-from litestar_auth._roles import normalize_role_name
 from litestar_auth.exceptions import OrganizationMembershipNotFoundError, OrganizationNotFoundError
+from litestar_auth.roles import normalize_role_name
 
 
 class _OrganizationAdminQueryMixin[ORG, MEMBERSHIP, ID: Hashable]:

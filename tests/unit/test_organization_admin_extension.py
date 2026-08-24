@@ -94,6 +94,7 @@ def _minimal_config(
 def test_organization_admin_package_exports_extension_lazily() -> None:
     """The contrib organization-admin package exposes the extension without widening unrelated surface."""
     assert organization_admin_module.__all__ == (
+        "OrganizationAdmin",
         "OrganizationAdminAuthorizationPolicy",
         "OrganizationAdminControllerConfig",
         "OrganizationAdminExtension",
@@ -106,6 +107,43 @@ def test_organization_admin_package_exports_extension_lazily() -> None:
         "create_organization_invitation_controller",
     )
     assert organization_admin_module.OrganizationAdminExtension is OrganizationAdminExtension
+
+
+def test_organization_admin_service_import_does_not_load_controllers_or_orm() -> None:
+    """Importing the public operations service keeps controllers and ORM adapters lazy."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from litestar_auth.contrib.organization_admin import OrganizationAdmin\n"
+        "assert OrganizationAdmin.__name__ == 'OrganizationAdmin'\n"
+        "blocked = {\n"
+        "    'litestar_auth.contrib.organization_admin._controller',\n"
+        "    'litestar_auth.contrib.organization_admin._schemas',\n"
+        "    'litestar_auth.contrib.organization_admin._error_responses',\n"
+        "    'litestar_auth.models',\n"
+        "    'litestar_auth.db.sqlalchemy',\n"
+        "}\n"
+        "loaded = blocked.intersection(sys.modules)\n"
+        "assert not loaded, sorted(loaded)\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_roles_import_does_not_load_organization_controllers_or_orm() -> None:
+    """Importing public role normalization keeps organization controllers and ORM adapters lazy."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from litestar_auth.roles import normalize_role_name, normalize_roles\n"
+        "assert normalize_role_name(' Admin ') == 'admin'\n"
+        "assert normalize_roles(['Member', ' MEMBER ']) == ['member']\n"
+        "blocked = {\n"
+        "    'litestar_auth.contrib.organization_admin._controller',\n"
+        "    'litestar_auth.models',\n"
+        "    'litestar_auth.db.sqlalchemy',\n"
+        "}\n"
+        "loaded = blocked.intersection(sys.modules)\n"
+        "assert not loaded, sorted(loaded)\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_organization_admin_extension_symbol_import_does_not_load_controller_or_orm_modules() -> None:

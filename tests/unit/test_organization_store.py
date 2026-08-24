@@ -681,7 +681,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_vali
     membership_data = MembershipData(organization_id=organization.id, user_id=user.id, roles=["member"])
 
     with pytest.raises(ValueError, match="unknown organization"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=MembershipData(organization_id=uuid4(), user_id=user.id, roles=["member"]),
@@ -690,7 +690,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_vali
     await store.add_membership(membership_data)
 
     with pytest.raises(ValueError, match="membership already exists"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=membership_data,
@@ -720,7 +720,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_succ
         ),
     )
     invitation_id = invitation.id
-    membership = await store._finalize_invitation_acceptance(
+    membership = await store.finalize_invitation_acceptance(
         invitation_id,
         consumed_at=now,
         membership_data=MembershipData(organization_id=organization_id, user_id=user.id, roles=["member"]),
@@ -738,7 +738,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_succ
     await organization_session.commit()
     second_user_id = second_user.id
     assert (
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation_id,
             consumed_at=now,
             membership_data=MembershipData(organization_id=organization_id, user_id=second_user_id, roles=["member"]),
@@ -800,7 +800,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_rais
     monkeypatch.setattr(store, "_transition_invitation", mismatched_transition)
 
     with pytest.raises(ValueError, match="organization mismatch"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=MembershipData(organization_id=organization.id, user_id=user.id, roles=["member"]),
@@ -846,7 +846,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_maps
     monkeypatch.setattr(store, "get_membership", stale_membership_precheck)
 
     with pytest.raises(ValueError, match="membership already exists"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=membership_data,
@@ -894,7 +894,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_maps
     monkeypatch.setattr(organization_session, "flush", flush_integrity_error)
 
     with pytest.raises(ValueError, match="unknown organization"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=MembershipData(organization_id=organization.id, user_id=user.id, roles=["member"]),
@@ -932,7 +932,7 @@ async def test_sqlalchemy_organization_store_finalize_invitation_acceptance_rera
     monkeypatch.setattr(organization_session, "flush", flush_integrity_error)
 
     with pytest.raises(IntegrityError, match="unclassified integrity failure"):
-        await store._finalize_invitation_acceptance(
+        await store.finalize_invitation_acceptance(
             invitation.id,
             consumed_at=now,
             membership_data=MembershipData(organization_id=organization.id, user_id=user.id, roles=["member"]),

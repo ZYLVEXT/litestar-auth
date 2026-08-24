@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from litestar_auth._roles import normalize_role_name
 from litestar_auth.ratelimit._client_host import _get_header_value, _normalize_host_value, _request_host
+from litestar_auth.roles import normalize_role_name
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection

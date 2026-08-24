@@ -20,7 +20,6 @@ from sqlalchemy.pool import StaticPool
 
 import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth.models as litestar_auth_models
-from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.authentication.strategy import (
     DatabaseTokenModels as DatabaseTokenModelsFromStrategy,
 )
@@ -37,6 +36,7 @@ from litestar_auth.models._oauth_encrypted_types import (
 )
 from litestar_auth.models.mixins import OrganizationInvitationMixin, OrganizationMembershipMixin, OrganizationMixin
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 AccessTokenMixin = litestar_auth_models.AccessTokenMixin
 OAuthAccount = litestar_auth_models.OAuthAccount

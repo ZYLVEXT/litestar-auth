@@ -16,7 +16,7 @@ from litestar_auth._plugin.organization_admin._queries import _OrganizationAdmin
 if TYPE_CHECKING:
     from litestar_auth.db import BaseOrganizationStore
 
-__all__ = ("DEFAULT_PRIVILEGED_ORGANIZATION_ROLES", "OrganizationInvitationIssue", "SQLAlchemyOrganizationAdmin")
+__all__ = ("DEFAULT_PRIVILEGED_ORGANIZATION_ROLES", "OrganizationAdmin", "OrganizationInvitationIssue")
 
 DEFAULT_PRIVILEGED_ORGANIZATION_ROLES = frozenset({"admin", "owner"})
 
@@ -34,7 +34,7 @@ class _MembershipRoles(Protocol):
 
 
 @dataclass(slots=True)
-class SQLAlchemyOrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID: Hashable](
+class OrganizationAdmin[ORG, MEMBERSHIP, INVITATION, ID: Hashable](
     _OrganizationAdminMutationMixin[ORG, MEMBERSHIP, INVITATION, ID],
     _OrganizationAdminInvariantMixin[ORG, MEMBERSHIP, ID],
     _OrganizationAdminQueryMixin[ORG, MEMBERSHIP, ID],

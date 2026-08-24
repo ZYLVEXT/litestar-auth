@@ -190,3 +190,20 @@ class BaseOrganizationStore[ORG, MEMBERSHIP, INVITATION, ID: Hashable](Protocol)
 
     async def consume_invitation(self, invitation_id: ID, *, consumed_at: datetime) -> INVITATION | None:
         """Atomically mark one pending invitation as consumed and return it when successful."""
+
+    async def finalize_invitation_acceptance(
+        self,
+        invitation_id: ID,
+        *,
+        consumed_at: datetime,
+        membership_data: MembershipData[ID],
+    ) -> MEMBERSHIP | None:
+        """Atomically consume one pending invitation and create its membership.
+
+        Implementations must leave the invitation pending when membership creation
+        fails. Returning ``None`` means the invitation was not both pending and
+        unexpired at ``consumed_at``.
+
+        Raises:
+            ValueError: If membership validation fails before or during persistence.
+        """

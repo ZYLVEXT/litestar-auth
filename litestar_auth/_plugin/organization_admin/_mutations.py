@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from litestar_auth._email import normalize_email
-from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.db import MembershipData, OrganizationData, OrganizationInvitationData
 from litestar_auth.exceptions import (
     InvalidOrganizationInvitationTokenError,
@@ -19,6 +18,7 @@ from litestar_auth.exceptions import (
     OrganizationMembershipNotFoundError,
     OrganizationNotFoundError,
 )
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 if TYPE_CHECKING:
     from litestar_auth._manager.account_tokens import OrganizationInvitationLookupStore
@@ -320,27 +320,17 @@ class _OrganizationAdminMutationMixin[ORG, MEMBERSHIP, INVITATION, ID: Hashable]
             user_id=user.id,
             roles=list(cast("Any", invitation).roles),
         )
-        finalize = getattr(self.store, "_finalize_invitation_acceptance", None)
-        if finalize is not None:
-            try:
-                membership = await finalize(
-                    invitation_id,
-                    consumed_at=now,
-                    membership_data=membership_data,
-                )
-            except ValueError as exc:
-                raise InvalidOrganizationInvitationTokenError from exc
-            if membership is None:
-                raise InvalidOrganizationInvitationTokenError
-            return membership
-
-        consumed = await self.store.consume_invitation(invitation_id, consumed_at=now)
-        if consumed is None:
-            raise InvalidOrganizationInvitationTokenError
         try:
-            return await self.store.add_membership(membership_data)
+            membership = await self.store.finalize_invitation_acceptance(
+                invitation_id,
+                consumed_at=now,
+                membership_data=membership_data,
+            )
         except ValueError as exc:
             raise InvalidOrganizationInvitationTokenError from exc
+        if membership is None:
+            raise InvalidOrganizationInvitationTokenError
+        return membership
 
     async def decline_invitation(
         self: Any,

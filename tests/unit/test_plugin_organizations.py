@@ -19,11 +19,11 @@ from litestar.testing import AsyncTestClient
 import litestar_auth._plugin.organization_admin._mutations as organization_mutations_module
 import litestar_auth.contrib.organization_admin as organization_admin_contrib
 import litestar_auth.plugin as plugin_module
-from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.db import OrganizationInvitationData
+from litestar_auth.contrib.organization_admin import OrganizationAdmin
+from litestar_auth.db import MembershipData, OrganizationInvitationData
 from litestar_auth.exceptions import (
     ConfigurationError,
     ErrorCode,
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from litestar.handlers.base import BaseRouteHandler
     from litestar.middleware import DefineMiddleware
 
-    from litestar_auth.db import MembershipData, OrganizationData
+    from litestar_auth.db import OrganizationData
 
 pytestmark = pytest.mark.unit
 
@@ -162,7 +162,7 @@ def _is_final_privileged_membership(
     )
 
 
-class SwitchOrganizationStore:
+class SwitchOrganizationStore:  # ruff: ignore[too-many-public-methods] - protocol fixture
     """In-memory organization store for switch-organization route tests."""
 
     def __init__(
@@ -471,6 +471,31 @@ class SwitchOrganizationStore:
             return None
         invitation.status = "consumed"
         return invitation
+
+    async def finalize_invitation_acceptance(
+        self,
+        invitation_id: UUID,
+        *,
+        consumed_at: datetime,
+        membership_data: MembershipData[UUID],
+    ) -> SwitchOrganizationMembership | None:
+        """Atomically consume a pending invitation and add its membership.
+
+        Returns:
+            New membership when the invitation is pending and unexpired.
+
+        Raises:
+            ValueError: If the invitation and membership organizations differ.
+        """
+        invitation = self.invitations_by_id.get(invitation_id)
+        if invitation is None or invitation.status != "pending" or invitation.expires_at <= consumed_at:
+            return None
+        if invitation.organization_id != membership_data.organization_id:
+            msg = "Invitation organization mismatch."
+            raise ValueError(msg)
+        membership = await self.add_membership(membership_data)
+        invitation.status = "consumed"
+        return membership
 
 
 def _organization_app(  # ruff: ignore[too-many-arguments]
@@ -887,7 +912,7 @@ async def test_organization_invitation_operations_fail_closed_for_transition_and
     organization = SwitchOrganizationRow(id=uuid4(), slug="acme", name="Acme")
     store = SwitchOrganizationStore(organizations=[organization], memberships=[])
     manager = _organization_invitation_manager(user)
-    admin = SQLAlchemyOrganizationAdmin(store=store)
+    admin = OrganizationAdmin(store=store)
     _invitation, invitation_token = await _create_organization_invitation(
         store=store,
         manager=manager,
@@ -896,26 +921,30 @@ async def test_organization_invitation_operations_fail_closed_for_transition_and
         roles=["member"],
     )
 
-    async def consume_missing(
+    async def finalize_missing(
         _invitation_id: UUID,
         *,
         consumed_at: datetime,
-    ) -> SwitchOrganizationInvitation | None:
+        membership_data: MembershipData[UUID],
+    ) -> SwitchOrganizationMembership | None:
         await asyncio.sleep(0)
         return None
 
-    monkeypatch.setattr(store, "consume_invitation", consume_missing)
+    monkeypatch.setattr(store, "finalize_invitation_acceptance", finalize_missing)
     with pytest.raises(InvalidOrganizationInvitationTokenError):
         await admin.accept_invitation(token=invitation_token, user=user, user_manager=manager)
 
-    monkeypatch.setattr(store, "consume_invitation", SwitchOrganizationStore.consume_invitation.__get__(store))
-
-    async def add_membership_fails(_data: object) -> SwitchOrganizationMembership:
+    async def finalize_fails(
+        _invitation_id: UUID,
+        *,
+        consumed_at: datetime,
+        membership_data: MembershipData[UUID],
+    ) -> SwitchOrganizationMembership:
         await asyncio.sleep(0)
         msg = "Organization membership already exists."
         raise ValueError(msg)
 
-    monkeypatch.setattr(store, "add_membership", add_membership_fails)
+    monkeypatch.setattr(store, "finalize_invitation_acceptance", finalize_fails)
     with pytest.raises(InvalidOrganizationInvitationTokenError):
         await admin.accept_invitation(token=invitation_token, user=user, user_manager=manager)
 
@@ -1364,6 +1393,7 @@ async def test_organization_admin_validation_and_lookup_error_branches() -> None
 
 def test_organization_admin_factory_validation_and_lazy_exports() -> None:
     """Factory validation keeps the opt-in controller configuration explicit."""
+    admin_type = organization_admin_contrib.OrganizationAdmin
     controller_factory = organization_admin_contrib.create_organization_admin_controller
     config_type = organization_admin_contrib.OrganizationAdminControllerConfig
     invitation_controller_factory = organization_admin_contrib.create_organization_invitation_controller
@@ -1392,6 +1422,8 @@ def test_organization_admin_factory_validation_and_lazy_exports() -> None:
         ),
     )
 
+    assert admin_type is OrganizationAdmin
+    assert "OrganizationAdmin" in organization_admin_contrib.__all__
     assert default_guarded_controller.guards == [is_superuser, is_human_authenticated]
     assert custom_guarded_controller.guards == [custom_admin_guard]
     assert controller.path == "/tenant-admin"

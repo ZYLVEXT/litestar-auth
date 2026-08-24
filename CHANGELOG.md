@@ -1,3 +1,18 @@
+## Unreleased
+
+### Added
+
+- Added the backend-neutral `litestar_auth.contrib.organization_admin.OrganizationAdmin` service,
+  the public `BaseOrganizationStore.finalize_invitation_acceptance(...)` atomic persistence contract,
+  and public `litestar_auth.roles` normalization helpers.
+
+### Changed
+
+- Organization invitation acceptance now requires one atomic store operation. The previous internal
+  split fallback that consumed an invitation before creating membership was removed so a failed
+  membership insert cannot strand a consumed invitation. Custom organization stores must implement
+  `finalize_invitation_acceptance(...)` before enabling invitation-acceptance routes.
+
 ## 7.3.4 (2026-08-23)
 
 ### Added

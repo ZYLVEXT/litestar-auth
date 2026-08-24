@@ -9,8 +9,8 @@ from advanced_alchemy.base import ModelProtocol
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.db.base import BaseOrganizationStore, MembershipData, OrganizationData, OrganizationInvitationData
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -146,7 +146,7 @@ def _find_membership[MEMBERSHIP: _MembershipRow](
     return None
 
 
-class SQLAlchemyOrganizationStore[
+class SQLAlchemyOrganizationStore[  # ruff: ignore[too-many-public-methods] - complete public store protocol
     ORG: _OrganizationRow,
     MEMBERSHIP: _MembershipRow,
     INVITATION: _InvitationRow,
@@ -621,14 +621,15 @@ class SQLAlchemyOrganizationStore[
             unexpired_after=consumed_at,
         )
 
-    async def _finalize_invitation_acceptance(
+    @override
+    async def finalize_invitation_acceptance(
         self,
         invitation_id: UUID,
         *,
         consumed_at: datetime,
         membership_data: MembershipData[UUID],
     ) -> MEMBERSHIP | None:
-        """Consume one pending invitation and create membership in a single savepoint.
+        """Atomically consume one pending invitation and create its membership.
 
         Returns:
             Newly created membership when both steps succeed, otherwise ``None``.

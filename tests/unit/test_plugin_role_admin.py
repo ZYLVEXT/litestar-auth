@@ -17,7 +17,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
 
 import litestar_auth._plugin.role_admin as role_admin_module
-from litestar_auth._roles import normalize_roles
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import (
@@ -30,6 +29,7 @@ from litestar_auth.models import (
     UserRoleRelationshipMixin,
 )
 from litestar_auth.plugin import FernetKeyringConfig, LitestarAuthConfig, OAuthConfig
+from litestar_auth.roles import normalize_roles
 from tests.integration.test_orchestrator import PluginUserManager
 
 SQLAlchemyRoleAdmin = role_admin_module.SQLAlchemyRoleAdmin
