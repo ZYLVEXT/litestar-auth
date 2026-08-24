@@ -38,7 +38,11 @@ class JWKSCachePolicy:
     maximum_keys: int = 32
 
     def __post_init__(self) -> None:
-        """Reject non-positive ceilings."""
+        """Reject non-positive ceilings.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if (
             self.ttl_seconds <= 0
             or self.timeout_seconds <= 0
@@ -60,7 +64,11 @@ class BoundedJWKSClient:
         policy: JWKSCachePolicy | None = None,
         fetcher: JWKSFetcher | None = None,
     ) -> None:
-        """Configure exactly one explicit key source."""
+        """Configure exactly one explicit key source.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if (url is None) == (static_jwks is None):
             msg = "configure exactly one of url or static_jwks"
             raise ValueError(msg)
@@ -76,11 +84,17 @@ class BoundedJWKSClient:
         self._lock = anyio.Lock()
 
     async def get_key(self, kid: str, algorithm: str) -> object:
-        """Return one validated key, refreshing at most once for an unknown ``kid``."""
+        """Return one validated key, refreshing at most once for an unknown ``kid``.
+
+        Raises:
+            JWKSValidationError: If the call cannot complete.
+        """
         if not kid or len(kid) > _MAX_KID_LENGTH:
-            raise JWKSValidationError("JWT kid is missing or oversized")
+            msg = "JWT kid is missing or oversized"
+            raise JWKSValidationError(msg)
         if algorithm not in _ALLOWED_ALGORITHMS:
-            raise JWKSValidationError("JWT algorithm is not allowed")
+            msg = "JWT algorithm is not allowed"
+            raise JWKSValidationError(msg)
         now = anyio.current_time()
         key = self._keys.get(kid)
         if key is not None and now < self._expires_at:
@@ -98,7 +112,8 @@ class BoundedJWKSClient:
             key = self._keys.get(kid)
             if key is None:
                 self._unknown_kid_refresh_used = True
-                raise JWKSValidationError("JWT kid is unknown")
+                msg = "JWT kid is unknown"
+                raise JWKSValidationError(msg)
             _validate_key_algorithm(key, algorithm)
             return key.key
 
@@ -125,7 +140,8 @@ def _validate_jwks_url(url: str) -> None:
         or parsed.password is not None
         or parsed.fragment
     ):
-        raise ValueError("jwks_url must be an explicit clean HTTPS URL")
+        msg = "jwks_url must be an explicit clean HTTPS URL"
+        raise ValueError(msg)
 
 
 def _load_jwt() -> Any:
@@ -139,25 +155,30 @@ def _load_jwt() -> Any:
 
 def _parse_jwks(value: Mapping[str, object] | None, *, maximum_keys: int) -> dict[str, Any]:
     if value is None or set(value) != {"keys"}:
-        raise JWKSValidationError("JWKS must contain only a keys array")
+        msg = "JWKS must contain only a keys array"
+        raise JWKSValidationError(msg)
     raw_keys = value["keys"]
     if not isinstance(raw_keys, list) or not raw_keys or len(raw_keys) > maximum_keys:
-        raise JWKSValidationError("JWKS key count is invalid")
+        msg = "JWKS key count is invalid"
+        raise JWKSValidationError(msg)
     parsed: dict[str, Any] = {}
     jwt = _load_jwt()
     for raw_key in raw_keys:
         if not isinstance(raw_key, dict):
-            raise JWKSValidationError("JWKS keys must be objects")
+            msg = "JWKS keys must be objects"
+            raise JWKSValidationError(msg)
         kid = raw_key.get("kid")
         algorithm = raw_key.get("alg")
         invalid_kid = not isinstance(kid, str) or not kid or len(kid) > _MAX_KID_LENGTH or kid in parsed
         invalid_algorithm = not isinstance(algorithm, str) or algorithm not in _ALLOWED_ALGORITHMS
         if invalid_kid or invalid_algorithm:
-            raise JWKSValidationError("JWKS key identity or algorithm is invalid")
+            msg = "JWKS key identity or algorithm is invalid"
+            raise JWKSValidationError(msg)
         try:
             key = jwt.PyJWK.from_dict(raw_key, algorithm=algorithm)
         except (TypeError, ValueError, jwt.PyJWTError) as exc:
-            raise JWKSValidationError("JWKS key cannot be parsed") from exc
+            msg = "JWKS key cannot be parsed"
+            raise JWKSValidationError(msg) from exc
         _validate_key_algorithm(key, algorithm)
         parsed[kid] = key
     return parsed
@@ -165,7 +186,8 @@ def _parse_jwks(value: Mapping[str, object] | None, *, maximum_keys: int) -> dic
 
 def _validate_key_algorithm(key: Any, algorithm: str) -> None:
     if key.algorithm_name != algorithm:
-        raise JWKSValidationError("JWK algorithm does not match JWT algorithm")
+        msg = "JWK algorithm does not match JWT algorithm"
+        raise JWKSValidationError(msg)
     public_key = key.key
     if algorithm == "PS256":
         if key.key_type != "RSA" or getattr(public_key, "key_size", 0) < _MIN_RSA_KEY_SIZE:
@@ -173,9 +195,11 @@ def _validate_key_algorithm(key: Any, algorithm: str) -> None:
             raise JWKSValidationError(msg)
     elif algorithm == "ES256":
         if key.key_type != "EC" or getattr(getattr(public_key, "curve", None), "name", None) != "secp256r1":
-            raise JWKSValidationError("ES256 requires a P-256 key")
+            msg_0 = "ES256 requires a P-256 key"
+            raise JWKSValidationError(msg_0)
     elif key.key_type != "OKP" or type(public_key).__name__ != "Ed25519PublicKey":
-        raise JWKSValidationError("EdDSA requires an Ed25519 key")
+        msg_0 = "EdDSA requires an Ed25519 key"
+        raise JWKSValidationError(msg_0)
 
 
 async def _fetch_jwks(url: str, timeout_seconds: float, maximum_response_bytes: int) -> Mapping[str, object]:
@@ -189,21 +213,26 @@ async def _fetch_jwks(url: str, timeout_seconds: float, maximum_response_bytes: 
         async with httpx.AsyncClient(follow_redirects=False, timeout=timeout_seconds) as client:
             async with client.stream("GET", url, headers={"accept": "application/json"}) as response:
                 if response.status_code != _HTTP_OK:
-                    raise JWKSUnavailableError("trusted JWKS returned a non-success status")
+                    msg_0 = "trusted JWKS returned a non-success status"
+                    raise JWKSUnavailableError(msg_0)
                 async for chunk in response.aiter_bytes():
                     content.extend(chunk)
                     if len(content) > maximum_response_bytes:
-                        raise JWKSValidationError("JWKS response exceeds the configured size limit")
+                        msg_0 = "JWKS response exceeds the configured size limit"
+                        raise JWKSValidationError(msg_0)
     except JWKSValidationError:
         raise
     except (httpx.HTTPError, TimeoutError) as exc:
-        raise JWKSUnavailableError("trusted JWKS request failed") from exc
+        msg_0 = "trusted JWKS request failed"
+        raise JWKSUnavailableError(msg_0) from exc
     try:
         decoded = json.loads(content)
     except (TypeError, ValueError) as exc:
-        raise JWKSValidationError("JWKS response is not valid JSON") from exc
+        msg_0 = "JWKS response is not valid JSON"
+        raise JWKSValidationError(msg_0) from exc
     if not isinstance(decoded, dict):
-        raise JWKSValidationError("JWKS response must be an object")
+        msg_0 = "JWKS response must be an object"
+        raise JWKSValidationError(msg_0)
     return decoded
 
 

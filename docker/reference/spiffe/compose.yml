@@ -1,6 +1,6 @@
 services:
   server:
-    image: ghcr.io/spiffe/spire-server:1.15.2@sha256:aa74ef1be86bc8e0684007d84a4d9859d294384d842c30425048d73429f3216e
+    image: ghcr.io/spiffe/spire-server:1.15.3@sha256:4082f30d3e0ddc4000a171392c4ea174345ee44d161ee917c70b97b2ecfba141
     user: "0:0"
     command: ["-config", "/run/spire/config/server.conf"]
     volumes:
@@ -8,7 +8,7 @@ services:
       - server-socket:/run/spire/sockets
 
   agent:
-    image: ghcr.io/spiffe/spire-agent:1.15.2@sha256:1d042e4040466686e0ee46f74981ff2167c86adfadca19b3835946f4d6047536
+    image: ghcr.io/spiffe/spire-agent:1.15.3@sha256:41b0dcd8b258a69db9e2768292a060766fb76fd866e4bc925849981ea1b825ff
     user: "0:0"
     command:
       - -config
@@ -23,7 +23,7 @@ services:
       - agent-socket:/run/spire/sockets
 
   verifier:
-    image: ghcr.io/astral-sh/uv:0.12.2-python3.14-trixie-slim@sha256:d6e6a4de8d48bb4e64bcc2e2bd1e2291fb00ee4fd07a5dcfdc4c621afddcfe75
+    image: ghcr.io/astral-sh/uv:0.12.5-python3.14-trixie-slim@sha256:dc360d7e5f968c682e8b59e83027a315a0232dead15cb9dfe3e707a12ba390e1
     command:
       - uv
       - run

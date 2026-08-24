@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from litestar_auth._manager.totp_secrets import TotpSecretsService
     from litestar_auth._secrets_at_rest import FernetModuleLoader
 
-_TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secret encryption."  # ruff: ignore[hardcoded-password-string]
+_TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secret encryption."  # ruff: ignore[hardcoded-password-string] - User-facing installation hint.
 _load_cryptography_fernet: FernetModuleLoader = cast(
     "FernetModuleLoader",
     partial(require_cryptography_fernet, install_hint=_TOTP_SECRET_FERNET_INSTALL_HINT),

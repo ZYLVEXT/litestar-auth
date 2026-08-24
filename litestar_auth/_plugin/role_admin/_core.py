@@ -21,9 +21,9 @@ from litestar_auth._plugin.role_admin_contracts import (
 )
 from litestar_auth._plugin.role_lifecycle import _ManagerLifecycleRoleUpdater
 from litestar_auth._plugin.role_model_family import RoleModelFamily, _model_name, resolve_role_model_family
-from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.roles import normalize_role_name, normalize_roles
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:

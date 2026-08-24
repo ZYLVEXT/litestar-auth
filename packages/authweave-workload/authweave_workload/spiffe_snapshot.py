@@ -377,7 +377,9 @@ def _open_x509_source(*, socket_path: str | None, timeout_seconds: float) -> X50
                 category=CryptographyDeprecationWarning,
                 module=r"spiffe\.utils\.certificate_utils",
             )
-            from spiffe import X509Source  # ruff: ignore[import-outside-top-level] - optional dependency
+            from spiffe import (
+                X509Source,
+            )
     except ImportError as exc:  # pragma: no cover - exercised by import-isolation tests
         msg = "Install authweave-workload[spiffe] to use the Workload API adapter"
         raise ImportError(msg) from exc

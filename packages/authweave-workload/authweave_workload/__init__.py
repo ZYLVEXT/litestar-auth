@@ -34,7 +34,7 @@ from authweave_workload.stores import (
     WorkloadStore,
 )
 
-__version__ = "7.3.4"
+__version__ = "8.0.0"
 
 __all__ = (
     "PAYMENT_AUTHORIZATION_TYPE",

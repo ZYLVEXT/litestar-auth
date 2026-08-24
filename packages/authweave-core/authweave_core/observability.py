@@ -39,7 +39,7 @@ class SecurityOperation(StrEnum):
     OAUTH_INTROSPECT = "oauth.introspect"
     OAUTH_PAR = "oauth.par"
     OAUTH_VERIFY_JARM = "oauth.verify_jarm"
-    OAUTH_TOKEN_EXCHANGE = "oauth.token_exchange"  # ruff: ignore[hardcoded-password-string] - operation name
+    OAUTH_TOKEN_EXCHANGE = "oauth.token_exchange"  # ruff: ignore[hardcoded-password-string] - Public operation label.
     KEY_REFRESH = "key.refresh"
     REPLAY_CHECK = "replay.check"
     WEBHOOK_DELIVER = "webhook.deliver"
@@ -150,7 +150,7 @@ class _FailureIsolatingObservation:
     def set_outcome(self, outcome: SecurityOutcome, *, reason_code: str | None = None) -> None:
         try:
             self._observation.set_outcome(outcome, reason_code=reason_code)
-        except Exception as exc:  # ruff: ignore[blind-except] - arbitrary observer implementations are isolated
+        except Exception as exc:
             _warn_observer_failure(exc)
 
 
@@ -158,7 +158,7 @@ _NOOP_OBSERVATION = _NoOpObservation()
 
 
 @contextmanager
-def observe_security(  # ruff: ignore[too-many-arguments] - bounded observer dimensions are explicit
+def observe_security(
     observer: SecurityObserver | None,
     operation: SecurityOperation,
     *,
@@ -183,8 +183,8 @@ def observe_security(  # ruff: ignore[too-many-arguments] - bounded observer dim
             credential_kind=credential_kind,
             links=links,
         )
-        observation = manager.__enter__()  # ruff: ignore[unnecessary-dunder-call] - enter failures need isolation
-    except Exception as exc:  # ruff: ignore[blind-except] - arbitrary observer implementations are isolated
+        observation = manager.__enter__()
+    except Exception as exc:
         _warn_observer_failure(exc)
         yield _NOOP_OBSERVATION
         return
@@ -197,13 +197,13 @@ def observe_security(  # ruff: ignore[too-many-arguments] - bounded observer dim
         except BaseException as body_exc:
             try:
                 manager.__exit__(type(body_exc), body_exc, body_exc.__traceback__)
-            except Exception as observer_exc:  # ruff: ignore[blind-except] - preserve body exception
+            except Exception as observer_exc:
                 _warn_observer_failure(observer_exc)
             raise
         else:
             try:
                 manager.__exit__(None, None, None)
-            except Exception as exc:  # ruff: ignore[blind-except] - arbitrary observer implementations are isolated
+            except Exception as exc:
                 _warn_observer_failure(exc)
     finally:
         _current_correlation.reset(correlation_token)
@@ -219,7 +219,7 @@ def current_trace_correlation(observer: SecurityObserver | None) -> TraceCorrela
         return None
     try:
         return observer.current_correlation()
-    except Exception as exc:  # ruff: ignore[blind-except] - arbitrary observer implementations are isolated
+    except Exception as exc:
         _warn_observer_failure(exc)
         return None
 

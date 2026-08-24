@@ -27,7 +27,7 @@ from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, v
 from sqlalchemy.orm import Session as ORMSession
 
 from litestar_auth._email import normalize_email as _normalize_email
-from litestar_auth._roles import normalize_role_name, normalize_roles
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 __all__ = (
     "AccessTokenMixin",

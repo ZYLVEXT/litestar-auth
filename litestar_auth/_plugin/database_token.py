@@ -7,6 +7,8 @@ from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, cast
 
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -167,7 +169,6 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID: Hasha
     Returns:
         Startup-only strategy carrying DB-token metadata without a placeholder session.
     """
-    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
     from litestar_auth.authentication.strategy.db_models import (  # ruff: ignore[import-outside-top-level]
         DatabaseTokenModels,
     )
@@ -206,7 +207,6 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID: Hashable](
     """
     from litestar_auth.authentication.backend import AuthenticationBackend  # ruff: ignore[import-outside-top-level]
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
-    from litestar_auth.authentication.transport.cookie import CookieTransport  # ruff: ignore[import-outside-top-level]
 
     strategy: StrategyProto[UP, ID]
     if session is None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Hashable
 from typing import Any
 
-from litestar_auth._roles import normalize_roles
+from litestar_auth.roles import normalize_roles
 
 
 class _OrganizationAdminInvariantMixin[ORG, MEMBERSHIP, ID: Hashable]:

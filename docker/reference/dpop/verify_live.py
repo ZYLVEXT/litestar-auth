@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise an external test AS/JWKS and the live multi-worker DPoP RS."""
-# ruff: file-ignore[f-string-in-exception, hardcoded-password-string, print, raise-vanilla-args, raw-string-in-exception, too-many-arguments]
+# ruff: file-ignore[f-string-in-exception, print, raise-vanilla-args, raw-string-in-exception, too-many-arguments]
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 
-AS_TOKEN_URL = "http://127.0.0.1:18082/oauth/token"
-AS_EXTERNAL_TOKEN_TARGET = "https://as.example/oauth/token"
+AS_TOKEN_URL = "http://127.0.0.1:18082/oauth/token"  # ruff: ignore[hardcoded-password-string] - OAuth endpoint URL, not a credential.
+AS_EXTERNAL_TOKEN_TARGET = "https://as.example/oauth/token"  # ruff: ignore[hardcoded-password-string] - OAuth target URL, not a credential.
 RS_URL = "http://127.0.0.1:18081/v1/payments"
 RS_EXTERNAL_TARGET = "https://api.example/v1/payments"
 _HTTP_OK = 200

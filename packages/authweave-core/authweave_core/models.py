@@ -320,7 +320,7 @@ class FailureCode(StrEnum):
     PRINCIPAL_DISABLED = "principal_disabled"
     ISSUER_MISMATCH = "issuer_mismatch"
     AUDIENCE_MISMATCH = "audience_mismatch"
-    TOKEN_TYPE_MISMATCH = "token_type_mismatch"
+    TOKEN_TYPE_MISMATCH = "token_type_mismatch"  # ruff: ignore[hardcoded-password-string] - Public error-code label.
     ALGORITHM_MISMATCH = "algorithm_mismatch"
     SENDER_CONSTRAINT_MISMATCH = "sender_constraint_mismatch"
     AMBIGUOUS_CREDENTIALS = "ambiguous_credentials"

@@ -6,6 +6,7 @@ from collections.abc import Hashable
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
+from litestar_auth._manager.hooks import dispatch_after_login
 from litestar_auth._totp_recovery import _consume_matching_recovery_code
 from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
@@ -229,7 +230,6 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID: Hashable](
             session_id,
             ttl_seconds=ctx.security.totp_stepup_ttl_seconds,
         )
-    from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
     await dispatch_after_login(user_manager, verified_user)
     return response

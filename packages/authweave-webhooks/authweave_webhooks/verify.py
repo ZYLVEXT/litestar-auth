@@ -57,7 +57,11 @@ class StandardWebhooksVerifier:
         time_source: Callable[[], int],
         observer: SecurityObserver | None = None,
     ) -> None:
-        """Bind onboarding identity, clock, key resolver, and replay store."""
+        """Bind onboarding identity, clock, key resolver, and replay store.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if timestamp_tolerance_seconds <= 0:
             msg = "timestamp_tolerance_seconds must be positive"
             raise ValueError(msg)

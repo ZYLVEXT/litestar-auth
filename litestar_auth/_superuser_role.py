@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar.exceptions import PermissionDeniedException
 
-from litestar_auth._roles import normalize_role_name, normalize_roles
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping

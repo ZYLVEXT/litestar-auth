@@ -67,6 +67,11 @@ from litestar_auth.ratelimit._config import (
     warn_missing_public_rate_limits,
 )
 from litestar_auth.ratelimit._key_derivation import account_lockout_key
+from litestar_auth.totp_flow import (
+    TotpLoginFlowConfig,
+    TotpLoginFlowService,
+    build_pending_totp_client_binding,
+)
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -77,9 +82,10 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig
     from litestar_auth.ratelimit._protocol import AccountLockoutKey, AccountLockoutStore
+    from litestar_auth.totp_flow import TotpFlowUserManagerProtocol
 
 INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
-INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # ruff: ignore[hardcoded-password-string]
+INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # ruff: ignore[hardcoded-password-string] - Public error detail.
 TOTP_PENDING_AUDIENCE = _TOTP_PENDING_AUDIENCE
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
@@ -405,13 +411,6 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID: Hashable
     """Return a pending-2FA response when TOTP is configured for this login."""
     if ctx.totp_pending_secret is None:
         return None
-
-    from litestar_auth.totp_flow import (  # ruff: ignore[import-outside-top-level]
-        TotpFlowUserManagerProtocol,
-        TotpLoginFlowConfig,
-        TotpLoginFlowService,
-        build_pending_totp_client_binding,
-    )
 
     totp_login_flow = TotpLoginFlowService[TotpUserProtocol[Any], ID](
         user_manager=cast(

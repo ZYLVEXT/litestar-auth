@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+)
 from http_message_signatures import HTTPMessageSigner, HTTPSignatureKeyResolver, algorithms
 
 from authweave_http_signatures.digest import content_digest_sha256

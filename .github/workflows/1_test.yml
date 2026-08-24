@@ -122,9 +122,9 @@ jobs:
         run: echo "UV_PYTHON_INSTALL_DIR=${RUNNER_TEMP}/uv-python-dir" >> "$GITHUB_ENV"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: ""
@@ -189,9 +189,9 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           cache-dependency-glob: ""
@@ -280,9 +280,9 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: ""
@@ -315,9 +315,9 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: ""
@@ -363,9 +363,9 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           cache-dependency-glob: ""
@@ -431,9 +431,9 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.1"
+          version: "0.12.5"
           python-version: "3.14"
           enable-cache: true
           cache-dependency-glob: ""

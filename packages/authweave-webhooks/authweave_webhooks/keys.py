@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from authweave_webhooks.models import PublicKeyDocument
+from authweave_webhooks.models import (
+    PublicKeyDocument,
+)
 
 
 class PublicKeyResolver(Protocol):

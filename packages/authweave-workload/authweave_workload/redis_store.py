@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 
-from authweave_core import ReplayOutcome, validate_replay_key
+from authweave_core import AsyncRedisGetSet, AsyncRedisSet, AsyncRedisSetDelete, ReplayOutcome, validate_replay_key
 
 _MAX_INTROSPECTION_CACHE_BYTES = 65_536
 
@@ -14,7 +14,7 @@ class RedisIntrospectionCache:
 
     __slots__ = ("_redis",)
 
-    def __init__(self, redis: object) -> None:
+    def __init__(self, redis: AsyncRedisGetSet) -> None:
         """Bind an async Redis client exposing ``get`` and ``set``."""
         self._redis = redis
 
@@ -23,9 +23,13 @@ class RedisIntrospectionCache:
 
         Returns:
             Cached bytes or ``None``.
+
+        Raises:
+            RuntimeError: If the call cannot complete.
+            ValueError: If the call cannot complete.
         """
         try:
-            value = await self._redis.get(key)  # ty: ignore[unresolved-attribute]
+            value = await self._redis.get(key)
         except Exception as exc:
             msg = "introspection cache unavailable"
             raise RuntimeError(msg) from exc
@@ -39,7 +43,12 @@ class RedisIntrospectionCache:
         return value
 
     async def set(self, key: str, value: bytes, *, ttl_seconds: int) -> None:
-        """Store one bounded claim snapshot with an explicit TTL."""
+        """Store one bounded claim snapshot with an explicit TTL.
+
+        Raises:
+            RuntimeError: If the call cannot complete.
+            ValueError: If the call cannot complete.
+        """
         if not key.startswith("authweave:introspection:") or not 0 < len(value) <= _MAX_INTROSPECTION_CACHE_BYTES:
             msg = "introspection cache entry is invalid"
             raise ValueError(msg)
@@ -47,7 +56,7 @@ class RedisIntrospectionCache:
             msg = "introspection cache TTL must be positive"
             raise ValueError(msg)
         try:
-            await self._redis.set(key, value, ex=ttl_seconds)  # ty: ignore[unresolved-attribute]
+            await self._redis.set(key, value, ex=ttl_seconds)
         except Exception as exc:
             msg = "introspection cache unavailable"
             raise RuntimeError(msg) from exc
@@ -62,7 +71,7 @@ class RedisDPoPReplayStore:
 
     __slots__ = ("_redis",)
 
-    def __init__(self, redis: object) -> None:
+    def __init__(self, redis: AsyncRedisSet) -> None:
         """Bind an async Redis client exposing ``set(name, value, nx=True, ex=...)``."""
         self._redis = redis
 
@@ -80,13 +89,13 @@ class RedisDPoPReplayStore:
             msg = "ttl_seconds must be positive"
             raise ValueError(msg)
         try:
-            created = await self._redis.set(  # ty: ignore[unresolved-attribute]
+            created = await self._redis.set(
                 key,
                 "1",
                 nx=True,
                 ex=max(1, int(ttl_seconds)),
             )
-        except Exception:  # ruff: ignore[blind-except] - any client/transport failure is Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if created else ReplayOutcome.REPLAY
 
@@ -99,7 +108,7 @@ class RedisDPoPNonceStore:
 
     __slots__ = ("_redis", "_ttl_seconds")
 
-    def __init__(self, redis: object, *, ttl_seconds: int = 120) -> None:
+    def __init__(self, redis: AsyncRedisSetDelete, *, ttl_seconds: int = 120) -> None:
         """Bind Redis and a bounded nonce lifetime.
 
         Raises:
@@ -123,7 +132,7 @@ class RedisDPoPNonceStore:
         nonce_text = secrets.token_urlsafe(32)
         key = f"dpop-nonce:{origin}:{jkt}:{nonce_text}"
         try:
-            created = await self._redis.set(key, "1", nx=True, ex=self._ttl_seconds)  # ty: ignore[unresolved-attribute]
+            created = await self._redis.set(key, "1", nx=True, ex=self._ttl_seconds)
         except Exception as exc:
             msg = "nonce store unavailable"
             raise RuntimeError(msg) from exc
@@ -140,8 +149,8 @@ class RedisDPoPNonceStore:
         """
         key = f"dpop-nonce:{origin}:{jkt}:{nonce}"
         try:
-            deleted = await self._redis.delete(key)  # ty: ignore[unresolved-attribute]
-        except Exception:  # ruff: ignore[blind-except] - any client/transport failure is Unavailable
+            deleted = await self._redis.delete(key)
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if deleted else ReplayOutcome.REPLAY
 

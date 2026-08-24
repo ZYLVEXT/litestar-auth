@@ -51,6 +51,47 @@ or mTLS/DPoP-bound opaque-token introspection. Sender constraints and replay pol
 specific. Principal-kind guards are invariant checks, so similar attributes cannot make a human
 credential satisfy a machine route or vice versa.
 
+## Organization administration contracts
+
+`litestar_auth.contrib.organization_admin.OrganizationAdmin` is the backend-neutral operations
+service for organization, membership, and invitation workflows. It depends only on the public
+`litestar_auth.db.BaseOrganizationStore` protocol; the SQLAlchemy adapter is one implementation,
+not part of the service contract.
+
+Invitation acceptance is deliberately one persistence operation. Every organization store must
+implement `finalize_invitation_acceptance(...)` so consuming a pending invitation and creating its
+membership either both succeed or both roll back. The service does not fall back to a split
+`consume_invitation(...)` then `add_membership(...)` sequence because that can strand a consumed
+invitation without a membership.
+
+Applications that need the canonical flat-role representation import `normalize_role_name` or
+`normalize_roles` from `litestar_auth.roles`. Both apply trim, Unicode NFKC normalization,
+lowercase conversion, deduplication, and deterministic sorting where relevant.
+
+```python
+from litestar_auth.contrib.organization_admin import OrganizationAdmin
+from litestar_auth.db import MembershipData
+from litestar_auth.roles import normalize_roles
+
+admin = OrganizationAdmin(store=organization_store)
+membership_data = MembershipData(
+    organization_id=organization_id,
+    user_id=user_id,
+    roles=normalize_roles(["Member"]),
+)
+membership = await organization_store.finalize_invitation_acceptance(
+    invitation_id,
+    consumed_at=accepted_at,
+    membership_data=membership_data,
+)
+```
+
+The store implementation owns the transaction or equivalent compare-and-set boundary behind that
+method. `None` means the invitation was no longer pending and unexpired; validation failures raise
+`ValueError`. Applications normally call `admin.accept_invitation(...)`, while custom
+registration flows may use the public store operation after performing their own authenticated
+token and invitee checks.
+
 ## Observation and message-integrity boundaries
 
 `authweave-otel` implements `SecurityObserver`; observer failures never change authentication,

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from authweave_core import SecurityOperation, SecurityOutcome, observe_security
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PublicKey,
+)
 from http_message_signatures import (
     HTTPMessageVerifier,
     HTTPSignatureKeyResolver,
@@ -84,7 +90,11 @@ class PaymentHttpSignatureVerifier:
         time_source: Callable[[], datetime] | None = None,
         observer: SecurityObserver | None = None,
     ) -> None:
-        """Bind profile policy, public keys, ownership, and nonce store."""
+        """Bind profile policy, public keys, ownership, and nonce store.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not public_keys or not bindings:
             msg = "public keys and bindings are required"
             raise ValueError(msg)
@@ -222,6 +232,9 @@ class PaymentHttpSignatureVerifier:
 
         Upstream parsers collapse duplicate keys; count top-level members so
         ``label=..., label=...`` cannot silently overwrite.
+
+        Raises:
+            HttpSignatureVerificationError: If the call cannot complete.
         """
         label = self._policy.signature_label
         if _sf_dictionary_member_count(signature_input) != 1 or _sf_dictionary_member_count(signature) != 1:
@@ -248,7 +261,11 @@ class PaymentHttpSignatureVerifier:
 
 
 def _sf_dictionary_member_count(raw: str) -> int:
-    """Count RFC 8941 dictionary members separated by top-level commas."""
+    """Count RFC 8941 dictionary members separated by top-level commas.
+
+    Returns:
+        The sf dictionary member count.
+    """
     text = raw.strip()
     if not text:
         return 0
@@ -277,5 +294,9 @@ def _sf_dictionary_member_count(raw: str) -> int:
 
 
 def _structured_field_integer(value: object) -> int | None:
-    """Accept only RFC 8941 Integer values, excluding Python ``bool``."""
+    """Accept only RFC 8941 Integer values, excluding Python ``bool``.
+
+    Returns:
+        The structured field integer.
+    """
     return value if isinstance(value, int) and not isinstance(value, bool) else None

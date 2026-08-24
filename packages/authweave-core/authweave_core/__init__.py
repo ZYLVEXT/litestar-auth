@@ -34,15 +34,21 @@ from authweave_core.observability import (
     observe_security,
 )
 from authweave_core.replay import (
+    AsyncRedisGetSet,
+    AsyncRedisSet,
+    AsyncRedisSetDelete,
     InMemoryReplayStore,
     ReplayOutcome,
     ReplayStore,
     validate_replay_key,
 )
 
-__version__ = "7.3.4"
+__version__ = "8.0.0"
 
 __all__ = (
+    "AsyncRedisGetSet",
+    "AsyncRedisSet",
+    "AsyncRedisSetDelete",
     "Authenticated",
     "AuthenticationContext",
     "AuthenticationCoordinator",

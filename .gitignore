@@ -34,3 +34,8 @@ __pycache__/
 
 # Docker reference ephemeral key material
 /docker/reference/http-signatures/_runtime/
+
+# Maintainer VVAH / agentic SAST artifacts (never publish)
+security-scan/
+security-remediation/
+run_manifest.json

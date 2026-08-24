@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._current_organization import read_scope_current_organization_context
-from litestar_auth._roles import normalize_roles
+from litestar_auth.roles import normalize_roles
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection

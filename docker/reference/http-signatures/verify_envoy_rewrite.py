@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise DPoP authentication, identity binding, and Envoy message integrity."""
-# ruff: file-ignore[f-string-in-exception, hardcoded-password-string, print, raise-vanilla-args, raw-string-in-exception, too-many-locals]
+# ruff: file-ignore[f-string-in-exception, print, raise-vanilla-args, raw-string-in-exception, too-many-locals]
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 _TARGET = "https://payments.example/v1/payments"
-_AS_TOKEN = "http://127.0.0.1:18083/oauth/token"
-_AS_TOKEN_OTHER = "http://127.0.0.1:18083/oauth/token/other"
+_AS_TOKEN = "http://127.0.0.1:18083/oauth/token"  # ruff: ignore[hardcoded-password-string] - OAuth endpoint URL, not a credential.
+_AS_TOKEN_OTHER = "http://127.0.0.1:18083/oauth/token/other"  # ruff: ignore[hardcoded-password-string] - OAuth endpoint URL, not a credential.
 _AS_TARGET = "https://as.example/oauth/token"
 _AS_TARGET_OTHER = "https://as.example/oauth/token/other"
 _ENVOY = "http://127.0.0.1:18080/v1/payments"

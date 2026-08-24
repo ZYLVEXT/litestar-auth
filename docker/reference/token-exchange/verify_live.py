@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real outbound RFC 8693 client against the HTTPS STS."""
-# ruff: file-ignore[async-function-with-timeout, hardcoded-password-string, magic-value-comparison, print, raise-vanilla-args, raw-string-in-exception]
+# ruff: file-ignore[async-function-with-timeout, magic-value-comparison, print, raise-vanilla-args, raw-string-in-exception]
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ class Verifier:
             issuer=ISSUER,
             options={"require": ["sub", "act", "iat", "nbf", "exp", "scope", "cnf", "authorization_details"]},
         )
-        member = "jkt" if token_type == "DPoP" else "x5t#S256"
+        member = "jkt" if token_type == "DPoP" else "x5t#S256"  # ruff: ignore[hardcoded-password-string] - Public OAuth token type.
         if claims["cnf"] != {member: confirmation_thumbprint} or claims["act"] != {"sub": "actor-1"}:
             raise ValueError("issued token binding mismatch")
         subject = PrincipalRef(ISSUER, claims["sub"], "service")
@@ -251,7 +251,7 @@ async def main() -> int:
         authorization_details=_payment("50.00"),
     )
     if (
-        mtls_result.token_type != "Bearer"
+        mtls_result.token_type != "Bearer"  # ruff: ignore[hardcoded-password-string] - Public OAuth token type.
         or mtls_result.context.evidence.confirmation_thumbprint != certificate_thumbprint
     ):
         raise RuntimeError("mTLS-bound exchange context mismatch")

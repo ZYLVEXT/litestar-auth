@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from litestar_auth._superuser_role import normalize_superuser_role_name
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -26,9 +28,6 @@ class RoleAdminExtension:
     def validate(context: AuthExtensionValidationContext) -> None:
         """Validate role-admin prerequisites before app startup wiring mutates state."""
         from litestar_auth._plugin.role_admin import resolve_role_model_family  # ruff: ignore[import-outside-top-level]
-        from litestar_auth._superuser_role import (  # ruff: ignore[import-outside-top-level]
-            normalize_superuser_role_name,
-        )
 
         normalize_superuser_role_name(context.config.superuser_role_name)
         resolve_role_model_family(context.user_model)

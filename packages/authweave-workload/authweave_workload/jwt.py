@@ -71,17 +71,26 @@ class TrustedIssuer:
     payment_authorization: PaymentAuthorizationPolicy | None = None
 
     def __post_init__(self) -> None:
-        """Reject broad or legacy issuer policy."""
+        """Reject broad or legacy issuer policy.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.issuer or not self.audiences:
-            raise ValueError("trusted issuer and audiences must be explicit")
+            msg = "trusted issuer and audiences must be explicit"
+            raise ValueError(msg)
         if not self.algorithms or not self.algorithms <= _ALLOWED_ALGORITHMS:
-            raise ValueError("trusted issuer algorithms must use the modern allowlist")
+            msg = "trusted issuer algorithms must use the modern allowlist"
+            raise ValueError(msg)
         if self.clock_skew < timedelta(0) or self.maximum_token_lifetime <= timedelta(0):
-            raise ValueError("JWT time policy is invalid")
+            msg = "JWT time policy is invalid"
+            raise ValueError(msg)
         if self.principal_kind == "human":
-            raise ValueError("workload JWT principals cannot use kind='human'")
+            msg = "workload JWT principals cannot use kind='human'"
+            raise ValueError(msg)
         if self.maximum_delegation_depth < 1:
-            raise ValueError("maximum_delegation_depth must be positive")
+            msg = "maximum_delegation_depth must be positive"
+            raise ValueError(msg)
 
 
 class MTLSBoundJWTProvider:
@@ -106,7 +115,11 @@ class MTLSBoundJWTProvider:
         self.event_callback = event_callback
 
     def match(self, request: RequestView) -> CredentialMatch:
-        """Own exactly one Bearer presentation and reject collisions."""
+        """Own exactly one Bearer presentation and reject collisions.
+
+        Returns:
+            The match.
+        """
         authorization = request.header_values(b"authorization")
         if not authorization:
             return CredentialMatch.NOT_APPLICABLE
@@ -139,7 +152,11 @@ class MTLSBoundJWTProvider:
         request: RequestView,
         runtime: AuthenticationRuntime,
     ) -> AuthenticationDecision:
-        """Validate access-token semantics, signature, and certificate binding."""
+        """Validate access-token semantics, signature, and certificate binding.
+
+        Returns:
+            The authenticate.
+        """
         token = _extract_token(request)
         if token is None:
             return Invalid(FailureCode.MALFORMED)
@@ -216,7 +233,9 @@ class MTLSBoundJWTProvider:
         if actor_claim is not None:
             if not self.issuer.allow_rfc8693_actor or self.delegation_policy is None:
                 return Invalid(FailureCode.INVALID)
-            from authweave_workload.delegation import map_rfc8693_actor
+            from authweave_workload.delegation import (
+                map_rfc8693_actor,
+            )
 
             delegation = map_rfc8693_actor(
                 actor_claim,

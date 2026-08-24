@@ -130,7 +130,7 @@ OrganizationData = db_module.OrganizationData
 OrganizationInvitationData = db_module.OrganizationInvitationData
 
 
-class _InMemoryOrganizationStore:
+class _InMemoryOrganizationStore:  # ruff: ignore[too-many-public-methods] - protocol fixture
     """Minimal organization store satisfying the runtime-checkable protocol."""
 
     def __init__(self, *, organization: dict[str, Any], membership: dict[str, Any]) -> None:
@@ -262,6 +262,22 @@ class _InMemoryOrganizationStore:
         if invitation_id != UUID(int=3):
             return None
         return {"id": invitation_id, "consumed_at": consumed_at, "status": "consumed"}
+
+    async def finalize_invitation_acceptance(
+        self,
+        invitation_id: UUID,
+        *,
+        consumed_at: datetime,
+        membership_data: MembershipData[UUID],
+    ) -> dict[str, Any] | None:
+        if invitation_id != UUID(int=3):
+            return None
+        return {
+            "organization_id": membership_data.organization_id,
+            "user_id": membership_data.user_id,
+            "roles": membership_data.roles,
+            "consumed_at": consumed_at,
+        }
 
 
 create_provider_oauth_controller = oauth_package_module.create_provider_oauth_controller
@@ -707,6 +723,17 @@ async def test_organization_store_contract_accepts_structural_backend() -> None:
     assert await store.list_pending_invitations(organization_id, now=invitation_data.expires_at, offset=0, limit=10)
     assert await store.revoke_invitation(UUID(int=3))
     assert await store.consume_invitation(UUID(int=3), consumed_at=invitation_data.expires_at)
+    accepted = await store.finalize_invitation_acceptance(
+        UUID(int=3),
+        consumed_at=invitation_data.expires_at,
+        membership_data=MembershipData(organization_id=organization_id, user_id=user_id, roles=["member"]),
+    )
+    assert accepted == {
+        "organization_id": organization_id,
+        "user_id": user_id,
+        "roles": ["member"],
+        "consumed_at": invitation_data.expires_at,
+    }
 
 
 def test_sqlalchemy_user_database_keeps_documented_keyword_contract() -> None:

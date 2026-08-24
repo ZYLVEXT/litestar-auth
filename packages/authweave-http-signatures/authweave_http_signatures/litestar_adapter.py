@@ -22,6 +22,9 @@ async def read_bounded_raw_body(connection: _LitestarRequest, *, maximum_bytes: 
 
     Raises:
         HttpSignatureVerificationError: If the body is incomplete or too large.
+
+    Raises:
+        ValueError: If the call cannot complete.
     """
     if maximum_bytes <= 0:
         msg = "maximum_bytes must be positive"

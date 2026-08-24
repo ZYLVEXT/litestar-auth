@@ -27,7 +27,11 @@ class HttpMessageView:
     body: bytes = field(default=b"", repr=False)
 
     def __post_init__(self) -> None:
-        """Reject empty method/target or oversized metadata."""
+        """Reject empty method/target or oversized metadata.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not self.method or not self.method.isascii() or any(ch.isspace() for ch in self.method):
             msg = "method must be non-empty printable ASCII without whitespace"
             raise ValueError(msg)
@@ -43,6 +47,9 @@ class HttpMessageView:
 
         Returns:
             The header value when present exactly once.
+
+        Raises:
+            ValueError: If the call cannot complete.
         """
         needle = name.lower()
         matches = [value for header, value in self.headers if header.lower() == needle]
@@ -85,7 +92,11 @@ class PaymentSignaturePolicy:
     signature_label: str = SIGNATURE_LABEL
 
     def __post_init__(self) -> None:
-        """Reject non-positive bounds or empty profile identity."""
+        """Reject non-positive bounds or empty profile identity.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if self.max_body_bytes <= 0 or self.max_clock_skew_seconds < 0:
             msg = "body/clock policy is invalid"
             raise ValueError(msg)
@@ -120,7 +131,11 @@ class VerifiedHttpSignature:
     body: bytes
 
     def __repr__(self) -> str:
-        """Omit raw body bytes from representations."""
+        """Omit raw body bytes from representations.
+
+        Returns:
+            The repr  .
+        """
         return (
             "VerifiedHttpSignature("
             f"key_id={self.key_id!r}, nonce=..., profile_tag={self.profile_tag!r}, "

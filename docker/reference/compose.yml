@@ -2,7 +2,7 @@ name: litestar-auth-v7-reference
 
 services:
   pki:
-    image: alpine/openssl:3.5.7@sha256:0a0b910a215ef38890e24526795f11d92c6f1016682fc4ef37fc5c44e23b758f
+    image: alpine/openssl:3.5.7@sha256:19f8eb9004a1dbaec323eed6094e9b6bcc1dbf2697ecb5fb8d2fad4e3336a8f7
     entrypoint: ["/bin/sh"]
     command: ["/config/generate-pki.sh"]
     volumes:
@@ -34,7 +34,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:8.10.0-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+    image: redis:8.10.1-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports: ["127.0.0.1:16379:6379"]
     healthcheck:
@@ -44,7 +44,7 @@ services:
       retries: 30
 
   upstream:
-    image: ghcr.io/astral-sh/uv:0.12.2-python3.14-trixie-slim@sha256:d6e6a4de8d48bb4e64bcc2e2bd1e2291fb00ee4fd07a5dcfdc4c621afddcfe75
+    image: ghcr.io/astral-sh/uv:0.12.5-python3.14-trixie-slim@sha256:dc360d7e5f968c682e8b59e83027a315a0232dead15cb9dfe3e707a12ba390e1
     depends_on:
       pki: {condition: service_completed_successfully}
     command:

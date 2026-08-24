@@ -13,8 +13,8 @@ import pytest
 from litestar.exceptions import PermissionDeniedException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
 from litestar_auth._plugin.organization_admin import _mutations as organization_mutations_module
+from litestar_auth.contrib.organization_admin import OrganizationAdmin
 from litestar_auth.contrib.organization_admin._controller import (
     OrganizationAdminAuthorizationPolicy,
     _require_global_organization_catalog_admin,
@@ -79,7 +79,7 @@ async def organization_admin_session(tmp_path: Path) -> AsyncIterator[AsyncSessi
 
 def create_admin(
     session: AsyncSession,
-) -> SQLAlchemyOrganizationAdmin[Organization, OrganizationMembership, OrganizationInvitation, UUID]:
+) -> OrganizationAdmin[Organization, OrganizationMembership, OrganizationInvitation, UUID]:
     """Create an organization admin backed by the SQLAlchemy organization store.
 
     Returns:
@@ -91,7 +91,7 @@ def create_admin(
         membership_model=OrganizationMembership,
         invitation_model=OrganizationInvitation,
     )
-    return SQLAlchemyOrganizationAdmin(store=store)
+    return OrganizationAdmin(store=store)
 
 
 def create_invitation_manager() -> BaseUserManager[User, UUID]:
@@ -508,7 +508,7 @@ async def test_organization_admin_uses_store_surface_without_duplicate_persisten
         membership_model=OrganizationMembership,
         invitation_model=OrganizationInvitation,
     )
-    admin = SQLAlchemyOrganizationAdmin(store=store)
+    admin = OrganizationAdmin(store=store)
     organization = await store.create_organization(OrganizationData(slug="store-backed", name="Store Backed"))
     user = await create_user(organization_admin_session, "org-admin-store-backed@example.com")
     membership = await store.add_membership(
@@ -732,60 +732,9 @@ async def test_accept_invitation_raises_when_finalize_returns_none(
 
     monkeypatch.setattr(
         admin.store,
-        "_finalize_invitation_acceptance",
+        "finalize_invitation_acceptance",
         AsyncMock(return_value=None),
     )
-
-    with pytest.raises(InvalidOrganizationInvitationTokenError):
-        await admin.accept_invitation(token=issue.token, user=invitee, user_manager=manager)
-
-
-async def test_accept_invitation_falls_back_when_finalize_is_unavailable(
-    organization_admin_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Non-SQLAlchemy stores without finalize still accept through consume plus add_membership."""
-    invitee = await create_user(organization_admin_session, "fallback-invitee@example.com")
-    admin = create_admin(organization_admin_session)
-    manager = create_invitation_manager()
-    organization = await admin.create_organization(slug="fallback-org", name="Fallback Org")
-    issue = await admin.invite_member(
-        organization_id=organization.id,
-        invited_email=invitee.email,
-        roles=["member"],
-        user_manager=manager,
-    )
-    monkeypatch.setattr(admin.store, "_finalize_invitation_acceptance", None)
-
-    membership = await admin.accept_invitation(token=issue.token, user=invitee, user_manager=manager)
-
-    assert membership.organization_id == organization.id
-    assert membership.user_id == invitee.id
-
-
-async def test_accept_invitation_falls_back_and_fails_when_membership_insert_rejected(
-    organization_admin_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fallback acceptance maps store membership validation failures to invitation denial."""
-    invitee = await create_user(organization_admin_session, "fallback-fail@example.com")
-    admin = create_admin(organization_admin_session)
-    manager = create_invitation_manager()
-    organization = await admin.create_organization(slug="fallback-fail-org", name="Fallback Fail Org")
-    issue = await admin.invite_member(
-        organization_id=organization.id,
-        invited_email=invitee.email,
-        roles=["member"],
-        user_manager=manager,
-    )
-    monkeypatch.setattr(admin.store, "_finalize_invitation_acceptance", None)
-
-    async def reject_membership(_data: MembershipData[UUID]) -> OrganizationMembership:
-        await asyncio.sleep(0)
-        msg = "Organization membership already exists."
-        raise ValueError(msg)
-
-    monkeypatch.setattr(admin.store, "add_membership", reject_membership)
 
     with pytest.raises(InvalidOrganizationInvitationTokenError):
         await admin.accept_invitation(token=issue.token, user=invitee, user_manager=manager)

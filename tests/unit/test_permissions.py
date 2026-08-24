@@ -30,7 +30,7 @@ from litestar_auth._permissions import (
     resolve_connection_permissions,
     set_scope_permission_resolver,
 )
-from litestar_auth._roles import normalize_role_name, normalize_roles
+from litestar_auth.roles import normalize_role_name, normalize_roles
 
 if TYPE_CHECKING:
     from litestar_auth.types import PermissionResolver

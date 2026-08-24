@@ -6,6 +6,7 @@ from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from litestar_auth._plugin import database_token as _database_token_module
 from litestar_auth._plugin.features._backends import StartupBackendInventory, StartupBackendTemplate
 from litestar_auth._plugin.features._config import (
     DatabaseTokenAuthConfig,
@@ -203,10 +204,6 @@ def _build_startup_backend_templates[UP: UserProtocol[Any], ID: Hashable](
 ) -> tuple[StartupBackendTemplate[UP, ID], ...]:
     startup_backends: tuple[StartupBackendTemplate[UP, ID], ...]
     if defaults.database_token.config is not None:
-        from litestar_auth._plugin import (  # ruff: ignore[import-outside-top-level]
-            database_token as _database_token_module,
-        )
-
         startup_backends = (
             _database_token_module._build_database_token_backend_template(  # ruff: ignore[private-member-access]
                 defaults.database_token.config,

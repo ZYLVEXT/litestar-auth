@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.oauth_encryption import OAuthTokenEncryption
 
-_OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # ruff: ignore[hardcoded-password-string]
-_OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # ruff: ignore[hardcoded-password-string]
-_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # ruff: ignore[hardcoded-password-string]
+_OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # ruff: ignore[hardcoded-password-string] - Internal state key.
+_OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # ruff: ignore[hardcoded-password-string] - Internal state key.
+_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # ruff: ignore[hardcoded-password-string] - Internal state key.
 _OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
 
 

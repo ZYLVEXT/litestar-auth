@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from authweave_core import ReplayOutcome, validate_replay_key
+from authweave_core import AsyncRedisSet, ReplayOutcome, validate_replay_key
 
 
 class RedisHttpSignatureReplayStore:
@@ -13,7 +13,7 @@ class RedisHttpSignatureReplayStore:
 
     __slots__ = ("_redis",)
 
-    def __init__(self, redis: object) -> None:
+    def __init__(self, redis: AsyncRedisSet) -> None:
         """Bind an async Redis client exposing ``set(..., nx=True, ex=...)``."""
         self._redis = redis
 
@@ -31,12 +31,12 @@ class RedisHttpSignatureReplayStore:
             msg = "ttl_seconds must be positive"
             raise ValueError(msg)
         try:
-            created = await self._redis.set(  # ty: ignore[unresolved-attribute]
+            created = await self._redis.set(
                 key,
                 "1",
                 nx=True,
                 ex=max(1, int(ttl_seconds)),
             )
-        except Exception:  # ruff: ignore[blind-except] - transport failures are Unavailable
+        except Exception:
             return ReplayOutcome.UNAVAILABLE
         return ReplayOutcome.STORED if created else ReplayOutcome.REPLAY

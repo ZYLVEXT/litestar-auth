@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "7.3.4"
+version = "8.0.0"
 description = "Opaque human sessions for Litestar on the AuthWeave authentication stack"
 readme = "README.md"
 license = "MIT"
@@ -26,11 +26,11 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
-    "authweave-core==7.3.4",
+    "authweave-core==8.0.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
-    "idna>=3.18,<4.0",
-    "pwdlib[argon2]>=0.3.0,<0.4.0",
+    "idna>=3.19,<4.0",
+    "pwdlib[argon2]>=0.3.1,<0.4.0",
     "pyjwt>=2.13.0,<3.0",
 ]
 
@@ -50,37 +50,38 @@ all = ["litestar-auth[redis,oauth,totp,jwt]"]
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1,<0.23",
-    "commitizen>=4.17.0",
+    "commitizen>=4.18.0",
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=1.4.0",
     "pytest-deadfixtures>=3.1.0",
-    "python-dotenv>=1.2.2",
+    "python-dotenv>=1.2.3",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
     "pyyaml>=6.0.3,<7.0",
-    "ruff>=0.16.1",
-    "rust-just>=1.57.0",
-    "ty>=0.0.65",
+    "ruff>=0.16.4",
+    "rust-just>=1.58.0",
+    # ty 0.0.74 mis-models valid post-definition overrides of Litestar Controller slots.
+    "ty>=0.0.73,!=0.0.74",
     "deptry>=0.25.1",
-    "prek>=0.4.11",
-    "fakeredis[lua]>=2.37.0",
+    "prek>=0.4.14",
+    "fakeredis[lua]>=2.37.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.6",
-    "pymdown-extensions>=11.0.1",
-    "zensical>=0.0.52",
+    "pymdown-extensions>=11.0.2",
+    "zensical>=0.0.57",
 ]
 reference = [
     "asyncpg>=0.31.0,<0.32",
-    "authweave-http-signatures[redis]==7.3.4",
-    "authweave-otel==7.3.4",
-    "authweave-webhooks[redis]==7.3.4",
-    "authweave-workload[all]==7.3.4",
+    "authweave-http-signatures[redis]==8.0.0",
+    "authweave-otel==8.0.0",
+    "authweave-webhooks[redis]==8.0.0",
+    "authweave-workload[all]==8.0.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<2.0",
     "opentelemetry-sdk>=1.44.0,<2.0",
-    "uvicorn>=0.52.1,<0.53",
+    "uvicorn>=0.52.4,<0.53",
 ]
 
 [tool.ty.environment]
@@ -88,8 +89,8 @@ reference = [
 python-version = "3.12"
 
 [tool.ty.src]
-# Type-check the library and tests only (exclude docs snippets and tooling).
-include = ["litestar_auth", "tests"]
+# Type-check the library, the workspace distributions, and tests (exclude docs snippets and tooling).
+include = ["litestar_auth", "tests", "packages"]
 
 [tool.deptry]
 experimental_namespace_package = true
@@ -194,118 +195,12 @@ convention = "google"
     "too-many-return-statements",
     "too-many-statements-in-try-clause",
 ]
-"packages/authweave-core/authweave_core/models.py" = ["hardcoded-password-string"]
-"packages/authweave-workload/authweave_workload/lifecycle.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "raise-vanilla-args",
-    "raw-string-in-exception",
-    "too-many-arguments",
-]
-"packages/authweave-workload/authweave_workload/models.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-]
-"packages/authweave-workload/authweave_workload/mtls.py" = [
-    "any-type",
-    "docstring-extraneous-exception",
-    "import-outside-top-level",
-    "magic-value-comparison",
-    "raise-vanilla-args",
-    "raise-within-try",
-    "raw-string-in-exception",
-    "too-many-statements-in-try-clause",
-]
-"packages/authweave-workload/authweave_workload/provider.py" = [
-    "complex-structure",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "no-self-use",
-    "too-many-return-statements",
-]
-"packages/authweave-workload/authweave_workload/stores.py" = ["undocumented-public-method"]
-"packages/authweave-workload/authweave_workload/sqlalchemy.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "raise-vanilla-args",
-    "raw-string-in-exception",
-]
-"packages/authweave-workload/authweave_workload/jwks.py" = [
-    "any-type",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "import-outside-top-level",
-    "raise-vanilla-args",
-    "raw-string-in-exception",
-    "raise-within-try",
-    "too-many-statements-in-try-clause",
-    "multiple-with-statements",
-]
-"packages/authweave-workload/authweave_workload/introspection.py" = [
-    "any-type",
-    "complex-structure",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "import-outside-top-level",
-    "multiple-with-statements",
-    "no-self-use",
-    "raise-vanilla-args",
-    "raw-string-in-exception",
-    "raise-within-try",
-    "too-many-branches",
-    "too-many-locals",
-    "too-many-return-statements",
-    "too-many-statements",
-    "too-many-statements-in-try-clause",
-    "typing-only-standard-library-import",
-]
-"packages/authweave-workload/authweave_workload/token_exchange.py" = [
-    "complex-structure",
-    "import-outside-top-level",
-    "raise-within-try",
-    "too-many-branches",
-    "too-many-statements",
-    "too-many-statements-in-try-clause",
-]
-"packages/authweave-workload/authweave_workload/spiffe.py" = [
-    "any-type",
-    "import-outside-top-level",
-]
 "packages/authweave-workload/tests/test_spiffe.py" = [
     "import-outside-top-level",
     "pytest-raises-too-broad",
     "too-many-arguments",
     "too-many-statements",
     "unused-async",
-]
-"packages/authweave-workload/authweave_workload/jwt.py" = [
-    "any-type",
-    "complex-structure",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "import-outside-top-level",
-    "no-self-use",
-    "raise-vanilla-args",
-    "raw-string-in-exception",
-    "too-many-return-statements",
-    "too-many-branches",
-    "too-many-locals",
-    "too-many-statements",
-]
-"packages/authweave-workload/authweave_workload/dpop.py" = [
-    "any-type",
-    "complex-structure",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "no-self-use",
-    "too-many-return-statements",
-    "too-many-branches",
-    "too-many-locals",
-    "too-many-statements",
-    "typing-only-standard-library-import",
-]
-"packages/authweave-workload/authweave_workload/redis_store.py" = [
-    "docstring-missing-exception",
 ]
 "packages/authweave-workload/tests/test_dpop.py" = [
     "complex-structure",
@@ -338,37 +233,6 @@ convention = "google"
     "too-many-arguments",
     "unused-async",
 ]
-"packages/authweave-workload/authweave_workload/delegation.py" = [
-    "complex-structure",
-    "docstring-missing-returns",
-    "too-many-arguments",
-    "too-many-return-statements",
-]
-"packages/authweave-webhooks/authweave_webhooks/duplicate.py" = ["docstring-missing-exception"]
-"packages/authweave-webhooks/authweave_webhooks/headers.py" = [
-    "docstring-missing-exception",
-    "typing-only-standard-library-import",
-]
-"packages/authweave-webhooks/authweave_webhooks/keys.py" = ["typing-only-first-party-import"]
-"packages/authweave-webhooks/authweave_webhooks/models.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-]
-"packages/authweave-webhooks/authweave_webhooks/redis_store.py" = ["docstring-missing-exception"]
-"packages/authweave-webhooks/authweave_webhooks/sender.py" = [
-    "docstring-missing-exception",
-    "magic-value-comparison",
-]
-"packages/authweave-webhooks/authweave_webhooks/signer.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "typing-only-third-party-import",
-]
-"packages/authweave-webhooks/authweave_webhooks/verify.py" = [
-    "docstring-missing-exception",
-    "no-self-use",
-    "too-many-arguments",
-]
 "packages/authweave-webhooks/tests/**/*.py" = [
     "any-type",
     "async-function-with-timeout",
@@ -385,33 +249,6 @@ convention = "google"
     "typing-only-standard-library-import",
     "typing-only-third-party-import",
     "undocumented-public-package",
-]
-"packages/authweave-http-signatures/authweave_http_signatures/binding.py" = ["docstring-missing-exception"]
-"packages/authweave-http-signatures/authweave_http_signatures/errors.py" = ["docstring-missing-returns"]
-"packages/authweave-http-signatures/authweave_http_signatures/litestar_adapter.py" = ["docstring-missing-exception"]
-"packages/authweave-http-signatures/authweave_http_signatures/models.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-]
-"packages/authweave-http-signatures/authweave_http_signatures/nonce.py" = ["docstring-missing-exception"]
-"packages/authweave-http-signatures/authweave_http_signatures/proxy_target.py" = ["docstring-missing-exception"]
-"packages/authweave-http-signatures/authweave_http_signatures/signer.py" = [
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "too-many-arguments",
-    "typing-only-third-party-import",
-]
-"packages/authweave-http-signatures/authweave_http_signatures/verify.py" = [
-    "any-type",
-    "complex-structure",
-    "docstring-missing-exception",
-    "docstring-missing-returns",
-    "no-self-use",
-    "too-many-arguments",
-    "too-many-locals",
-    "too-many-statements",
-    "typing-only-standard-library-import",
-    "typing-only-third-party-import",
 ]
 "packages/authweave-http-signatures/tests/test_http_signatures.py" = [
     "import-outside-top-level",
@@ -430,6 +267,126 @@ convention = "google"
 # S105: TOTP controller error-detail strings are user-facing failure messages,
 # not secrets.
 "litestar_auth/controllers/totp.py" = ["hardcoded-password-string"]
+# The bundled protocol adapters (mTLS, JWT, DPoP, introspection, token exchange) keep each
+# verification as one linear policy check: the rules below fire on that shape, on the
+# deliberately dynamic JOSE payloads, and on the framework-resolved annotations. Message
+# style and docstring sections are enforced here like everywhere else.
+"packages/authweave-core/authweave_core/observability.py" = [
+    "blind-except",
+    "too-many-arguments",
+    "unnecessary-dunder-call",
+]
+"packages/authweave-http-signatures/authweave_http_signatures/litestar_adapter.py" = ["docstring-missing-exception"]
+"packages/authweave-http-signatures/authweave_http_signatures/redis_store.py" = ["blind-except"]
+"packages/authweave-http-signatures/authweave_http_signatures/signer.py" = [
+    "too-many-arguments",
+    "typing-only-third-party-import",
+]
+"packages/authweave-http-signatures/authweave_http_signatures/verify.py" = [
+    "any-type",
+    "complex-structure",
+    "no-self-use",
+    "too-many-arguments",
+    "too-many-locals",
+    "too-many-statements",
+    "typing-only-standard-library-import",
+    "typing-only-third-party-import",
+]
+"packages/authweave-otel/authweave_otel/telemetry.py" = [
+    "private-member-access",
+    "too-many-arguments",
+]
+"packages/authweave-webhooks/authweave_webhooks/headers.py" = ["typing-only-standard-library-import"]
+"packages/authweave-webhooks/authweave_webhooks/keys.py" = ["typing-only-first-party-import"]
+"packages/authweave-webhooks/authweave_webhooks/redis_store.py" = ["blind-except"]
+"packages/authweave-webhooks/authweave_webhooks/sender.py" = [
+    "magic-value-comparison",
+    "too-many-arguments",
+]
+"packages/authweave-webhooks/authweave_webhooks/signer.py" = ["typing-only-third-party-import"]
+"packages/authweave-webhooks/authweave_webhooks/verify.py" = [
+    "no-self-use",
+    "too-many-arguments",
+]
+"packages/authweave-workload/authweave_workload/delegation.py" = [
+    "complex-structure",
+    "too-many-arguments",
+    "too-many-return-statements",
+]
+"packages/authweave-workload/authweave_workload/dpop.py" = [
+    "complex-structure",
+    "no-self-use",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-return-statements",
+]
+"packages/authweave-workload/authweave_workload/introspection.py" = [
+    "blind-except",
+    "complex-structure",
+    "import-outside-top-level",
+    "multiple-with-statements",
+    "no-self-use",
+    "raise-within-try",
+    "too-many-arguments",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-return-statements",
+    "too-many-statements",
+    "too-many-statements-in-try-clause",
+    "unused-method-argument",
+]
+"packages/authweave-workload/authweave_workload/jwks.py" = [
+    "any-type",
+    "import-outside-top-level",
+    "multiple-with-statements",
+    "raise-within-try",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-workload/authweave_workload/jwt.py" = [
+    "any-type",
+    "complex-structure",
+    "import-outside-top-level",
+    "no-self-use",
+    "too-many-branches",
+    "too-many-locals",
+    "too-many-return-statements",
+    "too-many-statements",
+]
+"packages/authweave-workload/authweave_workload/lifecycle.py" = ["too-many-arguments"]
+"packages/authweave-workload/authweave_workload/models.py" = [
+    "too-many-arguments",
+    "unnecessary-dunder-call",
+]
+"packages/authweave-workload/authweave_workload/mtls.py" = [
+    "any-type",
+    "docstring-extraneous-exception",
+    "import-outside-top-level",
+    "magic-value-comparison",
+    "raise-within-try",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-workload/authweave_workload/provider.py" = [
+    "complex-structure",
+    "no-self-use",
+    "too-many-branches",
+    "too-many-return-statements",
+]
+"packages/authweave-workload/authweave_workload/redis_store.py" = ["blind-except"]
+"packages/authweave-workload/authweave_workload/spiffe.py" = [
+    "any-type",
+    "complex-structure",
+    "import-outside-top-level",
+    "too-many-return-statements",
+]
+"packages/authweave-workload/authweave_workload/spiffe_snapshot.py" = ["import-outside-top-level"]
+"packages/authweave-workload/authweave_workload/token_exchange.py" = [
+    "import-outside-top-level",
+    "raise-within-try",
+    "too-many-statements-in-try-clause",
+]
+"packages/authweave-workload/tests/test_lifecycle_negative_matrix.py" = ["too-many-statements"]
+"packages/authweave-workload/tests/test_spiffe_snapshot.py" = ["too-many-arguments"]
+"packages/authweave-workload/tests/test_sqlalchemy_matrix.py" = ["too-many-statements"]
 "tests/**/*.py" = [
     "unused-function-argument",
     "unused-method-argument",

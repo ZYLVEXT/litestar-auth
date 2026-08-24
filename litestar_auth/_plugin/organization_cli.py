@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar.cli._utils import ClickException, Context, Group  # ruff: ignore[import-private-name]
 
+from litestar_auth._plugin.organization_admin import OrganizationAdmin
+from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
 from litestar_auth.exceptions import ConfigurationError, OrganizationAdminError
 
 if TYPE_CHECKING:
@@ -398,7 +400,7 @@ def _run_organization_cli_operation[T, ID: Hashable](
 
     async def _run() -> T:
         from litestar_auth._plugin.organization_admin import (  # ruff: ignore[import-outside-top-level]
-            SQLAlchemyOrganizationAdmin,
+            OrganizationAdmin,
         )
 
         session_context = cast("Any", context.session_maker())
@@ -406,7 +408,7 @@ def _run_organization_cli_operation[T, ID: Hashable](
             msg = "Organization admin CLI requires session_maker() to return an async context manager."
             raise ConfigurationError(msg)
         async with session_context as session:
-            admin = SQLAlchemyOrganizationAdmin(store=context.store_factory(session))
+            admin = OrganizationAdmin(store=context.store_factory(session))
             result = await operation_factory(admin)
             await session.commit()
             return result
@@ -431,19 +433,12 @@ def _run_organization_invitation_cli_operation[T, ID: Hashable](
     """
 
     async def _run() -> T:
-        from litestar_auth._plugin.organization_admin import (  # ruff: ignore[import-outside-top-level]
-            SQLAlchemyOrganizationAdmin,
-        )
-        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
-            resolve_user_manager_factory,
-        )
-
         session_context = cast("Any", context.session_maker())
         if not hasattr(session_context, "__aenter__") or not hasattr(session_context, "__aexit__"):
             msg = "Organization admin CLI requires session_maker() to return an async context manager."
             raise ConfigurationError(msg)
         async with session_context as session:
-            admin = SQLAlchemyOrganizationAdmin(store=context.store_factory(session))
+            admin = OrganizationAdmin(store=context.store_factory(session))
             user_db = context.config.resolve_user_db_factory()(session)
             user_manager = resolve_user_manager_factory(context.config)(
                 session=session,

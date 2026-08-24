@@ -33,5 +33,9 @@ class HttpSignatureVerificationError(Exception):
         super().__init__(code.value)
 
     def __repr__(self) -> str:
-        """Omit request material from representations."""
+        """Omit request material from representations.
+
+        Returns:
+            The repr  .
+        """
         return f"HttpSignatureVerificationError(code={self.code!r})"

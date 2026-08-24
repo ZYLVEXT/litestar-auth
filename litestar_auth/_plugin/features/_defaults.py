@@ -16,7 +16,7 @@ OrganizationRolePrecedence = Literal["replace", "merge"]
 type FeatureKey = Literal["database_token", "totp", "oauth", "organization"]
 type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
 
-DATABASE_TOKEN_FEATURE: FeatureKey = "database_token"  # ruff: ignore[hardcoded-password-string]
+DATABASE_TOKEN_FEATURE: FeatureKey = "database_token"  # ruff: ignore[hardcoded-password-string] - Public feature identifier.
 TOTP_FEATURE: FeatureKey = "totp"
 OAUTH_FEATURE: FeatureKey = "oauth"
 ORGANIZATION_FEATURE: FeatureKey = "organization"

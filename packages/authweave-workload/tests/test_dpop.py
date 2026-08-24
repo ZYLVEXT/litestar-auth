@@ -723,6 +723,7 @@ async def test_litestar_dpop_extension_wiring() -> None:
 
     with pytest.raises(NotAuthorizedException) as exc:
         raise_dpop_nonce_challenge("nonce-1")
+    assert exc.value.headers is not None
     assert exc.value.headers["DPoP-Nonce"] == "nonce-1"
     assert "use_dpop_nonce" in exc.value.headers["WWW-Authenticate"]
 

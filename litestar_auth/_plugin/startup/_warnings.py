@@ -8,8 +8,13 @@ from typing import TYPE_CHECKING, Any, cast
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    InMemoryJWTDenylistStore as CurrentInMemoryJWTDenylistStore,
+)
 from litestar_auth.exceptions import SecurityWarning
 from litestar_auth.ratelimit._config import warn_account_lockout_response_floor_too_low
+from litestar_auth.totp import InMemoryTotpEnrollmentStore as CurrentInMemoryTotpEnrollmentStore
+from litestar_auth.totp import InMemoryUsedTotpCodeStore as CurrentInMemoryUsedTotpCodeStore
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
@@ -111,16 +116,6 @@ def _warn_process_local_totp_stores(config: LitestarAuthConfig[Any, Any]) -> Non
     totp_config = config.totp_config
     if totp_config is None:
         return
-
-    from litestar_auth.authentication.strategy._jwt_denylist import (  # ruff: ignore[import-outside-top-level]
-        InMemoryJWTDenylistStore as CurrentInMemoryJWTDenylistStore,
-    )
-    from litestar_auth.totp import (  # ruff: ignore[import-outside-top-level]
-        InMemoryTotpEnrollmentStore as CurrentInMemoryTotpEnrollmentStore,
-    )
-    from litestar_auth.totp import (  # ruff: ignore[import-outside-top-level]
-        InMemoryUsedTotpCodeStore as CurrentInMemoryUsedTotpCodeStore,
-    )
 
     if isinstance(totp_config.totp_used_tokens_store, CurrentInMemoryUsedTotpCodeStore):
         warnings.warn(

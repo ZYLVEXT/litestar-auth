@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+)
 
 from authweave_webhooks.headers import build_signing_input, format_signature_header
 from authweave_webhooks.models import WebhookDelivery
@@ -37,14 +39,22 @@ class LocalEd25519KeyringSigner:
     __slots__ = ("_keys",)
 
     def __init__(self, keys: dict[str, Ed25519PrivateKey]) -> None:
-        """Bind opaque key references to private keys held only in memory."""
+        """Bind opaque key references to private keys held only in memory.
+
+        Raises:
+            ValueError: If the call cannot complete.
+        """
         if not keys:
             msg = "keyring must contain at least one key"
             raise ValueError(msg)
         self._keys = dict(keys)
 
     def __repr__(self) -> str:
-        """List key references without private material."""
+        """List key references without private material.
+
+        Returns:
+            The repr  .
+        """
         refs = sorted(self._keys)
         return f"LocalEd25519KeyringSigner(key_refs={refs!r})"
 

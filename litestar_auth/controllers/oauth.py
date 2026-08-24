@@ -20,6 +20,7 @@ from litestar.openapi.spec import Example
 from litestar.params import QueryParameter
 from litestar.response import Redirect, Response
 
+from litestar_auth._manager.hooks import dispatch_after_login
 from litestar_auth.controllers._oauth_assembly import (
     _build_associate_user_manager_binding,
     _build_direct_user_manager_binding,
@@ -345,7 +346,6 @@ async def _complete_login_callback[UP: UserProtocol[Any], ID: Hashable](
         )
         response = await callback_inputs.backend.login(user)
         clear_state_cookie(response)
-        from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
         await dispatch_after_login(callback_inputs.user_manager, user)
         return response
