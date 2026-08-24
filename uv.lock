@@ -164,7 +164,7 @@ wheels = [
 
 [[package]]
 name = "authweave-core"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "packages/authweave-core" }
 dependencies = [
     { name = "anyio" },
@@ -175,7 +175,7 @@ requires-dist = [{ name = "anyio", specifier = ">=4.14.2,<5.0" }]
 
 [[package]]
 name = "authweave-http-signatures"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "packages/authweave-http-signatures" }
 dependencies = [
     { name = "authweave-core" },
@@ -205,7 +205,7 @@ provides-extras = ["redis", "litestar"]
 
 [[package]]
 name = "authweave-otel"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "packages/authweave-otel" }
 dependencies = [
     { name = "authweave-core" },
@@ -228,7 +228,7 @@ dev = [{ name = "opentelemetry-sdk", specifier = ">=1.44.0,<2.0" }]
 
 [[package]]
 name = "authweave-webhooks"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "packages/authweave-webhooks" }
 dependencies = [
     { name = "authweave-core" },
@@ -258,7 +258,7 @@ provides-extras = ["redis", "httpx", "litestar"]
 
 [[package]]
 name = "authweave-workload"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "packages/authweave-workload" }
 dependencies = [
     { name = "authweave-core" },
@@ -336,8 +336,8 @@ requires-dist = [
     { name = "litestar-auth", marker = "extra == 'litestar'", editable = "." },
     { name = "pyjwt", marker = "extra == 'jwt'", specifier = ">=2.13.0,<3.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=8.1.0,<9.0" },
-    { name = "spiffe", marker = "extra == 'spiffe'", specifier = ">=0.3.0,<0.4.0" },
-    { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0.51,<3.0" },
+    { name = "spiffe", marker = "extra == 'spiffe'", specifier = ">=0.3.1,<0.4.0" },
+    { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0.52,<3.0" },
 ]
 provides-extras = ["sqlalchemy", "mtls", "jwt", "dpop", "spiffe", "introspection", "token-exchange", "redis", "litestar", "all"]
 
@@ -1076,7 +1076,7 @@ wheels = [
 
 [[package]]
 name = "litestar-auth"
-version = "7.3.4"
+version = "8.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "advanced-alchemy" },
@@ -1156,10 +1156,10 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'totp'", specifier = ">=50.0.0,<51.0" },
     { name = "httpx", marker = "extra == 'oauth'", specifier = ">=0.28.1,<1.0" },
     { name = "httpx-oauth", marker = "extra == 'oauth'", specifier = ">=0.17.0,<0.18.0" },
-    { name = "idna", specifier = ">=3.18,<4.0" },
+    { name = "idna", specifier = ">=3.19,<4.0" },
     { name = "litestar", specifier = ">=2.24.0,<3.0" },
     { name = "litestar-auth", extras = ["redis", "oauth", "totp", "jwt"], marker = "extra == 'all'" },
-    { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3.0,<0.4.0" },
+    { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3.1,<0.4.0" },
     { name = "pyjwt", specifier = ">=2.13.0,<3.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=8.1.0,<9.0" },
 ]
@@ -1168,27 +1168,27 @@ provides-extras = ["redis", "oauth", "totp", "jwt", "all"]
 [package.metadata.requires-dev]
 dev = [
     { name = "aiosqlite", specifier = ">=0.22.1,<0.23" },
-    { name = "commitizen", specifier = ">=4.17.0" },
+    { name = "commitizen", specifier = ">=4.18.0" },
     { name = "deptry", specifier = ">=0.25.1" },
-    { name = "fakeredis", extras = ["lua"], specifier = ">=2.37.0" },
+    { name = "fakeredis", extras = ["lua"], specifier = ">=2.37.1" },
     { name = "pip-audit", specifier = ">=2.10.1" },
-    { name = "prek", specifier = ">=0.4.11" },
+    { name = "prek", specifier = ">=0.4.14" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-deadfixtures", specifier = ">=3.1.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "pyyaml", specifier = ">=6.0.3,<7.0" },
-    { name = "ruff", specifier = ">=0.16.1" },
-    { name = "rust-just", specifier = ">=1.57.0" },
-    { name = "ty", specifier = ">=0.0.65,!=0.0.74" },
+    { name = "ruff", specifier = ">=0.16.4" },
+    { name = "rust-just", specifier = ">=1.58.0" },
+    { name = "ty", specifier = ">=0.0.73,!=0.0.74" },
 ]
 docs = [
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6" },
-    { name = "pymdown-extensions", specifier = ">=11.0.1" },
-    { name = "zensical", specifier = ">=0.0.52" },
+    { name = "pymdown-extensions", specifier = ">=11.0.2" },
+    { name = "zensical", specifier = ">=0.0.57" },
 ]
 reference = [
     { name = "asyncpg", specifier = ">=0.31.0,<0.32" },
@@ -1198,7 +1198,7 @@ reference = [
     { name = "authweave-workload", extras = ["all"], editable = "packages/authweave-workload" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.44.0,<2.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.44.0,<2.0" },
-    { name = "uvicorn", specifier = ">=0.52.1,<0.53" },
+    { name = "uvicorn", specifier = ">=0.52.4,<0.53" },
 ]
 
 [[package]]

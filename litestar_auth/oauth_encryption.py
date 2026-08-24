@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from litestar_auth._plugin.config import LitestarAuthConfig
 
-_OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"
+_OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # ruff: ignore[hardcoded-password-string] - Internal context key.
 _DEFAULT_OAUTH_FERNET_KEY_ID = "default"
 
 

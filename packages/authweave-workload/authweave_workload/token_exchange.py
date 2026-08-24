@@ -28,8 +28,8 @@ from authweave_workload.introspection import (
     PrivateKeyJWTClientAuth,
 )
 
-TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
-ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"  # ruff: ignore[hardcoded-password-string] - Public RFC 8693 URN.
+ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"  # ruff: ignore[hardcoded-password-string] - Public RFC 8693 URN.
 _ALGORITHMS = frozenset({"ES256", "EdDSA"})
 _PRIVATE_JWK_MEMBERS = frozenset({"d", "p", "q", "dp", "dq", "qi", "oth", "k"})
 _SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]{1,512}$")

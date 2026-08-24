@@ -36,7 +36,7 @@ _MAX_RANDOM_LENGTH = 128
 _JWT_SEPARATOR_COUNT = 2
 _JAR_TYPE = "oauth-authz-req+jwt"
 _JARM_TYPE = "oauth-authz-resp+jwt"
-_ID_TOKEN_TYPE = "JWT"
+_ID_TOKEN_TYPE = "JWT"  # ruff: ignore[hardcoded-password-string] - Public JOSE media-type label.
 _SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]{1,512}$")
 
 type FAPIPoster = Callable[

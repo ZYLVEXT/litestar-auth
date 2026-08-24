@@ -25,7 +25,7 @@ CLIENT_ID = "exchange-client"
 AUDIENCE = "backend-api"
 RESOURCE = "https://backend.example/v1/payments"
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
-ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"  # ruff: ignore[hardcoded-password-string] - Public RFC 8693 URN.
 ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 PAYMENT_TYPE = "https://zylvext.github.io/litestar-auth/schemas/payment-authorization-v1"
 CLIENT_KEY = ec.derive_private_key(13, ec.SECP256R1()).public_key()
@@ -67,12 +67,12 @@ async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         _validate_client_assertion(form["client_assertion"], endpoint)
         if endpoint == ENDPOINT:
             confirmation = {"jkt": _validate_dpop(headers["dpop"], endpoint)}
-            token_type = "DPoP"
+            token_type = "DPoP"  # ruff: ignore[hardcoded-password-string] - Public OAuth token-type label.
         else:
             if "dpop" in headers:
                 raise ValueError("mixed sender constraints")
             confirmation = {"x5t#S256": _client_certificate_thumbprint()}
-            token_type = "Bearer"
+            token_type = "Bearer"  # ruff: ignore[hardcoded-password-string] - Public OAuth token-type label.
         details = json.loads(form["authorization_details"])
         if details != [_payment("50.00")]:
             raise ValueError("authority mismatch")

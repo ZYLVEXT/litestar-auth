@@ -1,17 +1,32 @@
-## Unreleased
+## 8.0.0 (2026-08-24)
+
+### Breaking
+
+- Organization invitation acceptance now requires one atomic store operation. The previous internal
+  split fallback that consumed an invitation before creating membership was removed so a failed
+  membership insert cannot strand a consumed invitation. Custom organization stores must implement
+  `finalize_invitation_acceptance(...)` before enabling invitation-acceptance routes.
 
 ### Added
 
 - Added the backend-neutral `litestar_auth.contrib.organization_admin.OrganizationAdmin` service,
   the public `BaseOrganizationStore.finalize_invitation_acceptance(...)` atomic persistence contract,
   and public `litestar_auth.roles` normalization helpers.
+- Added structural borrowed-client protocols: `authweave_core.AsyncRedisSet`,
+  `AsyncRedisGetSet`, `AsyncRedisSetDelete`,
+  `authweave_webhooks.sender.AsyncStreamingClient`, and `AsyncStreamingResponse`.
 
-### Changed
+### Packaging
 
-- Organization invitation acceptance now requires one atomic store operation. The previous internal
-  split fallback that consumed an invitation before creating membership was removed so a failed
-  membership insert cannot strand a consumed invitation. Custom organization stores must implement
-  `finalize_invitation_acceptance(...)` before enabling invitation-acceptance routes.
+- Raised external dependency floors to the current matrix-verified release set, including IDNA
+  3.19, pwdlib 0.3.1, SQLAlchemy 2.0.52, and py-spiffe 0.3.1, and refreshed the development and
+  documentation toolchain to the versions exercised by this release.
+
+### CI
+
+- Expanded type checking to every published distribution, narrowed lint exemptions while retaining
+  repository-wide hardcoded-credential detection, and scoped Codacy fixture exclusions to the
+  analyzers that need them.
 
 ## 7.3.4 (2026-08-23)
 

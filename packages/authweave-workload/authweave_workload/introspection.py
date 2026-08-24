@@ -70,7 +70,7 @@ _THUMBPRINT_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _INACTIVE_ONLY_KEYS = frozenset({"active"})
 _SIGNED_MEDIA_TYPE = "application/token-introspection+jwt"
 _CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-_DPOP_TOKEN_TYPE = "DPoP"
+_DPOP_TOKEN_TYPE = "DPoP"  # ruff: ignore[hardcoded-password-string] - Public OAuth token-type label.
 _JOSE_ALGORITHMS = frozenset({"PS256", "ES256", "EdDSA"})
 
 type IntrospectionPoster = Callable[

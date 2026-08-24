@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "7.3.4"
+version = "8.0.0"
 description = "Opaque human sessions for Litestar on the AuthWeave authentication stack"
 readme = "README.md"
 license = "MIT"
@@ -26,11 +26,11 @@ classifiers = [
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
     "anyio>=4.14.2,<5.0",
-    "authweave-core==7.3.4",
+    "authweave-core==8.0.0",
     "litestar>=2.24.0,<3.0",
     "advanced-alchemy>=1.11.0,<2.0",
-    "idna>=3.18,<4.0",
-    "pwdlib[argon2]>=0.3.0,<0.4.0",
+    "idna>=3.19,<4.0",
+    "pwdlib[argon2]>=0.3.1,<0.4.0",
     "pyjwt>=2.13.0,<3.0",
 ]
 
@@ -50,38 +50,38 @@ all = ["litestar-auth[redis,oauth,totp,jwt]"]
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1,<0.23",
-    "commitizen>=4.17.0",
+    "commitizen>=4.18.0",
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=1.4.0",
     "pytest-deadfixtures>=3.1.0",
-    "python-dotenv>=1.2.2",
+    "python-dotenv>=1.2.3",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
     "pyyaml>=6.0.3,<7.0",
-    "ruff>=0.16.1",
-    "rust-just>=1.57.0",
+    "ruff>=0.16.4",
+    "rust-just>=1.58.0",
     # ty 0.0.74 mis-models valid post-definition overrides of Litestar Controller slots.
-    "ty>=0.0.65,!=0.0.74",
+    "ty>=0.0.73,!=0.0.74",
     "deptry>=0.25.1",
-    "prek>=0.4.11",
-    "fakeredis[lua]>=2.37.0",
+    "prek>=0.4.14",
+    "fakeredis[lua]>=2.37.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.6",
-    "pymdown-extensions>=11.0.1",
-    "zensical>=0.0.52",
+    "pymdown-extensions>=11.0.2",
+    "zensical>=0.0.57",
 ]
 reference = [
     "asyncpg>=0.31.0,<0.32",
-    "authweave-http-signatures[redis]==7.3.4",
-    "authweave-otel==7.3.4",
-    "authweave-webhooks[redis]==7.3.4",
-    "authweave-workload[all]==7.3.4",
+    "authweave-http-signatures[redis]==8.0.0",
+    "authweave-otel==8.0.0",
+    "authweave-webhooks[redis]==8.0.0",
+    "authweave-workload[all]==8.0.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<2.0",
     "opentelemetry-sdk>=1.44.0,<2.0",
-    "uvicorn>=0.52.1,<0.53",
+    "uvicorn>=0.52.4,<0.53",
 ]
 
 [tool.ty.environment]
@@ -140,7 +140,6 @@ line-ending = "auto"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    "hardcoded-password-string",  # S105 matches constant names (token/secret/key), never a real credential
     "line-too-long",  # handled by ruff-format
     "missing-trailing-comma",  # conflicts with ruff-format
     "missing-copyright-notice",
