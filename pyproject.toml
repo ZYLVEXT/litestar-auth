@@ -62,7 +62,8 @@ dev = [
     "pyyaml>=6.0.3,<7.0",
     "ruff>=0.16.1",
     "rust-just>=1.57.0",
-    "ty>=0.0.65",
+    # ty 0.0.74 mis-models valid post-definition overrides of Litestar Controller slots.
+    "ty>=0.0.65,!=0.0.74",
     "deptry>=0.25.1",
     "prek>=0.4.11",
     "fakeredis[lua]>=2.37.0",

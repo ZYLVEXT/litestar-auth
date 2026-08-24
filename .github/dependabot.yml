@@ -41,11 +41,20 @@ updates:
       interval: "weekly"
     labels:
       - "dependencies"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     groups:
       docker-compose:
         patterns:
           - "*"
         group-by: "dependency-name"
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "docker" # zizmor: ignore[dependabot-cooldown]
+    directory: "/docker/reference/token-exchange"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
