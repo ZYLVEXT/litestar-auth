@@ -42,9 +42,9 @@ class SecretWrapper:
 def test_resolve_account_token_secrets_wraps_account_token_secrets() -> None:
     """Typed manager security still resolves and wraps account-token secrets."""
     manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
-        totp_secret_key="0123456789abcdef" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
+        totp_secret_key="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
     )
 
     resolved = resolve_account_token_secrets(
@@ -53,12 +53,23 @@ def test_resolve_account_token_secrets_wraps_account_token_secrets() -> None:
         warning_stacklevel=5,
     )
 
-    assert manager_security.verification_token_secret == "0123456789abcdef" * 4
-    assert manager_security.reset_password_token_secret == "fedcba9876543210" * 4
-    assert manager_security.totp_secret_key == "0123456789abcdef" * 4
+    assert (
+        manager_security.verification_token_secret == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
+    assert (
+        manager_security.reset_password_token_secret
+        == "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+    )
+    assert manager_security.totp_secret_key == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
     assert manager_security.id_parser is None
-    assert resolved.verification_token_secret.get_secret_value() == "0123456789abcdef" * 4
-    assert resolved.reset_password_token_secret.get_secret_value() == "fedcba9876543210" * 4
+    assert (
+        resolved.verification_token_secret.get_secret_value()
+        == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
+    assert (
+        resolved.reset_password_token_secret.get_secret_value()
+        == "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+    )
 
 
 def test_manager_constructor_inputs_build_typed_defaults_without_explicit_security() -> None:
@@ -125,8 +136,8 @@ def test_manager_constructor_inputs_reuse_typed_dataclass_security_when_parser_m
     """Typed manager-security dataclasses pass through unchanged when parser wiring already matches."""
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         totp_secret_keyring=totp_keyring,
         id_parser=UUID,
     )
@@ -140,8 +151,8 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
     """Typed security dataclasses inherit the top-level parser before `security=` injection."""
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         totp_secret_keyring=totp_keyring,
     )
 
@@ -158,8 +169,8 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
     built_security = inputs.build_manager_security()
     assert built_security is not security
     assert built_security == UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         totp_secret_keyring=totp_keyring,
         id_parser=UUID,
     )
@@ -176,8 +187,8 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
 def test_manager_constructor_inputs_build_security_kwarg_from_canonical_bundle() -> None:
     """The default builder forwards the typed security bundle as one `security` kwarg."""
     security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        totp_secret_key="0123456789abcdef" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        totp_secret_key="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
     )
     inputs = ManagerConstructorInputs[UUID](
         manager_security=security,
@@ -188,9 +199,11 @@ def test_manager_constructor_inputs_build_security_kwarg_from_canonical_bundle()
 
     assert built_security is not None
     assert isinstance(built_security, UserManagerSecurity)
-    assert built_security.verification_token_secret == "0123456789abcdef" * 4
+    assert (
+        built_security.verification_token_secret == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
     assert built_security.reset_password_token_secret is None
-    assert built_security.totp_secret_key == "0123456789abcdef" * 4
+    assert built_security.totp_secret_key == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
     assert built_security.id_parser is UUID
 
     kwargs = inputs.build_kwargs()
@@ -205,7 +218,9 @@ def test_manager_constructor_inputs_build_security_kwarg_from_canonical_bundle()
 
 def test_manager_constructor_inputs_keep_single_typed_security_kwarg_when_only_one_secret_is_set() -> None:
     """Partial typed security still stays on the single `security=` contract."""
-    security = UserManagerSecurity[UUID](reset_password_token_secret="fedcba9876543210" * 4)
+    security = UserManagerSecurity[UUID](
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+    )
     inputs = ManagerConstructorInputs[UUID](
         manager_security=security,
     )

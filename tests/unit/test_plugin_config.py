@@ -99,11 +99,11 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
-VERIFICATION_SECRET = "0123456789abcdef" * 4
-RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
-TOTP_MANAGER_SECRET = "89abcdef01234567" * 4
-TOTP_PENDING_SECRET = "76543210fedcba98" * 4
-CSRF_SECRET = "456789abcdef0123" * 4
+VERIFICATION_SECRET = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+RESET_PASSWORD_SECRET = "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+TOTP_MANAGER_SECRET = "f600de12ba2a4b6600b231828d6f28f98f251278b6230e79d5aa8be0c1611f4b"
+TOTP_PENDING_SECRET = "2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
+CSRF_SECRET = "3c55c524f64d4eea26edd6ad8916b43bf8ea1eff16d6d5f208918cca38d2c68d"
 
 
 class _SharedAccountLockoutStore:
@@ -113,6 +113,11 @@ class _SharedAccountLockoutStore:
     def is_shared_across_workers(self) -> bool:
         """Whether this store is shared across workers."""
         return True
+
+    @property
+    def failure_threshold(self) -> int:
+        """Attempts admitted per window before the key is treated as locked."""
+        return 5
 
     async def register_failure(self, key: AccountLockoutKey) -> int:
         """Return a placeholder failure count."""
@@ -278,7 +283,12 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
     assert organization_config_type().role_precedence == "replace"
     assert organization_config_type().require_authorization_context is False
     assert isinstance(organization_config_type().tenant_resolver, HeaderTenantResolver)
-    assert database_token_config_type(token_hash_secret="0123456789abcdef" * 4).backend_name == "database"
+    assert (
+        database_token_config_type(
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+        ).backend_name
+        == "database"
+    )
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     with pytest.raises(ConfigurationError, match="oauth_token_encryption_key or oauth_token_encryption_keyring"):
         oauth_config_type(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
@@ -1088,7 +1098,7 @@ def test_litestar_auth_config_repr_keeps_secret_material_hidden_with_deployment_
     config = LitestarAuthConfig[ExampleUser, UUID](
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        csrf_secret="0123456789abcdef" * 4,
+        csrf_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         deployment_worker_count=2,
     )
 
@@ -1449,7 +1459,9 @@ def test_litestar_auth_config_direct_manager_paths_run_post_init_once(monkeypatc
                         strategy=build_test_redis_strategy(key_prefix="post-init-conflict"),
                     ),
                 ],
-                "database_token_auth": DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
+                "database_token_auth": DatabaseTokenAuthConfig(
+                    token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+                ),
             },
             ValueError,
             "database_token_auth",
@@ -1675,20 +1687,22 @@ def test_secret_bearing_plugin_config_repr_masks_secret_values() -> None:
         oauth_token_encryption_keyring=keyring,
         oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
-    token_config = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4)
+    token_config = DatabaseTokenAuthConfig(
+        token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
     plugin_config = _minimal_config(totp_config=totp_config)
     plugin_config.oauth_config = oauth_config
     plugin_config.database_token_auth = token_config
     plugin_config.csrf_secret = CSRF_SECRET
 
-    assert "0123456789abcdef" * 4 not in repr(totp_config)
+    assert "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe" not in repr(totp_config)
     assert current_key not in repr(keyring)
     assert old_key not in repr(keyring)
     assert current_key not in repr(oauth_config)
     assert old_key not in repr(oauth_config)
     assert OAUTH_FLOW_COOKIE_SECRET not in repr(oauth_config)
-    assert "0123456789abcdef" * 4 not in repr(token_config)
-    assert "0123456789abcdef" * 4 not in repr(plugin_config)
+    assert "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe" not in repr(token_config)
+    assert "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe" not in repr(plugin_config)
 
 
 def test_fernet_keyring_config_validates_and_masks_key_material() -> None:
@@ -1973,7 +1987,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     session_maker = assert_structural_session_factory(DummySessionMaker())
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             max_age=timedelta(minutes=5),
             refresh_max_age=timedelta(hours=12),
             token_bytes=configured_token_bytes,
@@ -1991,7 +2005,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     preset = config.database_token_auth
     assert preset is not None
     assert not hasattr(preset, "session")
-    assert preset.token_hash_secret == "0123456789abcdef" * 4
+    assert preset.token_hash_secret == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
     assert preset.max_age == timedelta(minutes=5)
     assert preset.refresh_max_age == timedelta(hours=12)
     assert preset.token_bytes == configured_token_bytes
@@ -2059,7 +2073,7 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
     """Startup-only DB-token templates carry strategy metadata without a fake session object."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -2118,7 +2132,7 @@ async def test_startup_database_token_templates_fail_closed_for_runtime_db_work(
     """Startup-only DB-token templates fail closed if callers skip request-session binding."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -2143,7 +2157,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
     """Startup-only DB-token templates reject the full runtime DB-token method surface."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -2179,7 +2193,7 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
     active_session = DummySession()
     backend = database_token_module.build_database_token_backend(
         DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
         ),
@@ -2205,7 +2219,7 @@ def test_database_token_auth_rejects_manual_backends() -> None:
     with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
         LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
-                token_hash_secret="0123456789abcdef" * 4,
+                token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             ),
             backends=[backend],
             user_model=ExampleUser,
@@ -2253,7 +2267,7 @@ def test_resolve_backends_realizes_database_token_preset_from_request_session() 
     """`resolve_backends(session)` also realizes the canonical DB-token preset."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -2323,7 +2337,7 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
     """The DB-token preset still exposes startup templates plus request-scoped runtime backends."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
         ),
@@ -2363,7 +2377,7 @@ def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_b
     """`resolve_startup_backends()` fails closed if callers mutate the config into an invalid mixed state."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -2961,7 +2975,10 @@ def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundl
     """Bundled DB-token models still trigger startup bootstrap for manual backend assembly."""
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
 
-    strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="0123456789abcdef" * 4)
+    strategy = DatabaseTokenStrategy(
+        session=cast("Any", object()),
+        token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+    )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
         transport=CookieTransport(allow_insecure_cookie_auth=True),

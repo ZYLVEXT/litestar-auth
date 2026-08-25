@@ -95,13 +95,13 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
-CSRF_SECRET = "0123456789abcdef" * 4
-TOKEN_HASH_SECRET = "fedcba9876543210" * 4
-VERIFICATION_SECRET = "89abcdef01234567" * 4
-RESET_PASSWORD_SECRET = "76543210fedcba98" * 4
-TOTP_SECRET_KEY = "456789abcdef0123" * 4
-TOTP_PENDING_SECRET = "3210fedcba987654" * 4
-TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
+CSRF_SECRET = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+TOKEN_HASH_SECRET = "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+VERIFICATION_SECRET = "f600de12ba2a4b6600b231828d6f28f98f251278b6230e79d5aa8be0c1611f4b"
+RESET_PASSWORD_SECRET = "2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
+TOTP_SECRET_KEY = "3c55c524f64d4eea26edd6ad8916b43bf8ea1eff16d6d5f208918cca38d2c68d"
+TOTP_PENDING_SECRET = "c142954c34087aa97e13db7ea134febde8648a7c477edc7bd1775dae8aa62e35"
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "4a44b7d98b52ece64b98f16368e6e5d1743493c695c966fe47da46fec8e010d0"
 
 
 def test_validation_issue_collector_formats_single_and_multiple_configuration_errors() -> None:
@@ -1403,7 +1403,14 @@ def test_validate_totp_pending_secret_config_requires_algorithm() -> None:
     config = _minimal_config()
     config.totp_config = cast(
         "Any",
-        type("Config", (), {"totp_pending_secret": "0123456789abcdef" * 4, "totp_algorithm": ""})(),
+        type(
+            "Config",
+            (),
+            {
+                "totp_pending_secret": "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+                "totp_algorithm": "",
+            },
+        )(),
     )
 
     with pytest.raises(ValueError, match="totp_algorithm must be configured"):
@@ -2437,7 +2444,7 @@ def test_validate_config_reports_totp_shape_errors_before_encryption_key_errors(
             "InvalidTotpConfig",
             (),
             {
-                "totp_pending_secret": "0123456789abcdef" * 4,
+                "totp_pending_secret": "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
                 "totp_algorithm": "",
                 "totp_used_tokens_store": object(),
                 "totp_require_replay_protection": True,

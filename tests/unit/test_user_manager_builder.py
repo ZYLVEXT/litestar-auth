@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from cryptography.fernet import Fernet
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
@@ -75,8 +77,8 @@ def _minimal_config(
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=user_manager_security
         or UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         ),
         id_parser=id_parser,
         login_identifier=login_identifier,
@@ -99,7 +101,7 @@ def test_config_module_does_not_reexport_user_manager_builder_helpers() -> None:
 
 
 def test_account_token_store_constructor_detection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replay-store injection accepts explicit/kwargs constructors and rejects unsupported shapes."""
+    """Replay-store injection requires an explicitly named parameter, not **kwargs."""
 
     class _ExplicitManager:
         def __init__(self, *, account_token_denylist_store: object) -> None:
@@ -114,7 +116,9 @@ def test_account_token_store_constructor_detection(monkeypatch: pytest.MonkeyPat
 
     accepts = user_manager_builder_module._manager_accepts_account_token_store
     assert accepts(_ExplicitManager)
-    assert accepts(_KwargsManager)
+    # A bare **kwargs can swallow the keyword without wiring the store, so it
+    # must not count as acceptance.
+    assert not accepts(_KwargsManager)
     assert not accepts(_UnsupportedManager)
     assert not accepts(None)
 
@@ -123,6 +127,52 @@ def test_account_token_store_constructor_detection(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(user_manager_builder_module.inspect, "signature", _raise_uninspectable)
     assert not accepts(_ExplicitManager)
+
+
+def test_build_kwargs_warns_when_store_cannot_be_injected_into_kwargs_only_manager() -> None:
+    """A configured store that cannot be injected emits SecurityWarning instead of silent skip."""
+
+    class _KwargsOnlyManager:
+        def __init__(self, **kwargs: object) -> None:
+            """Catch-all constructor that does not declare the replay-store parameter."""
+
+    config = _minimal_config(user_manager_class=_KwargsOnlyManager)
+    config.account_token_denylist_store = InMemoryJWTDenylistStore()
+    contract = user_manager_builder_module._DefaultUserManagerBuilderContract(
+        config=config,
+        password_helper=PasswordHelper(),
+        password_validator=None,
+        backends=(),
+    )
+
+    with pytest.warns(user_manager_builder_module.SecurityWarning, match="was NOT injected"):
+        kwargs = contract.build_kwargs()
+
+    assert "account_token_denylist_store" not in kwargs
+
+
+def test_build_kwargs_omits_store_when_none_is_configured() -> None:
+    """No store configured means neither injection nor the missing-injection warning."""
+
+    class _NoStoreParamManager:
+        def __init__(self, *, unsafe_testing: bool = False) -> None:
+            """Manager without an account_token_denylist_store parameter."""
+
+    config = _minimal_config(user_manager_class=_NoStoreParamManager)
+    config.account_token_denylist_store = None
+    contract = user_manager_builder_module._DefaultUserManagerBuilderContract(
+        config=config,
+        password_helper=PasswordHelper(),
+        password_validator=None,
+        backends=(),
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kwargs = contract.build_kwargs()
+
+    assert "account_token_denylist_store" not in kwargs
+    assert not any(issubclass(w.category, user_manager_builder_module.SecurityWarning) for w in caught)
 
 
 def test_default_builder_contract_materializes_canonical_kwargs() -> None:
@@ -138,8 +188,8 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _generate_fernet_key()})
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
@@ -171,8 +221,8 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     assert kwargs["unsafe_testing"] is False
     security = kwargs["security"]
     assert security is not None
-    assert security.verification_token_secret == "0123456789abcdef" * 4
-    assert security.reset_password_token_secret == "fedcba9876543210" * 4
+    assert security.verification_token_secret == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    assert security.reset_password_token_secret == "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
     assert security.totp_secret_keyring is totp_keyring
     assert security.id_parser is UUID
 
@@ -237,8 +287,8 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     config = _minimal_config(
         user_manager_class=_KwargsWrapperManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,

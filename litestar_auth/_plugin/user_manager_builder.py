@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass
 from functools import partial
@@ -12,7 +13,7 @@ from litestar_auth._manager.construction import BaseUserManagerConstructorKwargs
 from litestar_auth._manager.hooks import ExtensionManagerHookSubscriber, wrap_extension_manager_hook_subscriber
 from litestar_auth._plugin.config import UserManagerFactory  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -98,6 +99,16 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID: Hashable]:
             )
         ):
             constructor_kwargs["account_token_denylist_store"] = replay_store
+        elif replay_store is not None:
+            warnings.warn(
+                "account_token_denylist_store is configured but was NOT injected into the "
+                "custom user_manager_class. Injection requires an explicitly declared "
+                "'account_token_denylist_store' constructor parameter (a bare **kwargs does "
+                "not count); alternatively wire the store in a user_manager_factory. Without "
+                "it, verify/reset token replay protection stays disabled for this manager.",
+                SecurityWarning,
+                stacklevel=2,
+            )
         return constructor_kwargs
 
     @staticmethod
@@ -113,17 +124,19 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID: Hashable]:
 
 
 def _manager_accepts_account_token_store(manager_class: type[Any] | None) -> bool:
-    """Return whether a custom manager accepts the optional replay-store keyword."""
+    """Return whether a custom manager explicitly accepts the replay-store keyword.
+
+    Only a parameter literally named ``account_token_denylist_store`` counts.
+    A bare ``**kwargs`` swallows the keyword without wiring the store, which
+    would silently leave verify/reset token replay protection disabled.
+    """
     if manager_class is None:
         return False
     try:
         parameters = inspect.signature(manager_class).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(
-        parameter.name == "account_token_denylist_store" or parameter.kind is parameter.VAR_KEYWORD
-        for parameter in parameters
-    )
+    return any(parameter.name == "account_token_denylist_store" for parameter in parameters)
 
 
 def _build_default_user_manager_contract[UP: UserProtocol[Any], ID: Hashable](
