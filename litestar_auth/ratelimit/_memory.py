@@ -90,7 +90,9 @@ class InMemoryAccountLockoutStore:
             if counter is None:
                 if self._is_at_capacity_after_prune(now):
                     self._log_capacity_rejection()
-                    return self.failure_threshold
+                    # Above the threshold so register-before-verify callers
+                    # comparing count > failure_threshold also fail closed.
+                    return self.failure_threshold + 1
                 counter = _AccountLockoutCounter(count=0, expires_at=now + self.window_seconds)
                 self._counters[key] = counter
 
@@ -229,6 +231,31 @@ class InMemoryRateLimiter:
                 self._windows[key] = timestamps
 
             timestamps.append(now)
+
+    async def admit(self, key: str) -> bool:
+        """Atomically check the window and record the attempt when allowed.
+
+        Unlike separate :meth:`check` + :meth:`increment` calls, concurrent
+        admissions cannot jointly exceed ``max_attempts``.
+
+        Returns:
+            ``True`` when the attempt was recorded within the limit; ``False``
+            when the key is over the limit or the store is at capacity.
+        """
+        async with self._lock:
+            now = read_clock(self._clock)
+            self._maybe_sweep(now)
+            timestamps = self._prune(key, now)
+            if timestamps is None:
+                if self._is_at_capacity_after_prune(now):
+                    self._log_capacity_rejection()
+                    return False
+                timestamps = deque()
+                self._windows[key] = timestamps
+            if len(timestamps) >= self.max_attempts:
+                return False
+            timestamps.append(now)
+            return True
 
     async def reset(self, key: str) -> None:
         """Clear the in-memory counter for ``key``."""
