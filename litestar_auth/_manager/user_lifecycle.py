@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkabl
 from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
 from litestar_auth._manager._coercions import _as_dict, _managed_user, _require_str
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
-from litestar_auth._manager.hooks import ManagerHookBus
+from litestar_auth._manager.hooks import _UPDATE_CREDENTIAL_KEYS, ManagerHookBus
 from litestar_auth._manager.user_policy import PRIVILEGED_FIELDS as _PRIVILEGED_FIELDS
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
@@ -182,7 +182,14 @@ class UserLifecycleService[UP, ID: Hashable]:
             password_changed=password_changed,
             deactivated=update_dict.get("is_active") is False,
         )
-        await self._hook_bus.fire("after_update", updated_user, update_dict)
+        # The hook contract exposes the changed field names, not secret material:
+        # never leak password material (hashed or plain) to subscribers or
+        # their log sinks. Subscribers that care about password rotation can
+        # key off the dedicated marker.
+        hook_payload = {key: value for key, value in update_dict.items() if key not in _UPDATE_CREDENTIAL_KEYS}
+        if password_changed:
+            hook_payload["password_changed"] = True
+        await self._hook_bus.fire("after_update", updated_user, hook_payload)
         return updated_user
 
     @staticmethod

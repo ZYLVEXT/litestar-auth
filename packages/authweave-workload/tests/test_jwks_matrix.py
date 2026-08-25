@@ -87,6 +87,30 @@ async def test_jwks_unknown_kids_cannot_force_unbounded_refreshes() -> None:
         with pytest.raises(JWKSValidationError, match="unknown"):
             await client.get_key(kid, "ES256")
 
+    # Unknown kids inside the refresh cooldown never reach the fetcher.
+    assert calls == 1
+
+
+async def test_jwks_unknown_kid_refreshes_after_cooldown_for_rotation() -> None:
+    calls = 0
+    rotated_kid = "rotated"
+
+    async def fetch(_url: str, _timeout: float, _maximum_bytes: int) -> dict[str, object]:
+        nonlocal calls
+        await asyncio.sleep(0)
+        calls += 1
+        keys = [_ec_jwk()] if calls == 1 else [_ec_jwk(), _ec_jwk(kid=rotated_kid)]
+        return {"keys": keys}
+
+    client = BoundedJWKSClient(
+        url="https://issuer.test/jwks",
+        fetcher=fetch,
+        policy=JWKSCachePolicy(refresh_cooldown_seconds=0.0),
+    )
+    await client.get_key(_KID, "ES256")
+
+    # With the cooldown elapsed, a newly rotated kid triggers one refresh and resolves.
+    await client.get_key(rotated_kid, "ES256")
     assert calls == _EXPECTED_PAIR
 
 

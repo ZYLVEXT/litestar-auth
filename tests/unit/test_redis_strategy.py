@@ -272,6 +272,13 @@ def test_redis_strategy_rejects_malformed_refresh_payloads(payload: object) -> N
     assert RedisTokenStrategy._decode_refresh_payload("{") is None
 
 
+@pytest.mark.parametrize("epoch", [1e30, -1e30, float("inf"), float("nan")])
+def test_redis_strategy_rejects_out_of_range_refresh_timestamps(epoch: float) -> None:
+    """Out-of-range epoch values decode as invalid instead of raising OverflowError/OSError."""
+    payload = {"v": 1, "u": "user", "s": "session", "c": epoch, "l": None, "m": None}
+    assert RedisTokenStrategy._decode_refresh_payload(json.dumps(payload)) is None
+
+
 def test_redis_strategy_fractional_lifetime_never_expires_early(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,

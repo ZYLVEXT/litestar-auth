@@ -542,6 +542,27 @@ def test_numeric_date_negative_matrix(claims: Mapping[str, object], message: str
         )
 
 
+def test_validate_token_times_enforces_nbf_when_present() -> None:
+    """A future nbf is rejected even though decode runs with verify_nbf=False."""
+    base = {"iat": int(_NOW.timestamp()), "exp": int(_NOW.timestamp()) + 60}
+    with pytest.raises(FAPIValidationError, match="not yet valid"):
+        fapi_module._validate_token_times(
+            {**base, "nbf": int(_NOW.timestamp()) + 30},
+            now=_NOW,
+            maximum_lifetime=timedelta(minutes=10),
+            clock_skew=timedelta(0),
+            label="token",
+        )
+    # An nbf at/before now (or within skew) still validates.
+    fapi_module._validate_token_times(
+        {**base, "nbf": int(_NOW.timestamp())},
+        now=_NOW,
+        maximum_lifetime=timedelta(minutes=10),
+        clock_skew=timedelta(0),
+        label="token",
+    )
+
+
 def test_boundary_helpers_reject_ambiguous_values() -> None:
     """Boundary helpers reject malformed strings, clocks, randomness, and oversized bodies."""
     failures = (

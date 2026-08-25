@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from authweave_core import ReplayOutcome, SecurityOperation, SecurityOutcome, observe_security
@@ -38,7 +39,11 @@ class SignatureNonceGuard:
         """
         if not key_id or not nonce:
             raise HttpSignatureVerificationError(HttpSignatureFailureCode.MALFORMED)
-        key = f"http-sig:{self._profile_tag}:{key_id}:{nonce}"
+        # Hash length-prefixed parts instead of a raw ":" join: an
+        # attacker-controlled key_id containing ":" could otherwise craft
+        # colliding store keys across (key_id, nonce) pairs.
+        digest = sha256(f"{len(key_id)}:{key_id}:{nonce}".encode()).hexdigest()
+        key = f"http-sig:{self._profile_tag}:{digest}"
         with observe_security(observer, SecurityOperation.REPLAY_CHECK, profile=self._profile_tag) as observation:
             outcome = await self._store.check_and_store(key, ttl_seconds=self._ttl_seconds)
             if outcome is ReplayOutcome.STORED:

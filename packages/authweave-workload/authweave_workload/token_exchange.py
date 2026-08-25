@@ -12,6 +12,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlencode, urlsplit
 
+import anyio
+
 from authweave_workload.authorization_details import (
     PaymentAuthorizationDetail,
     PaymentAuthorizationError,
@@ -253,7 +255,7 @@ class _ParsedTokenResponse:
 class TokenExchangeClient:
     """Exchange a verified credential only for narrower configured authority."""
 
-    __slots__ = ("_dpop_nonce", "poster", "profile")
+    __slots__ = ("_dpop_nonce", "_nonce_lock", "poster", "profile")
 
     def __init__(self, profile: TokenExchangeProfile, *, poster: TokenExchangePoster | None = None) -> None:
         """Bind a profile and one bounded transport.
@@ -267,6 +269,7 @@ class TokenExchangeClient:
         self.profile = profile
         self.poster = _post_token_exchange if poster is None else poster
         self._dpop_nonce: str | None = None
+        self._nonce_lock = anyio.Lock()
 
     async def exchange(
         self,
@@ -315,29 +318,7 @@ class TokenExchangeClient:
         if actor is not None:
             form["actor_token"] = actor.token
             form["actor_token_type"] = actor.token_type
-        status, content, response_headers = await _send_exchange(
-            self.profile,
-            self.poster,
-            form,
-            now=now,
-            nonce=self._dpop_nonce,
-        )
-        _validate_response_envelope(self.profile, content, response_headers)
-        if (
-            status == _HTTP_CLIENT_ERROR
-            and isinstance(self.profile.sender_binding, DPoPTokenEndpointBinding)
-            and _parse_error(content) == _USE_DPOP_NONCE
-        ):
-            nonce = _parse_dpop_nonce(response_headers)
-            self._dpop_nonce = nonce
-            status, content, response_headers = await _send_exchange(
-                self.profile,
-                self.poster,
-                form,
-                now=now,
-                nonce=nonce,
-            )
-            _validate_response_envelope(self.profile, content, response_headers)
+        status, content, response_headers = await self._post_with_nonce_handling(form, now=now)
         if status != _HTTP_OK:
             if _HTTP_CLIENT_ERROR <= status < _HTTP_SERVER_ERROR:
                 raise TokenExchangeRejectedError(_parse_error(content))
@@ -347,8 +328,6 @@ class TokenExchangeClient:
         if "no-store" not in cache_control:
             msg = "token exchange response must be non-cacheable"
             raise TokenExchangeValidationError(msg)
-        if isinstance(self.profile.sender_binding, DPoPTokenEndpointBinding) and "dpop-nonce" in response_headers:
-            self._dpop_nonce = _parse_dpop_nonce(response_headers)
         parsed = _parse_success(
             content,
             profile=self.profile,
@@ -381,6 +360,56 @@ class TokenExchangeClient:
             expires_at=parsed.expires_at,
             context=context,
         )
+
+    async def _post_with_nonce_handling(
+        self,
+        form: dict[str, str],
+        *,
+        now: datetime,
+    ) -> tuple[int, bytes, Mapping[str, str]]:
+        """Send the exchange request, handling the DPoP ``use_dpop_nonce`` retry.
+
+        The cached server nonce is shared mutable state read before the request
+        and written after the response, so DPoP sends are serialized under a
+        lock: concurrent exchanges on one client can no longer clobber a fresh
+        nonce with a stale one or burn retries on outdated nonces.
+
+        Returns:
+            Status, body, and headers of the last transport response.
+        """
+        if not isinstance(self.profile.sender_binding, DPoPTokenEndpointBinding):
+            status, content, response_headers = await _send_exchange(
+                self.profile,
+                self.poster,
+                form,
+                now=now,
+                nonce=None,
+            )
+            _validate_response_envelope(self.profile, content, response_headers)
+            return status, content, response_headers
+        async with self._nonce_lock:
+            status, content, response_headers = await _send_exchange(
+                self.profile,
+                self.poster,
+                form,
+                now=now,
+                nonce=self._dpop_nonce,
+            )
+            _validate_response_envelope(self.profile, content, response_headers)
+            if status == _HTTP_CLIENT_ERROR and _parse_error(content) == _USE_DPOP_NONCE:
+                nonce = _parse_dpop_nonce(response_headers)
+                self._dpop_nonce = nonce
+                status, content, response_headers = await _send_exchange(
+                    self.profile,
+                    self.poster,
+                    form,
+                    now=now,
+                    nonce=nonce,
+                )
+                _validate_response_envelope(self.profile, content, response_headers)
+            if status == _HTTP_OK and "dpop-nonce" in response_headers:
+                self._dpop_nonce = _parse_dpop_nonce(response_headers)
+            return status, content, response_headers
 
 
 async def _apply_sender_binding(
