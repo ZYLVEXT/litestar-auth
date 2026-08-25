@@ -57,6 +57,20 @@ branch = true
 fail_under = 100
 show_missing = true
 
+[tool.pytest.ini_options]
+timeout = 60
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+minversion = "9.0"
+addopts = "-ra -q --strict-markers"
+filterwarnings = ["error"]
+markers = """
+    imports: mark a test as an imports test
+    integration: mark a test as an integration test
+    unit: mark a test as a unit test
+"""
+
 [tool.ty.environment]
 python-version = "3.12"
 
