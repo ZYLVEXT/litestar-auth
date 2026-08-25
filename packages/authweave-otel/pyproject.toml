@@ -1,6 +1,6 @@
 [project]
 name = "authweave-otel"
-version = "8.0.1"
+version = "8.0.2"
 description = "OpenTelemetry API-only security observability facade for the AuthWeave stack"
 readme = "README.md"
 license = "MIT"
@@ -25,7 +25,7 @@ classifiers = [
 ]
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
-    "authweave-core==8.0.1",
+    "authweave-core==8.0.2",
     "opentelemetry-api>=1.44.0,<2.0",
 ]
 
@@ -57,6 +57,20 @@ branch = true
 [tool.coverage.report]
 fail_under = 100
 show_missing = true
+
+[tool.pytest.ini_options]
+timeout = 60
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+minversion = "9.0"
+addopts = "-ra -q --strict-markers"
+filterwarnings = ["error"]
+markers = """
+    imports: mark a test as an imports test
+    integration: mark a test as an integration test
+    unit: mark a test as a unit test
+"""
 
 [tool.ty.environment]
 python-version = "3.12"

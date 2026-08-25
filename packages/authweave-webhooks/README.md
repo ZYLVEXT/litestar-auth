@@ -88,3 +88,5 @@ error messages.
 See `docs/roadmap.md`, `docs/merchant/webhooks.md`, the sender threat model, and
 ADR 0002 for key-tenancy and egress rules. Language-neutral vectors plus Python
 and dependency-free Node.js verifiers live in `docs/vectors/webhooks/v1a/`.
+
+Site docs: [webhooks how-to](https://zylvext.github.io/litestar-auth/merchant/webhooks/).

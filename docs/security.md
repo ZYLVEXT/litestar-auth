@@ -12,6 +12,14 @@ resolved before verification; duplicate or mixed presentations are rejected.
 not start another provider. Route policy permits at most one provider profile, which prevents
 authentication downgrade by construction.
 
+## Credentials
+
+Opaque browser sessions, challenge JWTs, OAuth cookies, and workload credentials are different
+artifacts. Read [credentials and tokens](credentials.md) and [secrets and stores](secrets.md)
+before configuring production.
+
+New Litestar deployments should use **8.0.1 or newer**.
+
 ## Human controls
 
 - Argon2id is the supported password hashing baseline. The default password policy accepts 15 to
@@ -154,7 +162,7 @@ network boundaries, and durable event delivery.
 
 ## Explicit removals
 
-Version 7 has no replayable login token, generic unconstrained Authorization header, user-owned
+AuthWeave has no replayable login token, generic unconstrained Authorization header, user-owned
 shared-secret credential, proprietary request-signing scheme, deprecated alias, or compatibility
 adapter for those technologies. Migrate callers to opaque human sessions or registered X.509
-workload credentials.
+workload credentials. See [migrate 6.x → 7](migration.md) and [migrate 7.x → 8](migration-v8.md).

@@ -54,3 +54,5 @@ A non-production Collector/Prometheus/Tempo/Grafana stack lives at
 `docker/reference/observability/`. Run `sh docker/reference/observability/verify.sh`
 for the synthetic smoke test and golden Prometheus name checks after the pinned
 OTel→Prometheus translation.
+
+Site docs: [AuthWeave home](https://zylvext.github.io/litestar-auth/).

@@ -1,7 +1,7 @@
 # authweave-workload
 
 Framework-neutral authentication for registered service applications and
-service, workload, or agent principals. Version 7 supports registered X.509
+service, workload, or agent principals. AuthWeave 8 supports registered X.509
 credentials, direct mTLS, mTLS-bound access tokens, DPoP-bound access tokens
 issued by an external OAuth Authorization Server, SPIFFE X.509-SVID
 resource-server verification, RFC 7662 mTLS- or DPoP-bound opaque-token introspection,
@@ -40,3 +40,7 @@ trusted TCP peer or permission-restricted Unix socket. Envoy's hex certificate
 fingerprint is normalized to canonical base64url, while revocation freshness
 comes from application-trusted CRL/control-plane metadata rather than an
 inbound request header.
+
+Docs: [workload how-to](https://zylvext.github.io/litestar-auth/merchant/dpop/),
+[credentials](https://zylvext.github.io/litestar-auth/credentials/), and
+[API reference](https://zylvext.github.io/litestar-auth/api/authweave-workload/).

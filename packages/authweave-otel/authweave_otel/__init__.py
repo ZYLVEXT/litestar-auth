@@ -31,7 +31,7 @@ from authweave_otel.privacy import (
 )
 from authweave_otel.telemetry import AuthWeaveTelemetry, KeyAgeCallback, OperationScope
 
-__version__ = "8.0.1"
+__version__ = "8.0.2"
 
 __all__ = (
     "ALLOWED_ATTRIBUTE_KEYS",

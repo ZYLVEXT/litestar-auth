@@ -1,6 +1,9 @@
-# Migration from 6.x to 7
+# Migration from 6.x to 7 (historical)
 
-Version 7 is a security-boundary release, not an in-place credential-format upgrade. Upgrade the
+> This guide covers the **6.x → 7** security-boundary cutover. Deployments already on 7.x should
+> follow [migrate 7.x → 8](migration-v8.md) instead.
+
+Version 7 was a security-boundary release, not an in-place credential-format upgrade. Upgrade the
 six lockstep workspace distributions that your deployment uses, rehearse against a copy of
 production data, and require an explicit operator decision before cutover. There is no automatic
 conversion of removed credentials.

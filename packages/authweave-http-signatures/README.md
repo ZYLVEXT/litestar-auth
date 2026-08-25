@@ -26,3 +26,5 @@ uv add authweave-http-signatures
 ```
 
 See ADR 0004 and `docs/roadmap.md`. Optional extras: `[redis]`, `[litestar]`.
+
+Site docs: [HTTP signatures](https://zylvext.github.io/litestar-auth/merchant/http-signatures/).

@@ -10,8 +10,13 @@ just test
 just docs-build
 ```
 
-Each distribution under `packages/` has an independent CI gate. Run the matching commands from the
-changed package directory (replace the placeholders with its distribution and import-package names):
+`just check` includes Ruff, ty, import-linter, documentation version-lock validation, dependency
+pin validation, and protocol vectors.
+
+Each distribution under `packages/` has an independent CI gate. Its `pyproject.toml` owns pytest
+config so the umbrella warning filters do not import `litestar_auth`. Run the matching commands
+from the changed package directory (replace the placeholders with its distribution and
+import-package names):
 
 ```bash
 uv sync --frozen --all-packages --all-extras --group dev

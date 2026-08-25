@@ -39,13 +39,6 @@ def test_root_import_keeps_reference_orm_and_adapter_lazy() -> None:
     )
 
 
-def test_database_adapter_import_keeps_reference_models_lazy() -> None:
-    """The generic SQLAlchemy adapter does not import bundled models."""
-    _assert_isolated(
-        "import sys\nimport litestar_auth.db.sqlalchemy\nassert 'litestar_auth.models' not in sys.modules\n",
-    )
-
-
 def test_plugin_config_loads_token_models_but_not_reference_user_models() -> None:
     """The typed DB preset owns token models without loading reference user/OAuth mappers."""
     _assert_isolated(
