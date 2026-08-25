@@ -42,8 +42,12 @@ async def quickstart_module(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LITESTAR_AUTH_SESSION_HASH_SECRET", "test-session-secret-1234567890-1234567890")
     monkeypatch.setenv("LITESTAR_AUTH_CSRF_SECRET", "test_CSRF-9fG2!xQ7#nM4$vB8@kL6%pR3&wT5")
-    monkeypatch.setenv("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET", "fedcba9876543210" * 4)
-    monkeypatch.setenv("LITESTAR_AUTH_VERIFY_TOKEN_SECRET", "0123456789abcdef" * 4)
+    monkeypatch.setenv(
+        "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET", "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+    )
+    monkeypatch.setenv(
+        "LITESTAR_AUTH_VERIFY_TOKEN_SECRET", "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
     sys.modules.pop(MODULE_NAME, None)
     monkeypatch.setitem(sys.modules, "aiosqlite", build_fake_aiosqlite_module())
 

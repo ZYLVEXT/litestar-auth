@@ -67,6 +67,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler, RequestHandler
     from litestar_auth.ratelimit import AuthRateLimitConfig
+    from litestar_auth.totp import UsedTotpCodeStore
     from litestar_auth.types import LoginIdentifier
 
 SELF_UPDATE_FORBIDDEN_FIELDS = _USERS_SELF_UPDATE_FORBIDDEN_FIELDS
@@ -135,6 +136,8 @@ class UsersControllerConfig[ID: Hashable]:
     unsafe_testing: bool = False
     security: Sequence[SecurityRequirement] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
+    totp_used_tokens_store: UsedTotpCodeStore | None = None
+    totp_require_replay_protection: bool = True
     admin_guards: Sequence[Guard] | None = None
 
 
@@ -153,6 +156,8 @@ class UsersControllerOptions[ID: Hashable](TypedDict, total=False):
     unsafe_testing: bool
     security: Sequence[SecurityRequirement] | None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
+    totp_used_tokens_store: UsedTotpCodeStore | None
+    totp_require_replay_protection: bool
     admin_guards: Sequence[Guard] | None
 
 
@@ -173,6 +178,8 @@ class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID: Hashable
     change_password_rate_limit_reset: RequestHandler
     unsafe_testing: bool
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
+    totp_used_tokens_store: UsedTotpCodeStore | None = None
+    totp_require_replay_protection: bool = True
     admin_guards: tuple[Guard, ...] = (is_superuser, is_human_authenticated)
 
 
@@ -281,6 +288,9 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID: Hash
                     policy=ctx.totp_stepup_policy,
                     user_manager=user_manager,
                     totp_code=totp_code,
+                    used_tokens_store=ctx.totp_used_tokens_store,
+                    require_replay_protection=ctx.totp_require_replay_protection,
+                    unsafe_testing=ctx.unsafe_testing,
                 ),
             )
         else:
@@ -487,6 +497,9 @@ async def _require_admin_mutation_step_up[UP: UsersControllerUserProtocol[Any], 
             policy=check.ctx.totp_stepup_policy,
             user_manager=cast("TotpStepUpVerifierProtocol[UP]", check.user_manager),
             totp_code=check.totp_code,
+            used_tokens_store=check.ctx.totp_used_tokens_store,
+            require_replay_protection=check.ctx.totp_require_replay_protection,
+            unsafe_testing=check.ctx.unsafe_testing,
         ),
     )
 
@@ -973,6 +986,8 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID: Hashable](
         change_password_rate_limit_reset=change_password_rate_limit_reset,
         unsafe_testing=settings.unsafe_testing,
         totp_stepup_policy=dict(settings.totp_stepup_policy),
+        totp_used_tokens_store=settings.totp_used_tokens_store,
+        totp_require_replay_protection=settings.totp_require_replay_protection,
         admin_guards=_resolve_users_admin_guards(settings),
     )
     controller_cls = _define_users_controller_class_di(ctx)
