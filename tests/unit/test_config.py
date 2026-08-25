@@ -210,18 +210,26 @@ def test_validate_secret_strength_rejects_sequential_codepoint_walk() -> None:
         validate_secret_strength(sequential_secret, label="JWT secret")
 
 
-def test_validate_secret_strength_scopes_sequential_check_to_single_span() -> None:
-    """A repeated floor-length unit is judged by the full string, not the sequential gate.
+def test_validate_secret_strength_rejects_periodic_secret_with_long_unit() -> None:
+    """A periodic secret is judged by its repeating unit regardless of unit length.
 
-    ``"0123456789abcdef" * 4`` has a high adjacent-sequential fraction, but it is a
-    repeated 16-character unit rather than one uninterrupted walk. The repeat-unit
-    entropy cap applies only below the floor, so the full-string entropy estimate
-    governs this boundary case and the single-span sequential gate does not fire.
+    ``"157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"`` previously escaped the repeat-unit entropy cap
+    because its 16-character unit met the old unit-length floor, letting the
+    inflated full-string Shannon score clear the gate. ``unit * n`` never holds
+    more material than ``unit``, so the unit's ~64 bits must fail the 128-bit
+    production floor.
     """
     repeated_unit_secret = "0123456789abcdef" * 4
 
-    assert _sequential_pair_fraction(repeated_unit_secret) >= _MAX_SEQUENTIAL_PAIR_FRACTION
-    validate_secret_strength(repeated_unit_secret, label="JWT secret")
+    assert _estimated_secret_entropy_bits(repeated_unit_secret) < MINIMUM_SECRET_ENTROPY_BITS
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        validate_secret_strength(repeated_unit_secret, label="JWT secret")
+
+
+def test_estimated_secret_entropy_keeps_nonperiodic_strings_unchanged() -> None:
+    """Non-periodic strings keep the observed-frequency estimate."""
+    random_secret = _secrets.token_hex(32)
+    assert _estimated_secret_entropy_bits(random_secret) == pytest.approx(_shannon_entropy_bits(random_secret))
 
 
 def test_validate_secret_strength_rejects_short_secret_before_entropy_check() -> None:
