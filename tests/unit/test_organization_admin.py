@@ -104,10 +104,10 @@ def create_invitation_manager() -> BaseUserManager[User, UUID]:
         AsyncMock(),
         password_helper=PasswordHelper(),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
-            organization_invitation_token_secret="c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2,
-            login_identifier_telemetry_secret="2d1236ee6fd646dcb7574a8ff916e4e2" * 2,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
+            organization_invitation_token_secret="5423d81ac7018877b7b8427a73fb13b8c857d3b46ac00c5dd5526fb66787947d",
+            login_identifier_telemetry_secret="57da1d32fe5f9bec722efcbb898f81b09cdb310ffeb3f300ac54a7af6360ad10",
             id_parser=UUID,
         ),
     )

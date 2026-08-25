@@ -20,8 +20,8 @@ from tests._helpers import ExampleUser
 
 pytestmark = pytest.mark.unit
 
-VERIFY_SECRET = "0123456789abcdef" * 4
-RESET_SECRET = "fedcba9876543210" * 4
+VERIFY_SECRET = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+RESET_SECRET = "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
 TOTP_SECRET_KEY = "test-totp-secret-key-123456789012345="
 
 

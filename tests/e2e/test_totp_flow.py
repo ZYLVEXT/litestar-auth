@@ -109,8 +109,8 @@ def app() -> Iterator[Litestar]:
         user_manager_class=TOTPUserManager,
         include_users=True,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             totp_secret_key=Fernet.generate_key().decode(),
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
@@ -198,6 +198,15 @@ async def test_totp_enable_verify_disable_flow(
         json={"pending_token": pending_payload["pending_token"], "code": "000000"},
     )
     assert invalid_verify_response.status_code == HTTP_BAD_REQUEST
+
+    # The wrong code burned the pending token (single-attempt claim);
+    # restart the handshake for the valid attempt.
+    retry_login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    assert retry_login_response.status_code == HTTP_ACCEPTED
+    pending_payload = retry_login_response.json()
 
     valid_code = _generate_totp_code(enable_payload["secret"], fixed_counter)
     verify_response = await client.post(

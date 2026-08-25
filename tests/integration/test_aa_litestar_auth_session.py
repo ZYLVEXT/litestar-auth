@@ -90,7 +90,7 @@ def _build_coexistence_app(
     auth_session = bind_auth_session_to_alchemy(alchemy_config, session_maker=session_maker)
     auth_config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             backend_name="opaque-db",
             cookie=CookieTransportConfig(allow_insecure_cookie_auth=True),
         ),
@@ -100,8 +100,8 @@ def _build_coexistence_app(
         session_scope_key=auth_session.session_scope_key,
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             id_parser=UUID,
         ),
         enable_refresh=False,

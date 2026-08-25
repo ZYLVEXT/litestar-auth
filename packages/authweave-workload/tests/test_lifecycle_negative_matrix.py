@@ -603,3 +603,35 @@ async def test_lifecycle_requires_attributed_recording_before_success() -> None:
             environment="sandbox",
             owner_ref="team",
         )
+
+
+async def test_revoke_and_rotation_survive_audit_recorder_outage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A recorder outage never masks a durable revoke; the gap is logged instead."""
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    store = MemoryStore()
+    credential = _credential(now)
+    store.credentials[credential.id] = credential
+
+    def fail_recording(_event: SecurityEvent) -> None:
+        msg = "audit unavailable"
+        raise RuntimeError(msg)
+
+    service = WorkloadLifecycleService(
+        store,
+        issuer="urn:test",
+        actor=_LIFECYCLE_ACTOR,
+        correlation_id="audit-outage",
+        event_recorder=fail_recording,
+    )
+
+    with caplog.at_level("ERROR", logger="authweave_workload.audit"):
+        revoked, event = await service.revoke_credential(credential.id, reason="operator_request", now=now)
+
+    assert revoked.status is CredentialStatus.REVOKED
+    assert store.credentials[credential.id].status is CredentialStatus.REVOKED
+    assert event.type is SecurityEventType.CREDENTIAL_REVOKED
+    assert event.actor == _LIFECYCLE_ACTOR
+    assert event.correlation_id == "audit-outage"
+    assert any(getattr(record, "event", None) == "workload_audit_record_failed" for record in caplog.records)

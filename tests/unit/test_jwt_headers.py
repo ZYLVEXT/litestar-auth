@@ -17,7 +17,7 @@ from litestar_auth._jwt_headers import (
 
 pytestmark = pytest.mark.unit
 
-_SECRET = "0123456789abcdef" * 4
+_SECRET = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
 
 
 def _payload() -> dict[str, object]:
