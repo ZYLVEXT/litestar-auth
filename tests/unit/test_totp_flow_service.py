@@ -16,6 +16,11 @@ from litestar import Request
 import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth import totp
 from litestar_auth._jwt_headers import jwt_encode_headers
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    InMemoryJWTDenylistStore,
+    JWTReplayStoreResult,
+)
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS
 from litestar_auth.exceptions import TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import SecurityWarning
@@ -35,7 +40,7 @@ build_pending_totp_client_binding = totp_flow_module.build_pending_totp_client_b
 
 pytestmark = pytest.mark.unit
 
-TOTP_PENDING_SECRET = "76543210fedcba98" * 4
+TOTP_PENDING_SECRET = "2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
 RECOVERY_LOOKUP_SECRET = b"test-recovery-code-lookup-secret"
 CLIENT_BINDING = PendingTotpClientBinding(
     client_ip_fingerprint="client-ip-fingerprint",
@@ -352,8 +357,7 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
     manager = _build_manager(user=user)
     used_tokens_store = AsyncMock()
     pending_jti_store = AsyncMock()
-    pending_jti_store.is_denied.return_value = False
-    pending_jti_store.deny.return_value = True
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=True)
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -390,10 +394,9 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
         ),
         algorithm="SHA256",
     )
-    pending_jti_store.is_denied.assert_awaited_once()
-    pending_jti_store.deny.assert_awaited_once()
-    deny_kwargs = pending_jti_store.deny.await_args.kwargs
-    assert deny_kwargs["ttl_seconds"] >= 1
+    pending_jti_store.mark_used.assert_awaited_once()
+    claim_kwargs = pending_jti_store.mark_used.await_args.kwargs
+    assert claim_kwargs["ttl_seconds"] >= JWT_TIME_CLAIM_LEEWAY_SECONDS
 
 
 async def test_authenticate_pending_login_rejects_replayed_jti() -> None:
@@ -401,7 +404,7 @@ async def test_authenticate_pending_login_rejects_replayed_jti() -> None:
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
     pending_jti_store = AsyncMock()
-    pending_jti_store.is_denied.return_value = True
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=False, rejected_as_replay=True)
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -426,6 +429,7 @@ async def test_authenticate_pending_login_rejects_invalid_totp_code() -> None:
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=InMemoryJWTDenylistStore(),
         id_parser=UUID,
     )
     pending_token = await _issue_pending_token(service, user)
@@ -452,8 +456,7 @@ async def test_authenticate_pending_login_accepts_matching_recovery_code_after_t
     )
     manager = _build_manager(user=user, recovery_code_index=recovery_code_index)
     pending_jti_store = AsyncMock()
-    pending_jti_store.is_denied.return_value = False
-    pending_jti_store.deny.return_value = True
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=True)
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -474,7 +477,7 @@ async def test_authenticate_pending_login_accepts_matching_recovery_code_after_t
 
     assert verified_user is user
     manager.consume_recovery_code_by_lookup.assert_awaited_once()
-    pending_jti_store.deny.assert_awaited_once()
+    pending_jti_store.mark_used.assert_awaited_once()
 
 
 async def test_authenticate_pending_login_rejects_consumed_matching_recovery_code() -> None:
@@ -491,6 +494,7 @@ async def test_authenticate_pending_login_rejects_consumed_matching_recovery_cod
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=InMemoryJWTDenylistStore(),
         id_parser=UUID,
     )
     service._password_helper = password_helper
@@ -546,6 +550,7 @@ async def test_authenticate_pending_login_rejects_missing_secret_after_pending_t
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=InMemoryJWTDenylistStore(),
         id_parser=UUID,
     )
     pending_token = await _issue_pending_token(service, user)
@@ -602,7 +607,7 @@ async def test_resolve_pending_login_wraps_jwt_decode_errors(
         {"sub": ""},
         {"sub": None},
         {"jti": "short"},
-        {"jti": "0123456789abcdef" * 4},
+        {"jti": "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"},
         {"exp": "not-a-datetime"},
     ],
 )
@@ -642,6 +647,7 @@ async def test_resolve_pending_login_rejects_missing_user() -> None:
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=InMemoryJWTDenylistStore(),
         id_parser=UUID,
     )
     pending_token = jwt.encode(
@@ -679,10 +685,13 @@ async def test_authenticate_pending_login_rejects_unparseable_expiration() -> No
         )
 
 
-async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pending JTIs are denylisted for the remaining token lifetime."""
+async def test_claim_pending_jti_ttl_covers_remaining_lifetime_plus_leeway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claim TTL spans the remaining token lifetime plus the JWT decode leeway."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     pending_jti_store = AsyncMock()
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=True)
     service = _service(
         _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -697,22 +706,52 @@ async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeyp
 
     monkeypatch.setattr("litestar_auth.totp_flow.datetime", FrozenDateTime)
 
-    await service._deny_pending_login(
-        PendingTotpLogin(
-            user=user,
-            pending_jti="0123456789abcdef" * 4,
-            expires_at=frozen_now + timedelta(seconds=45),
-        ),
+    await service._claim_pending_jti(
+        "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe", frozen_now + timedelta(seconds=45)
     )
 
-    pending_jti_store.deny.assert_awaited_once_with("0123456789abcdef" * 4, ttl_seconds=45)
+    pending_jti_store.mark_used.assert_awaited_once_with(
+        "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        ttl_seconds=45 + JWT_TIME_CLAIM_LEEWAY_SECONDS,
+    )
 
 
-async def test_deny_pending_login_raises_token_error_when_denylist_returns_false() -> None:
-    """Spent pending-login JTIs must not be treated as recorded when the store rejects the write."""
+async def test_claim_pending_jti_ttl_never_below_leeway_for_past_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token past ``exp`` but inside decode leeway is still claimed for the leeway window."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     pending_jti_store = AsyncMock()
-    pending_jti_store.deny.return_value = False
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=True)
+    service = _service(
+        _build_manager(user=user),
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=pending_jti_store,
+    )
+    frozen_now = datetime(2026, 3, 28, 14, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return frozen_now if tz is None else frozen_now.astimezone(tz)
+
+    monkeypatch.setattr("litestar_auth.totp_flow.datetime", FrozenDateTime)
+
+    await service._claim_pending_jti(
+        "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe", frozen_now - timedelta(seconds=10)
+    )
+
+    pending_jti_store.mark_used.assert_awaited_once_with(
+        "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        ttl_seconds=JWT_TIME_CLAIM_LEEWAY_SECONDS,
+    )
+
+
+async def test_claim_pending_jti_raises_token_error_on_capacity_pressure() -> None:
+    """A claim the store cannot record fails closed instead of proceeding unverified."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    pending_jti_store = AsyncMock()
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=False, rejected_as_replay=False)
     service = _service(
         _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -720,16 +759,68 @@ async def test_deny_pending_login_raises_token_error_when_denylist_returns_false
     )
 
     with pytest.raises(TokenError, match="Could not record pending-login JTI"):
-        await service._deny_pending_login(
-            PendingTotpLogin(
-                user=user,
-                pending_jti="0123456789abcdef" * 4,
-                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
-            ),
+        await service._claim_pending_jti(
+            "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            datetime.now(tz=UTC) + timedelta(seconds=30),
         )
 
 
-async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store(
+async def test_claim_pending_jti_falls_back_for_stores_without_mark_used() -> None:
+    """A plain JWTDenylistStore is checked then denied immediately at claim time."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+
+    class DenyOnlyStore:
+        def __init__(self) -> None:
+            self.denied: dict[str, int] = {}
+
+        async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+            self.denied[jti] = ttl_seconds
+            return True
+
+        async def is_denied(self, jti: str) -> bool:
+            return jti in self.denied
+
+    store = DenyOnlyStore()
+    service = _service(
+        _build_manager(user=user),
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=store,
+    )
+    jti = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    expires_at = datetime.now(tz=UTC) + timedelta(seconds=45)
+
+    await service._claim_pending_jti(jti, expires_at)
+    assert store.denied[jti] >= JWT_TIME_CLAIM_LEEWAY_SECONDS
+
+    with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
+        await service._claim_pending_jti(jti, expires_at)
+
+
+async def test_claim_pending_jti_fail_closed_when_fallback_deny_cannot_record() -> None:
+    """Capacity pressure on a mark_used-less store raises TokenError before login proceeds."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+
+    class FullDenyOnlyStore:
+        async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+            return False
+
+        async def is_denied(self, jti: str) -> bool:
+            return False
+
+    service = _service(
+        _build_manager(user=user),
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=FullDenyOnlyStore(),
+    )
+
+    with pytest.raises(TokenError, match="Could not record pending-login JTI"):
+        await service._claim_pending_jti(
+            "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            datetime.now(tz=UTC) + timedelta(seconds=30),
+        )
+
+
+async def test_claim_pending_jti_warns_in_unsafe_testing_without_denylist_store(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Unsafe testing logs the missing denylist backend once per service instance."""
@@ -741,23 +832,13 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
     )
     service._reset_pending_jti_warning_state()
     caplog.set_level(logging.CRITICAL, logger=totp_flow_module.logger.name)
+    jti = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    expires_at = datetime.now(tz=UTC) + timedelta(seconds=30)
 
     with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
-        await service._deny_pending_login(
-            PendingTotpLogin(
-                user=user,
-                pending_jti="0123456789abcdef" * 4,
-                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
-            ),
-        )
+        await service._claim_pending_jti(jti, expires_at)
     with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
-        await service._deny_pending_login(
-            PendingTotpLogin(
-                user=user,
-                pending_jti="0123456789abcdef" * 4,
-                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
-            ),
-        )
+        await service._claim_pending_jti(jti, expires_at)
 
     warning_records = [
         record
@@ -773,13 +854,7 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
     caplog.clear()
 
     with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
-        await service._deny_pending_login(
-            PendingTotpLogin(
-                user=user,
-                pending_jti="0123456789abcdef" * 4,
-                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
-            ),
-        )
+        await service._claim_pending_jti(jti, expires_at)
 
     assert any(
         getattr(record, "event", None) == "totp_pending_jti_dedup_disabled"
@@ -788,7 +863,7 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
     )
 
 
-async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() -> None:
+async def test_claim_pending_jti_raises_without_store_outside_unsafe_testing() -> None:
     """Production mode requires a pending-token denylist store."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     service = _service(
@@ -797,13 +872,69 @@ async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() 
     )
 
     with pytest.raises(totp_flow_module.ConfigurationError, match="Configure a JWTDenylistStore"):
-        await service._deny_pending_login(
-            PendingTotpLogin(
-                user=user,
-                pending_jti="0123456789abcdef" * 4,
-                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
-            ),
+        await service._claim_pending_jti(
+            "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            datetime.now(tz=UTC) + timedelta(seconds=30),
         )
+
+
+async def test_concurrent_pending_login_verifies_allow_exactly_one_success() -> None:
+    """Two concurrent completions of the same pending token: exactly one wins."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    service = _service(
+        manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=InMemoryJWTDenylistStore(),
+        id_parser=UUID,
+    )
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", AsyncMock(return_value=True))
+        results = await asyncio.gather(
+            *(
+                service.authenticate_pending_login(
+                    client_binding=CLIENT_BINDING,
+                    pending_token=pending_token,
+                    code="123456",
+                )
+                for _ in range(2)
+            ),
+            return_exceptions=True,
+        )
+
+    successes = [result for result in results if result is user]
+    replays = [result for result in results if isinstance(result, totp_flow_module.InvalidTotpPendingTokenError)]
+    assert len(successes) == 1
+    assert len(replays) == 1
+
+
+async def test_failed_jti_claim_never_consumes_recovery_code() -> None:
+    """When the pending JTI cannot be claimed, the recovery code is left untouched."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    pending_jti_store = AsyncMock()
+    pending_jti_store.mark_used.return_value = JWTReplayStoreResult(stored=False, rejected_as_replay=False)
+    service = _service(
+        manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=pending_jti_store,
+        id_parser=UUID,
+    )
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.raises(TokenError):
+        await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
+            pending_token=pending_token,
+            code="recovery-code",
+        )
+
+    manager.find_recovery_code_hash_by_lookup.assert_not_awaited()
+    manager.consume_recovery_code_by_lookup.assert_not_awaited()
 
 
 def test_parse_user_id_uses_configured_parser_when_present() -> None:
