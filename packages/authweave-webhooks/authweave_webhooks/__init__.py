@@ -21,7 +21,7 @@ from authweave_webhooks.models import (
 from authweave_webhooks.signer import AsyncMessageSigner, LocalEd25519KeyringSigner, create_delivery
 from authweave_webhooks.verify import StandardWebhooksVerifier
 
-__version__ = "8.0.0"
+__version__ = "8.0.1"
 
 __all__ = (
     "DEFAULT_TIMESTAMP_TOLERANCE_SECONDS",

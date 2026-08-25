@@ -1,3 +1,50 @@
+## 8.0.1 (2026-08-25)
+
+### Security
+
+- TOTP pending-login tokens are now claimed atomically (via `JWTReplayStore.mark_used` when the
+  configured `pending_jti_store` supports it) **before** any TOTP or recovery code is verified.
+  A pending token is therefore single-attempt: a wrong code burns it and the client must restart
+  the login handshake. Concurrent verifications of the same pending token can no longer both
+  succeed, and a recovery code is never consumed when the pending JTI cannot be claimed.
+- The pending-JTI claim TTL now covers the JWT decode leeway (`JWT_TIME_CLAIM_LEEWAY_SECONDS`),
+  so a token near or past `exp` that still decodes within leeway stays denied for the whole window.
+- `validate_secret_strength` now always scores an exactly periodic secret by its repeating unit,
+  regardless of the unit's length. Weak-but-long repeated secrets (for example a 16-character unit
+  repeated four times) that previously slipped past the 128-bit entropy floor are now rejected.
+- TOTP verification codes must be ASCII digits. The schema pattern uses `[0-9]{6}` instead of `\d`,
+  the verification primitive rejects non-ASCII digit codepoints, and a `TypeError` from the
+  constant-time compare is treated as a non-match instead of surfacing as a 500.
+- Step-up TOTP checks (`require_totp_stepup`) verify inline codes through the configured
+  `UsedTotpCodeStore`, so one code can no longer satisfy multiple step-ups within a TOTP window.
+  `UsersControllerConfig` gains `totp_used_tokens_store` / `totp_require_replay_protection` and the
+  plugin threads its `TotpConfig` store through automatically. With replay protection required
+  (the default) and no store configured, inline step-up codes now fail closed.
+- `always_required` step-up policy fails closed for users whose model is not TOTP-capable;
+  previously such users silently skipped enforcement.
+- Rate-limiter backends gain an atomic `admit()` and `EndpointRateLimit` gains opt-in
+  `reserve_attempts=True`, which counts each admitted request up front (zero concurrency
+  overshoot) instead of the default check-then-count-on-failure pattern. Off by default because
+  it changes window semantics from failures-only to attempts-since-last-success.
+- Account lockout registers the attempt atomically **before** password verification and rejects
+  when the count exceeds `failure_threshold` (now part of the `AccountLockoutStore` protocol);
+  concurrent bad-password attempts can no longer slip past the threshold. Successful logins
+  compensate via the existing reset; attempts against a locked key extend the lockout window.
+- The plugin injects `account_token_denylist_store` into a custom `user_manager_class` only when
+  the constructor declares that parameter explicitly; a bare `**kwargs` no longer counts, and a
+  `SecurityWarning` is emitted when a configured store cannot be injected.
+- FAPI token validation enforces `nbf` (with clock skew) when the claim is present.
+- Workload JWKS unknown-`kid` refreshes use a time-based cooldown
+  (`JWKSCachePolicy.refresh_cooldown_seconds`, default 10s) instead of a one-shot flag, and DPoP
+  token-exchange nonce handling is serialized per client instance.
+- The `after_update` manager hook payload no longer contains password material
+  (`hashed_password` and friends); subscribers get a `password_changed: True` marker instead.
+- HTTP-signature nonce store keys hash length-prefixed parts, so `key_id` values containing
+  `:` cannot collide across `(key_id, nonce)` pairs. Nonces recorded before the upgrade are
+  not recognized for one TTL window after deployment.
+- Workload credential revocation and rotation completion no longer fail when the audit recorder
+  is unavailable; the durable store mutation reports success and the audit gap is logged.
+
 ## 8.0.0 (2026-08-24)
 
 ### Breaking
