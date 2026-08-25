@@ -1,1 +1,1 @@
-"""Version 7 examples: opaque human sessions and X.509 workload authentication."""
+"""AuthWeave 8 examples: opaque human sessions and X.509 workload authentication."""

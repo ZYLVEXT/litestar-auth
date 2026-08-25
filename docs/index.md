@@ -1,29 +1,7 @@
-# Authentication stack version 7
+# AuthWeave 8
 
-Six coordinated distributions separate verified identity contracts, human/workload authentication,
-observability, and message-integrity tooling:
-
-- **authweave-core** routes one owned credential presentation to one provider and returns typed principal,
-  evidence, and decision contracts.
-- **litestar-auth** supplies Litestar's supported modern human flows through one opaque,
-  server-side cookie-session pipeline.
-- **authweave-workload** supplies X.509 service application, principal, and credential lifecycle plus
-  direct mTLS, mTLS/DPoP-bound access-token and introspection profiles, SPIFFE X.509-SVID, and strict
-  outbound token exchange.
-- **authweave-otel** supplies non-authoritative OpenTelemetry security observation.
-- **authweave-webhooks** supplies Ed25519 Standard Webhooks signing and verification.
-- **authweave-http-signatures** supplies the RFC 9530/RFC 9421 payment-message profile after machine
-  authentication.
-
-Start with the [quickstart](quickstart.md), review the [architecture](architecture.md) and
-[security posture](security.md), and use the [6.x → 7 migration guide](migration.md) before
-upgrading an existing deployment. Optional profile readiness is tracked on the
-[roadmap](roadmap.md). Merchant onboarding notes for webhooks, DPoP, HTTP Message
-Signatures, SPIFFE, and introspection live under [merchant/webhooks](merchant/webhooks.md),
-[merchant/dpop](merchant/dpop.md),
-[merchant/http-signatures](merchant/http-signatures.md),
-[merchant/spiffe](merchant/spiffe.md), and
-[merchant/introspection](merchant/introspection.md).
+Six coordinated distributions separate verified identity contracts, human and workload
+authentication, observability, and message-integrity tooling.
 
 | Need | Distribution |
 | --- | --- |
@@ -34,4 +12,33 @@ Signatures, SPIFFE, and introspection live under [merchant/webhooks](merchant/we
 | Standard Webhooks signing and verification | `authweave-webhooks` |
 | Payment HTTP Message Signatures | `authweave-http-signatures` |
 
-All distributions require Python 3.12–3.14 and use one exact lockstep version.
+Browser sessions and machine credentials stay on separate trust paths while sharing typed,
+fail-closed AuthWeave decisions. All distributions require Python 3.12–3.14 and one exact
+lockstep version.
+
+## Start here
+
+1. [Install](install.md) the distributions you need.
+2. Follow the [quickstart](quickstart.md) for an opaque cookie session.
+3. Read [credentials and tokens](credentials.md) before mixing sessions, challenge JWTs, and
+   workload credentials.
+4. Review [architecture](architecture.md) and [security posture](security.md).
+
+## Security boundary
+
+> Authentication establishes a verified principal and constraints. Your application still owns
+> tenant mapping, row-level security, resource ownership, and business authorization.
+
+AuthWeave intentionally does **not** provide unconstrained bearer login, user-owned API keys,
+shared-secret machine or request-signing credentials, an OAuth Authorization Server or STS,
+generic IAM, or production rollout automation. Token exchange is a strict client for an external
+STS; it does not operate one.
+
+New Litestar deployments should start on **8.0.1 or newer** (current lockstep includes the
+documentation and import-boundary release). See [migrate 7.x → 8](migration-v8.md).
+
+## Optional profiles
+
+Merchant onboarding notes for webhooks, DPoP, HTTP Message Signatures, SPIFFE, and introspection
+live under [Workload how-to](merchant/webhooks.md). Profile readiness is tracked on the
+[roadmap](roadmap.md).

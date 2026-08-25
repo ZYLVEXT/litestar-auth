@@ -17,3 +17,6 @@ enter/outcome/exit failures with rate-limited warnings. Implementations such as
 
 `authweave-core` performs authentication orchestration only. Applications remain responsible for
 resource authorization.
+
+Docs: [AuthWeave architecture](https://zylvext.github.io/litestar-auth/architecture/) and
+[API reference](https://zylvext.github.io/litestar-auth/api/authweave-core/).

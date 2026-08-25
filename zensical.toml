@@ -1,5 +1,5 @@
 [project]
-site_name = "litestar-auth 7"
+site_name = "litestar-auth 8"
 site_description = "Typed human and workload authentication for Python"
 site_url = "https://zylvext.github.io/litestar-auth/"
 site_author = "Vladislav Shepilov"
@@ -9,26 +9,53 @@ site_dir = "site"
 extra_css = ["stylesheets/brand.css"]
 
 nav = [
-  { "Home" = "index.md" },
-  { "Installation" = "install.md" },
-  { "Quickstart" = "quickstart.md" },
-  { "Architecture" = "architecture.md" },
-  { "Security" = "security.md" },
-  { "Deployment" = "deployment.md" },
-  { "Migration 6.x → 7" = "migration.md" },
-  { "Roadmap" = "roadmap.md" },
-  { "Releasing" = "releasing.md" },
-  { "Merchant webhooks" = "merchant/webhooks.md" },
-  { "Webhook sender threat model" = "merchant/webhook-sender-threat-model.md" },
-  { "Merchant DPoP" = "merchant/dpop.md" },
-  { "DPoP deployment profiles" = "merchant/dpop-deployment-profiles.md" },
-  { "Merchant SPIFFE" = "merchant/spiffe.md" },
-  { "Merchant introspection" = "merchant/introspection.md" },
-  { "Merchant token exchange" = "merchant/token-exchange.md" },
-  { "Payment HTTP signatures" = "merchant/http-signatures.md" },
-  { "Payment authorization details" = "merchant/authorization-details.md" },
-  { "Payment authorization schema v1" = "schemas/payment-authorization-v1.md" },
-  { "Contributing" = "contributing.md" },
+  { "Start" = [
+    { "Home" = "index.md" },
+    { "Installation" = "install.md" },
+    { "Quickstart" = "quickstart.md" },
+  ] },
+  { "Human how-to" = [
+    { "Borrowed request session" = "how-to/borrowed-session.md" },
+    { "Redis sessions and refresh" = "how-to/redis-sessions.md" },
+    { "OAuth" = "how-to/oauth.md" },
+    { "TOTP and step-up" = "how-to/totp.md" },
+    { "Organizations" = "how-to/organizations.md" },
+    { "Multi-worker stores" = "how-to/multi-worker-stores.md" },
+  ] },
+  { "Workload how-to" = [
+    { "Webhooks" = "merchant/webhooks.md" },
+    { "Webhook sender threat model" = "merchant/webhook-sender-threat-model.md" },
+    { "Webhook key compromise" = "merchant/webhook-key-compromise-runbook.md" },
+    { "DPoP" = "merchant/dpop.md" },
+    { "DPoP deployment profiles" = "merchant/dpop-deployment-profiles.md" },
+    { "SPIFFE" = "merchant/spiffe.md" },
+    { "Introspection" = "merchant/introspection.md" },
+    { "Token exchange" = "merchant/token-exchange.md" },
+    { "HTTP signatures" = "merchant/http-signatures.md" },
+    { "HTTP signature key runbook" = "merchant/http-signature-key-runbook.md" },
+    { "Payment authorization details" = "merchant/authorization-details.md" },
+    { "Payment authorization schema v1" = "schemas/payment-authorization-v1.md" },
+  ] },
+  { "Explanation" = [
+    { "Architecture" = "architecture.md" },
+    { "Credentials and tokens" = "credentials.md" },
+    { "Security" = "security.md" },
+    { "Deployment" = "deployment.md" },
+    { "Roadmap" = "roadmap.md" },
+  ] },
+  { "Reference" = [
+    { "Secrets and stores" = "secrets.md" },
+    { "API: litestar-auth" = "api/litestar-auth.md" },
+    { "API: authweave-core" = "api/authweave-core.md" },
+    { "API: authweave-workload" = "api/authweave-workload.md" },
+    { "Architecture decisions" = "adr/index.md" },
+  ] },
+  { "Operate" = [
+    { "Contributing" = "contributing.md" },
+    { "Releasing" = "releasing.md" },
+    { "Migrate 6.x → 7" = "migration.md" },
+    { "Migrate 7.x → 8" = "migration-v8.md" },
+  ] },
 ]
 
 [project.repository]
@@ -41,6 +68,9 @@ variant = "classic"
 language = "en"
 logo = "assets/litestar-auth-mark.svg"
 favicon = "assets/litestar-auth-mark.svg"
+features = [
+  "navigation.sections",
+]
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
@@ -57,3 +87,10 @@ primary = "custom"
 accent = "custom"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to light mode"
+
+[project.plugins.mkdocstrings.handlers.python]
+inventories = ["https://docs.python.org/3/objects.inv"]
+paths = [".", "packages/authweave-core", "packages/authweave-workload"]
+options.docstring_style = "google"
+options.show_source = false
+options.inherited_members = false

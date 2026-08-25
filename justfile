@@ -73,8 +73,13 @@ check:
     uv run ruff format --check .
     uv run ty check
     uv run --no-sync python scripts/validate_dependency_pins.py
+    uv run --no-sync python scripts/validate_docs_version_lock.py
     just lint-imports
     just vectors-check
+
+# Fail when user-facing docs advertise a stale AuthWeave major.
+docs-version-lock-check:
+    uv run --no-sync python scripts/validate_docs_version_lock.py
 
 # Validate immutable GitHub Action and Docker image pins.
 dependency-pins-check:

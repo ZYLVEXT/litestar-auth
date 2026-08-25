@@ -10,7 +10,8 @@ just test
 just docs-build
 ```
 
-`just check` includes Ruff, ty, import-linter, dependency pin validation, and protocol vectors.
+`just check` includes Ruff, ty, import-linter, documentation version-lock validation, dependency
+pin validation, and protocol vectors.
 
 Each distribution under `packages/` has an independent CI gate. Its `pyproject.toml` owns pytest
 config so the umbrella warning filters do not import `litestar_auth`. Run the matching commands

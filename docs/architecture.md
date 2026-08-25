@@ -1,4 +1,7 @@
-# Version 7 architecture contract
+# Architecture
+
+AuthWeave 8 keeps the same trust-boundary contract introduced for the six-distribution workspace:
+opaque human sessions, separate workload profiles, and fail-closed provider coordination.
 
 ## Package topology
 
@@ -51,11 +54,12 @@ RLS, resource ownership, and business authorization remain application-owned.
 
 ## Human and machine boundary
 
-Human routes use opaque server-side database or Redis sessions in secure cookies. Machine routes
-use exactly one configured profile: direct mTLS, mTLS-bound JWT, DPoP-bound JWT, SPIFFE X.509-SVID,
-or mTLS/DPoP-bound opaque-token introspection. Sender constraints and replay policy are profile
-specific. Principal-kind guards are invariant checks, so similar attributes cannot make a human
-credential satisfy a machine route or vice versa.
+Human routes use opaque server-side database or Redis sessions in secure cookies. Challenge JWTs
+and OAuth cookies are separate artifacts; see [credentials and tokens](credentials.md). Machine
+routes use exactly one configured profile: direct mTLS, mTLS-bound JWT, DPoP-bound JWT, SPIFFE
+X.509-SVID, or mTLS/DPoP-bound opaque-token introspection. Sender constraints and replay policy are
+profile specific. Principal-kind guards are invariant checks, so similar attributes cannot make a
+human credential satisfy a machine route or vice versa.
 
 ## Organization administration contracts
 
@@ -110,10 +114,10 @@ idempotency, or own key custody and outbound network policy.
 
 ## ADR: external Authorization Server
 
-Version 7 is an OAuth relying party and Resource Server, not an Authorization
-Server. Human OAuth uses Authorization Code with PKCE. mTLS-bound workload access tokens come from
-an explicitly trusted external issuer and are verified against the documented RFC 9068/RFC 8705
-profile; DPoP-bound access tokens use the separate RFC 9449 profile.
+AuthWeave is an OAuth relying party and Resource Server, not an Authorization Server. Human OAuth
+uses Authorization Code with PKCE. mTLS-bound workload access tokens come from an explicitly trusted
+external issuer and are verified against the documented RFC 9068/RFC 8705 profile; DPoP-bound access
+tokens use the separate RFC 9449 profile.
 
 `authweave-workload` also provides bounded Resource Server integrations for opaque-token
 introspection, DPoP, SPIFFE identity, and certificate-bound access tokens. Its RFC 8693 token
@@ -128,8 +132,8 @@ authentication, certificate lifecycle, and verified request context.
 
 ## Removed profiles
 
-Version 7 deliberately has no deprecated aliases, request-authentication
-bearer strategy, user-owned API key, proprietary HMAC request signing, ordered
-compatibility authenticator, or `None`-based failure path. The migration guide
-and read-only removal audit are the only compatibility aids; runtime adapters
-for removed profiles do not exist.
+AuthWeave deliberately has no deprecated aliases, request-authentication bearer strategy,
+user-owned API key, proprietary HMAC request signing, ordered compatibility authenticator, or
+`None`-based failure path. The [6.x → 7 migration guide](migration.md), [7.x → 8 migration
+guide](migration-v8.md), and read-only removal audit are the only compatibility aids; runtime
+adapters for removed profiles do not exist.

@@ -1,3 +1,24 @@
+## 8.0.2 (2026-08-25)
+
+### Documentation
+
+- Rebuilt the documentation site around Diátaxis navigation (Start, Human how-to, Workload how-to,
+  Explanation, Reference, Operate) and locked user-facing branding to AuthWeave / litestar-auth **8**.
+- Added canonical [credentials and tokens](docs/credentials.md) and
+  [secrets and stores](docs/secrets.md) pages; split the quickstart from advanced how-tos
+  (borrowed session, Redis/refresh, OAuth, TOTP, organizations, multi-worker stores).
+- Added [migrate 7.x → 8](docs/migration-v8.md); marked 6.x → 7 as historical.
+- Restored a narrow mkdocstrings API reference for `litestar-auth`, `authweave-core`, and
+  `authweave-workload`.
+- Added `scripts/validate_docs_version_lock.py` to `just check` so README / site_name / key docs
+  cannot drift back to “Version 7” product branding.
+
+### CI
+
+- Enforced AuthWeave import boundaries with import-linter (`just lint-imports` / `just check`).
+- Gave each workspace distribution its own pytest config so package coverage gates do not import
+  `litestar_auth`.
+
 ## 8.0.1 (2026-08-25)
 
 ### Security

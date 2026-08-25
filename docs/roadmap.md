@@ -1,6 +1,7 @@
 # AuthWeave optional-profile readiness
 
-Public status for machine-authentication and message-integrity profiles shipped in the v7 workspace.
+Public status for machine-authentication and message-integrity profiles in the AuthWeave 8
+workspace. CI evidence establishes library readiness only, not certification of a deployment.
 
 ## Current readiness
 
