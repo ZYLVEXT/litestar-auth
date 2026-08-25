@@ -170,7 +170,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             reset_password_token_secret="reset-password-secret-1234567890-1234567890",
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,

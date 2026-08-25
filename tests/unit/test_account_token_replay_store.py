@@ -52,6 +52,18 @@ async def test_in_memory_store_discards_expired_denials(monkeypatch: pytest.Monk
     assert store._denylisted_until == {}
 
 
+async def test_in_memory_store_is_denied_reports_missing_and_active_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lookup distinguishes unknown JTIs from still-active denials."""
+    store = InMemoryJWTDenylistStore()
+    monkeypatch.setattr(jwt_denylist_module.time, "time", lambda: 10.0)
+
+    assert await store.is_denied("missing") is False
+    store._denylisted_until["active"] = 20.0
+    assert await store.is_denied("active") is True
+
+
 async def test_in_memory_store_allows_one_concurrent_consumer() -> None:
     """Only one concurrent consumer records a single-use token."""
     store = InMemoryJWTDenylistStore()

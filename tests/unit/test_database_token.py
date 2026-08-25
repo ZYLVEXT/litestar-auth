@@ -51,12 +51,14 @@ def test_public_build_database_token_backend_uses_module_local_builder(
 
     monkeypatch.setattr(database_token_module, "_build_database_token_backend", _spy)
     backend = database_token_module.build_database_token_backend(
-        DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
+        DatabaseTokenAuthConfig(token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"),
         session=cast("AsyncSession", active_session),
         unsafe_testing=True,
     )
     assert len(calls) == 1
-    assert cast("Any", calls[0][0]).token_hash_secret == "0123456789abcdef" * 4
+    assert (
+        cast("Any", calls[0][0]).token_hash_secret == "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+    )
     assert calls[0][1] is active_session
     assert calls[0][2] is True
     assert backend.name == "database"
@@ -65,7 +67,9 @@ def test_public_build_database_token_backend_uses_module_local_builder(
 
 def test_build_database_token_backend_template_and_internal_builder() -> None:
     """Startup template and internal builder materialize expected backend shapes."""
-    auth = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4, backend_name="dbtok")
+    auth = DatabaseTokenAuthConfig(
+        token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe", backend_name="dbtok"
+    )
     template = database_token_module._build_database_token_backend_template(
         auth,
         unsafe_testing=True,
@@ -90,7 +94,7 @@ def test_build_database_token_backend_template_and_internal_builder() -> None:
 
 async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
     """Startup-only strategies reject token operations until session binding."""
-    auth = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4)
+    auth = DatabaseTokenAuthConfig(token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe")
     strategy = cast(
         "Any",
         database_token_module._build_startup_only_database_token_strategy(
@@ -119,7 +123,7 @@ async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
 
 def test_startup_only_strategy_with_session_returns_runtime_strategy() -> None:
     """``with_session`` yields a normal session-bound strategy."""
-    auth = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4)
+    auth = DatabaseTokenAuthConfig(token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe")
     strategy = cast(
         "Any",
         database_token_module._build_startup_only_database_token_strategy(
@@ -136,7 +140,7 @@ def test_lazy_introspection_helpers() -> None:
     """Bundled-model and isinstance helpers match the lazy-import contract."""
     strategy = DatabaseTokenStrategy(
         session=cast("Any", DummySession()),
-        token_hash_secret="0123456789abcdef" * 4,
+        token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
     )
     assert database_token_module._is_database_token_strategy_instance(strategy) is True
     assert database_token_module._is_bundled_token_model(AccessToken, attribute_name="AccessToken") is True
@@ -153,14 +157,16 @@ def test_lazy_introspection_helpers() -> None:
 
     session_maker = assert_structural_session_factory(DummySessionMaker())
     preset = LitestarAuthConfig[ExampleUser, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+        ),
         session_maker=cast("Any", session_maker),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         ),
     )
     assert database_token_module._uses_bundled_database_token_models(preset) is True

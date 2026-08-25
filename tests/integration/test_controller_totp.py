@@ -159,8 +159,8 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         password_helper: PasswordHelper,
-        verification_token_secret: str = "0123456789abcdef" * 4,
-        reset_password_token_secret: str = "fedcba9876543210" * 4,
+        verification_token_secret: str = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret: str = "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         *,
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
@@ -1508,7 +1508,7 @@ async def test_verify_with_valid_code_sets_redis_backed_stepup_marker(async_fake
     """Public TOTP verify records recent verification state in the configured Redis token strategy."""
     redis_strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret="0123456789abcdef" * 4,
+        token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
         subject_decoder=UUID,
     )
     app, _user_db, _strategy, user_manager = build_app(strategy=redis_strategy)
@@ -1556,7 +1556,7 @@ async def test_verify_recovery_code_stepup_marker_respects_downgrade_flag(
     """Recovery-code login only records a step-up marker when explicitly allowed."""
     redis_strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret="fedcba9876543210" * 4,
+        token_hash_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         subject_decoder=UUID,
     )
     app, _user_db, _strategy, user_manager = build_app(
@@ -1653,9 +1653,15 @@ async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_to
         "/auth/2fa/verify",
         json={"pending_token": second_pending_resp.json()["pending_token"], "code": recovery_code},
     )
+    # The failed reuse attempt burned the second pending token (single-attempt
+    # claim), so the wrong-code comparison needs a fresh handshake.
+    third_pending_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
     wrong_code_verify = await client.post(
         "/auth/2fa/verify",
-        json={"pending_token": second_pending_resp.json()["pending_token"], "code": "000000"},
+        json={"pending_token": third_pending_resp.json()["pending_token"], "code": "000000"},
     )
     assert second_verify.status_code == HTTP_BAD_REQUEST
     assert wrong_code_verify.status_code == HTTP_BAD_REQUEST
@@ -2447,7 +2453,7 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path(async_fakeredis:
         transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=RedisTokenStrategy[ExampleUser, UUID](
             redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-            token_hash_secret="0123456789abcdef" * 4,
+            token_hash_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
             subject_decoder=UUID,
         ),
     )
@@ -2461,8 +2467,8 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path(async_fakeredis:
                     user_manager_class=PluginUserManager,
                     user_db_factory=lambda _session: user_db,
                     user_manager_security=UserManagerSecurity[UUID](
-                        verification_token_secret="0123456789abcdef" * 4,
-                        reset_password_token_secret="fedcba9876543210" * 4,
+                        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+                        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
                         totp_secret_key=Fernet.generate_key().decode(),
                         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
                         id_parser=UUID,
@@ -2539,7 +2545,7 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment(async_fakeredis:
         transport=CookieTransport(allow_insecure_cookie_auth=True),
         strategy=RedisTokenStrategy[ExampleUser, UUID](
             redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-            token_hash_secret="fedcba9876543210" * 4,
+            token_hash_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             subject_decoder=UUID,
         ),
     )
@@ -2553,8 +2559,8 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment(async_fakeredis:
                     user_manager_class=PluginUserManager,
                     user_db_factory=lambda _session: user_db,
                     user_manager_security=UserManagerSecurity[UUID](
-                        verification_token_secret="0123456789abcdef" * 4,
-                        reset_password_token_secret="fedcba9876543210" * 4,
+                        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+                        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
                         totp_secret_key=Fernet.generate_key().decode(),
                         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
                         id_parser=UUID,
@@ -3074,6 +3080,15 @@ async def test_pending_login_does_not_issue_backend_token_before_totp_verify() -
         assert invalid_verify.status_code == HTTP_BAD_REQUEST
         assert strategy.tokens == {initial_token: user.id}
 
+        # A wrong code burns the pending token (single-attempt claim); the
+        # handshake must be restarted for a valid attempt.
+        retry_login = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert retry_login.status_code == HTTP_ACCEPTED
+        pending_token = retry_login.json()["pending_token"]
+
         valid_verify = await client.post(
             "/auth/2fa/verify",
             json={"pending_token": pending_token, "code": _generate_totp_code(secret, _current_counter())},
@@ -3495,8 +3510,8 @@ async def test_verify_accepts_datetime_expiration_payload(
         )
 
     assert resp.status_code == HTTP_CREATED
-    assert deny_store.deny.await_count == 1
-    assert deny_store.deny.await_args.kwargs["ttl_seconds"] >= 1
+    assert deny_store.mark_used.await_count == 1
+    assert deny_store.mark_used.await_args.kwargs["ttl_seconds"] >= 1
     assert rate_limiter_backend.reset.await_count == 1
 
 

@@ -36,6 +36,12 @@ class JWKSCachePolicy:
     timeout_seconds: float = 3.0
     maximum_response_bytes: int = 262_144
     maximum_keys: int = 32
+    refresh_cooldown_seconds: float = 10.0
+    """Minimum time between refreshes triggered by unknown ``kid`` lookups.
+
+    Bounds upstream fetch amplification from attacker-chosen kids while still
+    letting a freshly rotated key be picked up shortly after publication.
+    """
 
     def __post_init__(self) -> None:
         """Reject non-positive ceilings.
@@ -48,6 +54,7 @@ class JWKSCachePolicy:
             or self.timeout_seconds <= 0
             or self.maximum_response_bytes < 1
             or self.maximum_keys < 1
+            or self.refresh_cooldown_seconds < 0
         ):
             msg = "JWKS cache and network ceilings must be positive"
             raise ValueError(msg)
@@ -79,12 +86,12 @@ class BoundedJWKSClient:
         self.policy = JWKSCachePolicy() if policy is None else policy
         self.fetcher = _fetch_jwks if fetcher is None else fetcher
         self._keys: dict[str, Any] = {}
-        self._unknown_kid_refresh_used = False
+        self._last_refresh_at = float("-inf")
         self._expires_at = 0.0
         self._lock = anyio.Lock()
 
     async def get_key(self, kid: str, algorithm: str) -> object:
-        """Return one validated key, refreshing at most once for an unknown ``kid``.
+        """Return one validated key, rate-limiting refreshes for unknown ``kid`` values.
 
         Raises:
             JWKSValidationError: If the call cannot complete.
@@ -105,13 +112,13 @@ class BoundedJWKSClient:
             key = self._keys.get(kid)
             if now >= self._expires_at or not self._keys:
                 await self._refresh()
-                self._unknown_kid_refresh_used = False
-            elif key is None and not self._unknown_kid_refresh_used:
-                self._unknown_kid_refresh_used = True
+            elif key is None and now - self._last_refresh_at >= self.policy.refresh_cooldown_seconds:
+                # Time-based cooldown instead of a one-shot flag: a flood of
+                # attacker-chosen kids can no longer consume the single refresh
+                # and block a legitimately rotated key until TTL expiry.
                 await self._refresh()
             key = self._keys.get(kid)
             if key is None:
-                self._unknown_kid_refresh_used = True
                 msg = "JWT kid is unknown"
                 raise JWKSValidationError(msg)
             _validate_key_algorithm(key, algorithm)
@@ -128,7 +135,8 @@ class BoundedJWKSClient:
             )
         )
         self._keys = _parse_jwks(jwks, maximum_keys=self.policy.maximum_keys)
-        self._expires_at = anyio.current_time() + self.policy.ttl_seconds
+        self._last_refresh_at = anyio.current_time()
+        self._expires_at = self._last_refresh_at + self.policy.ttl_seconds
 
 
 def _validate_jwks_url(url: str) -> None:

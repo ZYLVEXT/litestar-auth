@@ -879,3 +879,13 @@ async def test_http_signature_failure_matrix(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(HttpSignatureVerificationError) as inv_exc:
         await mock_verifier.verify(bad_sig, context=_context())
     assert inv_exc.value.code is HttpSignatureFailureCode.SIGNATURE_INVALID
+
+
+async def test_nonce_guard_key_id_colon_cannot_collide_across_pairs() -> None:
+    """(key_id, nonce) pairs with shifted ':' boundaries map to distinct store keys."""
+    store = InMemoryReplayStore(capacity=16, time_source=_Clock())
+    guard = SignatureNonceGuard(store, profile_tag=PROFILE_TAG, ttl_seconds=60)
+
+    await guard.consume(key_id="tenant:a", nonce="n1")
+    # Previously "tenant" + "a:n1" joined to the same raw key as above.
+    await guard.consume(key_id="tenant", nonce="a:n1")

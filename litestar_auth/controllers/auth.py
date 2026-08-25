@@ -379,9 +379,16 @@ async def _authenticate_login_request[UP: UserProtocol[Any], ID: Hashable](
             ),
         )
     )
-    if lockout is not None and await lockout.store.is_locked(lockout.key):
-        await ctx.login_inc(request)
-        raise_login_bad_credentials()
+    if lockout is not None:
+        # Register-before-verify: the atomic counter is the admission decision,
+        # so concurrent bad-password attempts cannot all pass a separate
+        # is_locked() check before any of them records a failure. Successful
+        # logins compensate via reset() below; attempts against a locked key
+        # keep incrementing, which extends the lockout window.
+        attempt_count = await lockout.store.register_failure(lockout.key)
+        if attempt_count > lockout.store.failure_threshold:
+            await ctx.login_inc(request)
+            raise_login_bad_credentials()
 
     user = await user_manager.authenticate(
         resolved_identifier,
@@ -389,9 +396,7 @@ async def _authenticate_login_request[UP: UserProtocol[Any], ID: Hashable](
         login_identifier=ctx.login_identifier,
     )
     if user is None:
-        if lockout is not None:
-            # Lock state is read separately via is_locked(); the returned count is unused here.
-            await lockout.store.register_failure(lockout.key)
+        # The failed attempt was already counted at admission.
         await ctx.login_inc(request)
         raise_login_bad_credentials()
 

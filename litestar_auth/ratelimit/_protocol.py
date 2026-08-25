@@ -100,6 +100,10 @@ class AccountLockoutStore(Protocol):
     def is_shared_across_workers(self) -> bool:
         """Whether store state is shared across worker processes."""
 
+    @property
+    def failure_threshold(self) -> int:
+        """Attempts admitted per window; counts above it are treated as locked."""
+
     async def register_failure(self, key: AccountLockoutKey) -> int:
         """Record a failed password-login attempt and return the current count."""
 

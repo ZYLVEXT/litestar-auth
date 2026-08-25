@@ -33,7 +33,6 @@ MINIMUM_SECRET_LENGTH = 32
 # accepting ``secrets.token_hex(32)`` and ``secrets.token_urlsafe(32)``.
 # Operators can pass a stricter floor through :func:`validate_secret_strength`.
 MINIMUM_SECRET_ENTROPY_BITS = 128.0
-_REPEATED_SECRET_UNIT_LENGTH_FLOOR = MINIMUM_SECRET_LENGTH // 2
 # Reject near-arithmetic codepoint walks (e.g. "abc...xyz123") that clear the
 # frequency-based entropy floor yet are trivially guessable. Cryptographically
 # random tokens stay well under this fraction (observed ~0.38 max for token_hex
@@ -201,14 +200,16 @@ def _estimated_secret_entropy_bits(value: str) -> float:
     Observed Shannon entropy treats ``"abc123" * 22`` as a 132-character
     six-symbol distribution, even though the configured material is just one
     short phrase copied repeatedly. When a secret is an exact periodic string
-    built from a short unit, cap its score at the entropy of that unit;
-    otherwise retain the observed-frequency estimate used by older releases.
+    built from a unit, cap its score at the entropy of that unit — regardless
+    of the unit's length, since ``unit * n`` never holds more material than
+    ``unit``; otherwise retain the observed-frequency estimate used by older
+    releases.
 
     Returns:
         Estimated entropy bits used for production secret validation.
     """
     repeating_unit = _shortest_repeating_unit(value)
-    if repeating_unit == value or len(repeating_unit) >= _REPEATED_SECRET_UNIT_LENGTH_FLOOR:
+    if repeating_unit == value:
         return _shannon_entropy_bits(value)
     return _shannon_entropy_bits(repeating_unit)
 

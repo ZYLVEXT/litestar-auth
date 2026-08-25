@@ -1461,7 +1461,8 @@ async def test_memory_account_lockout_store_fails_closed_for_new_keys_at_capacit
 
     with caplog.at_level(logging.WARNING, logger=ratelimit_client_host_module.logger.name):
         assert await store.is_locked(second_key) is True
-        assert await store.register_failure(second_key) == store.failure_threshold
+        # Above the threshold so register-before-verify admission also fails closed.
+        assert await store.register_failure(second_key) == store.failure_threshold + 1
 
     assert set(store._counters) == {first_key}
     assert any(getattr(record, "event", None) == "account_lockout_memory_capacity" for record in caplog.records)
@@ -2774,3 +2775,83 @@ async def test_totp_rate_limit_orchestrator_routes_actions_to_configured_limiter
     verify_limiter.increment.assert_awaited_once_with(request)
     regenerate_limiter.increment.assert_awaited_once_with(request)
     assert verify_limiter.reset.await_args_list == [call(request), call(request)]
+
+
+async def test_memory_admit_concurrent_attempts_never_exceed_max() -> None:
+    """Concurrent atomic admissions cannot jointly exceed max_attempts."""
+    backend = InMemoryRateLimiter(max_attempts=3, window_seconds=60)
+
+    results = await asyncio.gather(*(backend.admit("key") for _ in range(10)))
+
+    assert sum(results) == backend.max_attempts
+    assert await backend.check("key") is False
+
+
+async def test_memory_admit_fails_closed_for_new_keys_at_capacity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Atomic admit rejects unknown keys when the in-memory map is at capacity."""
+    clock = FakeClock()
+    backend = InMemoryRateLimiter(
+        max_attempts=2,
+        window_seconds=60,
+        clock=clock,
+        max_keys=1,
+        sweep_interval=100,
+    )
+    assert await backend.admit("first") is True
+    with caplog.at_level(logging.WARNING, logger=ratelimit_client_host_module.logger.name):
+        assert await backend.admit("second") is False
+    assert list(backend._windows) == ["first"]
+    assert any(getattr(record, "event", None) == "rate_limit_memory_capacity" for record in caplog.records)
+
+
+async def test_redis_admit_checks_and_records_atomically(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """The Redis admit script admits exactly max_attempts entries per window."""
+    backend = ratelimit_module.RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=60,
+    )
+
+    assert await backend.admit("key") is True
+    assert await backend.admit("key") is True
+    assert await backend.admit("key") is False
+    assert await backend.check("key") is False
+
+
+async def test_endpoint_reserve_attempts_counts_at_admission_and_skips_increment() -> None:
+    """Under reservation, before_request consumes budget and increment is a no-op."""
+    backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    limiter = EndpointRateLimit(
+        backend=backend,
+        scope="ip",
+        namespace="login",
+        reserve_attempts=True,
+    )
+    request = _build_request()
+
+    await limiter.before_request(request)
+    await limiter.increment(request)  # no-op: already counted at admission
+    await limiter.before_request(request)
+
+    with pytest.raises(TooManyRequestsException):
+        await limiter.before_request(request)
+
+    await limiter.reset(request)
+    await limiter.before_request(request)
+
+
+async def test_account_lockout_register_before_verify_admits_exactly_threshold() -> None:
+    """Concurrent registrations produce distinct counts; only threshold many admit."""
+    store = InMemoryAccountLockoutStore(failure_threshold=3, window_seconds=60)
+    key = _account_lockout_key()
+
+    counts = await asyncio.gather(*(store.register_failure(key) for _ in range(8)))
+
+    assert sorted(counts) == list(range(1, 9))
+    admitted = [count for count in counts if count <= store.failure_threshold]
+    assert len(admitted) == store.failure_threshold

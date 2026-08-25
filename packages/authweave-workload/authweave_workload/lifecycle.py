@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,9 @@ if TYPE_CHECKING:
     from authweave_workload.stores import WorkloadStore
 
 type EventRecorder = Callable[[SecurityEvent], object]
+
+
+_AUDIT_LOGGER = logging.getLogger("authweave_workload.audit")
 
 
 def _validate_query_page(*, offset: int, limit: int) -> None:
@@ -373,7 +377,7 @@ class WorkloadLifecycleService:
             target_principal=None if principal is None else principal.ref,
             credential_id=updated.id,
         )
-        event = await self._record(event)
+        event = await self._record_best_effort(event)
         return updated, event
 
     async def complete_rotation(
@@ -411,7 +415,7 @@ class WorkloadLifecycleService:
             target_principal=None if principal is None else principal.ref,
             credential_id=activated.id,
         )
-        event = await self._record(event)
+        event = await self._record_best_effort(event)
         return activated, revoked, event
 
     async def list_credentials(self, principal_id: str) -> tuple[MachineCredential, ...]:
@@ -479,6 +483,32 @@ class WorkloadLifecycleService:
         if inspect.isawaitable(result):
             await result
         return event
+
+    async def _record_best_effort(self, event: SecurityEvent) -> SecurityEvent:
+        """Record without letting a recorder outage mask a durable store mutation.
+
+        Used only for security-positive operations (revoke, rotation
+        completion): the credential is already revoked in the store, so the
+        caller must see success. The audit gap is surfaced through an error
+        log for alerting instead of an exception. Other operations keep the
+        strict record-before-success contract.
+
+        Returns:
+            The attributed event, whether or not recording succeeded.
+        """
+        try:
+            return await self._record(event)
+        except Exception:
+            _AUDIT_LOGGER.exception(
+                "Security event recorder failed; store mutation already committed.",
+                extra={
+                    "event": "workload_audit_record_failed",
+                    "security_event_type": event.type.value,
+                    "credential_id": event.credential_id,
+                    "correlation_id": self.correlation_id,
+                },
+            )
+            return replace(event, actor=self.actor, correlation_id=self.correlation_id)
 
 
 __all__ = ("EventRecorder", "LifecycleConflictError", "WorkloadLifecycleService")

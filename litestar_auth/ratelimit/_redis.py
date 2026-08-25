@@ -155,6 +155,24 @@ redis.call("EXPIRE", key, ttl)
 
 return redis.call("ZCARD", key)
 """
+    _ADMIT_SCRIPT = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local max_attempts = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl = tonumber(ARGV[5])
+local cutoff = now - window
+
+redis.call("ZREMRANGEBYSCORE", key, "-inf", cutoff)
+local count = redis.call("ZCARD", key)
+if count >= max_attempts then
+    return 0
+end
+redis.call("ZADD", key, now, member)
+redis.call("EXPIRE", key, ttl)
+return 1
+"""
     _RETRY_AFTER_SCRIPT = """
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -260,6 +278,31 @@ return math.max(math.ceil(window - (now - tonumber(score_raw))), 1)
             self.window_seconds,
             f"{now:.9f}:{uuid4().hex}",
             self._ttl_seconds,
+        )
+
+    async def admit(self, key: str) -> bool:
+        """Atomically check the window and record the attempt when allowed.
+
+        The check and the insert run in one Lua script, so concurrent
+        admissions cannot jointly exceed ``max_attempts``.
+
+        Returns:
+            ``True`` when the attempt was recorded within the limit.
+        """
+        now = read_clock(self._clock)
+        return (
+            _decode_integer(
+                await self._eval(
+                    self._ADMIT_SCRIPT,
+                    key,
+                    now,
+                    self.window_seconds,
+                    self.max_attempts,
+                    f"{now:.9f}:{uuid4().hex}",
+                    self._ttl_seconds,
+                ),
+            )
+            == 1
         )
 
     async def reset(self, key: str) -> None:

@@ -171,6 +171,12 @@ def _append_account_feature_controllers[UP: UserProtocol[Any], ID: Hashable](
                 unsafe_testing=config.unsafe_testing,
                 security=security,
                 totp_stepup_policy=config.totp_stepup_policy,
+                totp_used_tokens_store=(
+                    config.totp_config.totp_used_tokens_store if config.totp_config is not None else None
+                ),
+                totp_require_replay_protection=(
+                    config.totp_config.totp_require_replay_protection if config.totp_config is not None else True
+                ),
                 admin_guards=config.users_admin_guards,
                 **users_schema_kwargs(config),
             ),

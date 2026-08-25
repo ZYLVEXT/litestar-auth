@@ -499,6 +499,12 @@ def _validate_token_times(
     if issued_at > now + clock_skew:
         msg = f"{label} is not yet valid"
         raise FAPIValidationError(msg)
+    # Decode runs with verify_nbf=False (all time claims are validated manually
+    # here), so enforce nbf when the issuer includes it.
+    not_before = _optional_numeric_date(claims.get("nbf"), label=f"{label} nbf")
+    if not_before is not None and not_before > now + clock_skew:
+        msg = f"{label} is not yet valid"
+        raise FAPIValidationError(msg)
     if expires_at <= now - clock_skew:
         msg = f"{label} is expired"
         raise FAPIValidationError(msg)

@@ -18,7 +18,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._totp_recovery import _consume_matching_recovery_code
-from litestar_auth.config import TOTP_PENDING_AUDIENCE
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS, TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, SecurityWarning, TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit._client_host import _client_host
@@ -272,6 +272,11 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
         Raises:
             InvalidTotpCodeError: If the TOTP/recovery code is invalid,
                 already consumed, or TOTP is not enabled.
+
+        The pending JTI is claimed atomically during token resolution, before
+        any factor is verified: a pending token is single-attempt. A wrong
+        TOTP/recovery code burns the pending token and the client must restart
+        the login handshake.
         """
         pending_login = await self._resolve_pending_login(pending_token, client_binding=client_binding)
         if validate_user is not None:
@@ -300,7 +305,6 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
             )
         if not totp_verified and not recovery_code_verified:
             raise InvalidTotpCodeError
-        await self._deny_pending_login(pending_login)
         return CompletedTotpLogin(user=pending_login.user, used_recovery_code=recovery_code_verified)
 
     async def _resolve_pending_login(
@@ -313,8 +317,11 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
         subject = self._validate_pending_subject(payload)
         pending_jti = self._validate_pending_jti(payload)
         expires_at = self._validate_pending_expiration(payload)
-        await self._ensure_pending_jti_is_unused(pending_jti)
         self._validate_pending_client_binding(payload, client_binding=client_binding)
+        # Claim the JTI atomically before any factor (TOTP or recovery) is
+        # examined: two concurrent verifies of the same pending token cannot
+        # both pass, and a recovery code is never consumed when the claim fails.
+        await self._claim_pending_jti(pending_jti, expires_at)
 
         user = await self._user_manager.get(self._parse_user_id(subject))
         if user is None:
@@ -360,10 +367,6 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
             raise InvalidTotpPendingTokenError
         return expires_at
 
-    async def _ensure_pending_jti_is_unused(self, pending_jti: str) -> None:
-        if self._pending_jti_store is not None and await self._pending_jti_store.is_denied(pending_jti):
-            raise InvalidTotpPendingTokenError
-
     def _validate_pending_client_binding(
         self,
         payload: dict[str, Any],
@@ -389,7 +392,15 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
             and compare_digest(expected_user_agent, client_binding.user_agent_fingerprint)
         )
 
-    async def _deny_pending_login(self, pending_login: PendingTotpLogin[UP]) -> None:
+    async def _claim_pending_jti(self, pending_jti: str, expires_at: datetime) -> None:
+        """Atomically consume the pending JTI, failing closed on any anomaly.
+
+        Raises:
+            ConfigurationError: If no ``pending_jti_store`` is configured outside
+                ``unsafe_testing``.
+            InvalidTotpPendingTokenError: If the JTI was already claimed (replay).
+            TokenError: If the store could not record the claim (capacity pressure).
+        """
         if self._pending_jti_store is None:
             if not self._unsafe_testing:
                 msg = (
@@ -400,14 +411,36 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID: Hashable]:
             self._warn_pending_jti_disabled()
             return
 
-        ttl_seconds = max(int((pending_login.expires_at - datetime.now(tz=UTC)).total_seconds()), 1)
-        recorded = await self._pending_jti_store.deny(pending_login.pending_jti, ttl_seconds=ttl_seconds)
-        if not recorded:
-            msg = (
-                "Could not record pending-login JTI in the denylist (in-memory store at capacity). "
-                "Use RedisJWTDenylistStore or increase max_entries."
-            )
-            raise TokenError(msg)
+        ttl_seconds = self._pending_jti_ttl_seconds(expires_at)
+        capacity_msg = (
+            "Could not record pending-login JTI in the denylist (in-memory store at capacity). "
+            "Use RedisJWTDenylistStore or increase max_entries."
+        )
+        mark_used = getattr(self._pending_jti_store, "mark_used", None)
+        if mark_used is not None:
+            result = await mark_used(pending_jti, ttl_seconds=ttl_seconds)
+            if result.stored:
+                return
+            if result.rejected_as_replay:
+                raise InvalidTotpPendingTokenError
+            raise TokenError(capacity_msg)
+        # Custom JWTDenylistStore without mark_used: best-effort check then deny.
+        # Prefer JWTReplayStore for a true atomic claim under concurrency.
+        if await self._pending_jti_store.is_denied(pending_jti):
+            raise InvalidTotpPendingTokenError
+        if not await self._pending_jti_store.deny(pending_jti, ttl_seconds=ttl_seconds):
+            raise TokenError(capacity_msg)
+
+    @staticmethod
+    def _pending_jti_ttl_seconds(expires_at: datetime) -> int:
+        """Return a claim TTL covering the token ``exp`` plus decode leeway.
+
+        ``decode_signed_jwt`` accepts tokens up to ``JWT_TIME_CLAIM_LEEWAY_SECONDS``
+        past ``exp``, so the claim must outlive that window even when ``exp`` is
+        already in the past.
+        """
+        remaining = max(int((expires_at - datetime.now(tz=UTC)).total_seconds()), 0)
+        return remaining + JWT_TIME_CLAIM_LEEWAY_SECONDS
 
     def _warn_pending_jti_disabled(self) -> None:
         """Emit warning and structured telemetry for unsafe pending-token replay posture."""

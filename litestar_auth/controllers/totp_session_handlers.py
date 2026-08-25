@@ -287,6 +287,10 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID: Hashable](
                 user_manager=user_manager,
                 totp_code=data.code,
                 totp_algorithm=security.totp_algorithm,
+                # The code above already went through verify_totp_with_store;
+                # re-verifying would consume a second counter entry and reject
+                # the just-used code as a replay.
+                code_already_verified=totp_verified,
             ),
         )
     await user_manager.set_totp_secret(user, None)
@@ -351,6 +355,9 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID: Hash
             user_manager=user_manager,
             totp_code=totp_code,
             totp_algorithm=security.totp_algorithm,
+            used_tokens_store=security.used_tokens_store,
+            require_replay_protection=security.require_replay_protection,
+            unsafe_testing=security.unsafe_testing,
         ),
     )
 

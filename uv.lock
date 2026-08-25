@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12.0, <3.15.0"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -164,7 +164,7 @@ wheels = [
 
 [[package]]
 name = "authweave-core"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "packages/authweave-core" }
 dependencies = [
     { name = "anyio" },
@@ -175,7 +175,7 @@ requires-dist = [{ name = "anyio", specifier = ">=4.14.2,<5.0" }]
 
 [[package]]
 name = "authweave-http-signatures"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "packages/authweave-http-signatures" }
 dependencies = [
     { name = "authweave-core" },
@@ -205,7 +205,7 @@ provides-extras = ["redis", "litestar"]
 
 [[package]]
 name = "authweave-otel"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "packages/authweave-otel" }
 dependencies = [
     { name = "authweave-core" },
@@ -228,7 +228,7 @@ dev = [{ name = "opentelemetry-sdk", specifier = ">=1.44.0,<2.0" }]
 
 [[package]]
 name = "authweave-webhooks"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "packages/authweave-webhooks" }
 dependencies = [
     { name = "authweave-core" },
@@ -258,7 +258,7 @@ provides-extras = ["redis", "httpx", "litestar"]
 
 [[package]]
 name = "authweave-workload"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "packages/authweave-workload" }
 dependencies = [
     { name = "authweave-core" },
@@ -1076,7 +1076,7 @@ wheels = [
 
 [[package]]
 name = "litestar-auth"
-version = "8.0.0"
+version = "8.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "advanced-alchemy" },

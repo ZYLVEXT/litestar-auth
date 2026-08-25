@@ -400,7 +400,16 @@ class BaseUserManager[UP: UserProtocol[Any], ID: Hashable](
         await self._account_tokens.request_verify_token(email)
 
     async def forgot_password(self, email: str) -> None:
-        """Trigger the forgot-password flow without revealing whether a user exists."""
+        """Trigger the forgot-password flow without revealing whether a user exists.
+
+        The library equalizes its own work for known and unknown emails (a
+        dummy token is minted either way). The ``after_forgot_password`` hook,
+        however, runs in-request: if your hook sends email only for existing
+        users, the response-time difference leaks account existence. Either
+        perform equivalent work in the ``user is None`` branch (e.g. a dummy
+        render/send) or enqueue delivery to a background worker so the
+        response time is independent of account existence.
+        """
         await self._account_tokens.forgot_password(email, dummy_hash=await self._get_dummy_hash())
 
     async def reset_password(self, token: str, password: str) -> UP:

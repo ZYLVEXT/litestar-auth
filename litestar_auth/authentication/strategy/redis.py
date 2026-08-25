@@ -394,7 +394,9 @@ class RedisTokenStrategy(_RefreshTokenMetadataMixin, Strategy[UP, ID]):
                 None if payload["l"] is None else datetime.fromtimestamp(payload["l"], tz=UTC),
                 metadata,
             )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        except (KeyError, TypeError, ValueError, OverflowError, OSError, json.JSONDecodeError):
+            # OverflowError/OSError: datetime.fromtimestamp on out-of-range
+            # epoch values; a corrupted payload must read as invalid, not 500.
             return None
 
     async def authenticate_token(

@@ -31,7 +31,7 @@ from litestar_auth.ratelimit import (
     RedisClientProtocol,
     RedisRateLimiter,
 )
-from litestar_auth.totp import generate_totp_secret
+from litestar_auth.totp import InMemoryUsedTotpCodeStore, generate_totp_secret
 from tests._helpers import (
     auth_middleware_get_request_session,
     cast_fakeredis,
@@ -104,8 +104,8 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="0123456789abcdef" * 4,
-                reset_password_token_secret="fedcba9876543210" * 4,
+                verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+                reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             ),
             backends=backends,
         )
@@ -224,6 +224,7 @@ def build_app(
         id_parser=UUID,
         rate_limit_config=rate_limit_config,
         hard_delete=hard_delete,
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
     )
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],

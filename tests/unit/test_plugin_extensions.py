@@ -149,9 +149,9 @@ PUBLIC_EXTENSION_EXPORTS = (
     "create_verify_controller",
     "requires_recent_authentication",
 )
-VERIFICATION_SECRET = "0123456789abcdef" * 4
-RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
-ORGANIZATION_INVITATION_SECRET = "c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2
+VERIFICATION_SECRET = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
+RESET_PASSWORD_SECRET = "6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8"
+ORGANIZATION_INVITATION_SECRET = "5423d81ac7018877b7b8427a73fb13b8c857d3b46ac00c5dd5526fb66787947d"
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 OAUTH_TOKEN_ENCRYPTION_KEY = "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
 ALPHA_COUNTER = 1
@@ -774,7 +774,11 @@ def test_resolve_extensions_memoizes_enabled_extension_tuple(case_name: str) -> 
             )
             expected_names = ("oauth",)
         case "totp":
-            config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4))
+            config = _minimal_config(
+                totp_config=TotpConfig(
+                    totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
+                )
+            )
             expected_names = ("totp",)
         case "organization_admin":
             config = _minimal_config(
@@ -1067,7 +1071,9 @@ def test_oauth_config_is_normalized_to_internal_extension() -> None:
 
 def test_totp_config_is_normalized_to_internal_extension() -> None:
     """Configured TOTP contributes the internal TOTP extension."""
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4))
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44")
+    )
 
     extensions = config.resolve_extensions()
 
@@ -1086,7 +1092,7 @@ def test_config_internal_extensions_resolve_in_existing_descriptor_order() -> No
             include_organization_admin=True,
             include_organization_invitations=True,
         ),
-        totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4),
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"),
     )
     config.oauth_config = OAuthConfig(
         oauth_providers=[OAuthProviderConfig(name="github", client=object())],
@@ -1156,7 +1162,7 @@ def test_totp_config_rejects_explicit_duplicate_extension_name() -> None:
     """The internal TOTP extension reserves the stable totp extension name."""
     config = _minimal_config(
         extensions=(NamedExtension("totp"),),
-        totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4),
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"),
     )
 
     with pytest.raises(ValueError, match="Duplicate auth extension names are not allowed: totp"):
@@ -1165,7 +1171,10 @@ def test_totp_config_rejects_explicit_duplicate_extension_name() -> None:
 
 def test_totp_extension_register_contributes_non_auth_owned_controller(monkeypatch: pytest.MonkeyPatch) -> None:
     """The internal TOTP extension mounts the plugin controller without changing route ownership."""
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4), unsafe_testing=True)
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"),
+        unsafe_testing=True,
+    )
     context = build_extension_registration_context(app_config=AppConfig(), config=config)
     controller = object()
     captured: dict[str, object] = {}
@@ -1625,7 +1634,8 @@ async def test_plugin_event_subscriber_receives_redacted_update_payloads() -> No
     assert len(update_events) == UPDATE_EVENT_COUNT
     _password_user, password_update_dict = update_events[0].args
     assert isinstance(password_update_dict, dict)
-    assert password_update_dict == {}
+    # Credential material is redacted; only the rotation marker remains.
+    assert password_update_dict == {"password_changed": True}
     assert "hashed_password" not in password_update_dict
     assert "password" not in password_update_dict
     _profile_user, profile_update_dict = update_events[1].args

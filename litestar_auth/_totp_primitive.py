@@ -102,7 +102,9 @@ def _current_counter() -> int:
 
 def _verify_totp_counter(secret: str, code: str, *, algorithm: TotpAlgorithm = TOTP_ALGORITHM) -> int | None:
     """Return the matched counter when the code is valid, otherwise ``None``."""
-    if len(code) != TOTP_DIGITS or not code.isdigit():
+    # str.isdigit() accepts non-ASCII digits (e.g. Arabic-Indic), which can
+    # never match a generated code and make hmac.compare_digest raise TypeError.
+    if len(code) != TOTP_DIGITS or not code.isascii() or not code.isdigit():
         return None
 
     try:
@@ -112,7 +114,9 @@ def _verify_totp_counter(secret: str, code: str, *, algorithm: TotpAlgorithm = T
             expected_code = _generate_totp_code(secret, candidate_counter, algorithm=algorithm)
             if hmac.compare_digest(expected_code, code):
                 return candidate_counter
-    except binascii.Error:
+    except (binascii.Error, TypeError):
+        # TypeError: defense-in-depth for non-ASCII input reaching the
+        # constant-time compare through any future call path.
         return None
 
     return None

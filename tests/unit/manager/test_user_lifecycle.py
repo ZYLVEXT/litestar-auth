@@ -309,7 +309,8 @@ async def test_update_password_change_hashes_password_invalidates_tokens_and_run
     assert password_helper.verify("new-valid-password", update_payload["hashed_password"]) is True
     invalidator.assert_awaited_once_with(updated_user)
     assert manager.request_verify_events == []
-    assert manager.after_update_events == [(updated_user, update_payload)]
+    # The persistence payload carries the hash; the hook payload must not.
+    assert manager.after_update_events == [(updated_user, {"password_changed": True})]
 
 
 async def test_update_rejects_duplicate_email_for_another_user() -> None:

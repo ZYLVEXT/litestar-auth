@@ -137,7 +137,7 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     secondary_backend = _backend(name="secondary", token_prefix="secondary")
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
-        totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4),
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"),
     )
     config.login_minimum_response_seconds = login_minimum_response_seconds
     calls: list[dict[str, object]] = []
@@ -161,7 +161,7 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     assert calls[0]["backend"].name == primary_backend.name
     assert calls[0]["backend"].transport is primary_backend.transport
     assert calls[0]["backend"].strategy is primary_backend.strategy
-    assert calls[0]["totp_pending_secret"] == "76543210fedcba98" * 4
+    assert calls[0]["totp_pending_secret"] == "2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
     assert calls[0]["login_minimum_response_seconds"] == pytest.approx(login_minimum_response_seconds)
     assert calls[0]["unsafe_testing"] is False
     assert isinstance(calls[1]["backend"], _current_startup_backend_template_type())
@@ -189,7 +189,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_backend_name="secondary",
             totp_issuer="Example Issuer",
             totp_algorithm=cast("Any", "SHA512"),
@@ -222,7 +222,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["require_replay_protection"] is False
     assert captured["requires_verification"] is True
     assert captured["enable_refresh"] is True
-    assert captured["totp_pending_secret"] == "76543210fedcba98" * 4
+    assert captured["totp_pending_secret"] == "2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44"
     assert captured["totp_secret_key"] is None
     assert captured["totp_secret_keyring"] is None
     assert captured["totp_enable_requires_password"] is False
@@ -248,7 +248,7 @@ def test_plugin_create_totp_controller_logs_when_pending_client_binding_is_disab
             backend_index=backend_index,
             user_manager_dependency_key="litestar_auth_user_manager",
             require_replay_protection=False,
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_enable_requires_password=False,
             totp_pending_require_client_binding=False,
             unsafe_testing=True,
@@ -267,7 +267,7 @@ def test_build_totp_controller_defaults_to_primary_backend_when_name_is_unset(
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         ),
     )
     captured: dict[str, object] = {}
@@ -288,10 +288,12 @@ def test_build_totp_controller_forwards_totp_secret_key_from_user_manager_securi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """TOTP controller assembly forwards the Fernet key configured on UserManagerSecurity."""
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4))
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44")
+    )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         totp_secret_key="fernet-secret-key-for-plugin-wiring",
         id_parser=UUID,
     )
@@ -313,10 +315,12 @@ def test_build_totp_controller_forwards_totp_keyring_from_user_manager_security(
 ) -> None:
     """TOTP controller assembly forwards the configured versioned Fernet keyring."""
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4))
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44")
+    )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="0123456789abcdef" * 4,
-        reset_password_token_secret="fedcba9876543210" * 4,
+        verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+        reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
         totp_secret_keyring=keyring,
         id_parser=UUID,
     )
@@ -337,7 +341,7 @@ def test_build_totp_controller_raises_for_unknown_named_backend_after_index_scan
     """The TOTP controller path still fails closed after scanning startup backends for an index."""
     config = _minimal_config(
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_backend_name="missing",
         ),
     )
@@ -350,7 +354,7 @@ def test_totp_backend_raises_for_unknown_backend_name() -> None:
     """Named TOTP backends must exist in the configured backend set."""
     config = _minimal_config(
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_backend_name="missing",
         ),
     )
@@ -366,7 +370,7 @@ def test_totp_backend_defaults_to_primary_startup_backend() -> None:
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         ),
     )
 
@@ -431,7 +435,7 @@ async def test_create_totp_controller_enable_validation_callback_runs_background
     """Plugin TOTP enable handlers keep the invalid-payload background callback wired."""
     config = _minimal_config(
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_enrollment_store=InMemoryTotpEnrollmentStore(),
         ),
     )
@@ -443,7 +447,7 @@ async def test_create_totp_controller_enable_validation_callback_runs_background
         user_manager_dependency_key="litestar_auth_user_manager",
         pending_jti_store=cast("Any", object()),
         require_replay_protection=False,
-        totp_pending_secret="76543210fedcba98" * 4,
+        totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         totp_enable_requires_password=True,
         unsafe_testing=True,
     )
@@ -459,7 +463,7 @@ async def test_create_totp_controller_regenerate_validation_callback_runs_backgr
     """Plugin TOTP regenerate handlers keep the invalid-payload background callback wired."""
     config = _minimal_config(
         totp_config=TotpConfig(
-            totp_pending_secret="76543210fedcba98" * 4,
+            totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
             totp_enrollment_store=InMemoryTotpEnrollmentStore(),
         ),
     )
@@ -471,7 +475,7 @@ async def test_create_totp_controller_regenerate_validation_callback_runs_backgr
         user_manager_dependency_key="litestar_auth_user_manager",
         pending_jti_store=cast("Any", object()),
         require_replay_protection=False,
-        totp_pending_secret="76543210fedcba98" * 4,
+        totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         totp_enable_requires_password=True,
         unsafe_testing=True,
     )
@@ -496,7 +500,7 @@ async def test_plugin_totp_regenerate_route_delegates_with_step_up_payload(monke
         user_manager_dependency_key="litestar_auth_user_manager",
         pending_jti_store=cast("Any", object()),
         require_replay_protection=False,
-        totp_pending_secret="76543210fedcba98" * 4,
+        totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         totp_enable_requires_password=True,
         unsafe_testing=True,
     )
@@ -535,7 +539,7 @@ async def test_plugin_totp_regenerate_route_delegates_without_step_up_payload(
         user_manager_dependency_key="litestar_auth_user_manager",
         pending_jti_store=cast("Any", object()),
         require_replay_protection=False,
-        totp_pending_secret="76543210fedcba98" * 4,
+        totp_pending_secret="2b101e06ab63b75e08f84e82a86e5d1d5f6bd92b8645ed3769a10b867bc10f44",
         totp_enable_requires_password=False,
         unsafe_testing=True,
     )
@@ -685,6 +689,8 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "unsafe_testing": False,
             "security": None,
             "totp_stepup_policy": {},
+            "totp_used_tokens_store": None,
+            "totp_require_replay_protection": True,
             "admin_guards": None,
             "user_read_schema": _ReadSchema,
             "user_update_schema": _UpdateSchema,
@@ -895,8 +901,8 @@ def _minimal_config(
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             id_parser=UUID,
         ),
         oauth_config=oauth_config,

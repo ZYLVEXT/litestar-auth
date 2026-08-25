@@ -36,7 +36,7 @@ from litestar_auth.guards import is_authenticated, is_human_authenticated, is_su
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
-from litestar_auth.totp import generate_totp_secret
+from litestar_auth.totp import InMemoryUsedTotpCodeStore, generate_totp_secret
 
 UsersControllerConfig = users_module.UsersControllerConfig
 _users_get_user_or_404 = users_module._users_get_user_or_404
@@ -418,18 +418,34 @@ async def test_users_handle_update_me_accepts_inline_totp_code_for_email_change(
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"], totp_secret=secret)
     manager = RecordingUserManager(user_to_get=user)
 
+    ctx = build_context()
+    ctx.totp_used_tokens_store = InMemoryUsedTotpCodeStore()
+    totp_code = _generate_totp_code(secret, _current_counter())
     result = await _users_handle_update_me(
         cast("Any", DummyRequest(user=user)),
         ExtendedSelfUpdate(
             email="updated@example.com",
             current_password="current-password",
-            totp_code=_generate_totp_code(secret, _current_counter()),
+            totp_code=totp_code,
         ),
-        ctx=build_context(),
+        ctx=ctx,
         user_manager=cast("Any", manager),
     )
 
     assert cast("UserRead", result).email == "updated@example.com"
+
+    # The same inline code cannot satisfy a second step-up in the same window.
+    with pytest.raises(ClientException):
+        await _users_handle_update_me(
+            cast("Any", DummyRequest(user=user)),
+            ExtendedSelfUpdate(
+                email="updated2@example.com",
+                current_password="current-password",
+                totp_code=totp_code,
+            ),
+            ctx=ctx,
+            user_manager=cast("Any", RecordingUserManager(user_to_get=user)),
+        )
 
 
 async def test_require_totp_stepup_policy_off_skips_enforcement() -> None:
@@ -453,7 +469,7 @@ async def test_require_totp_stepup_always_required_blocks_missing_enrollment_or_
 
     with pytest.raises(ClientException) as exc_info:
         await require_totp_stepup(
-            cast("Any", DummyRequest(user=user)),
+            cast("Any", DummyRequest(user=cast("Any", user))),
             TotpStepUpCheck(
                 endpoint="users.update_self",
                 policy={"users.update_self": "always_required"},
@@ -462,6 +478,39 @@ async def test_require_totp_stepup_always_required_blocks_missing_enrollment_or_
         )
 
     assert exc_info.value.extra == {"code": ErrorCode.TOTP_STEPUP_REQUIRED}
+
+
+async def test_require_totp_stepup_always_required_blocks_non_totp_user_type() -> None:
+    """A user model without TOTP fields cannot silently bypass always_required."""
+
+    class PlainUser(msgspec.Struct):
+        id: UUID
+        email: str
+
+    user = PlainUser(id=uuid4(), email="user@example.com")
+    manager = MarkerUserManager(secret_result=None)
+
+    with pytest.raises(ClientException) as exc_info:
+        await require_totp_stepup(
+            cast("Any", DummyRequest(user=cast("Any", user))),
+            TotpStepUpCheck(
+                endpoint="users.update_self",
+                policy={"users.update_self": "always_required"},
+                user_manager=manager,
+            ),
+        )
+
+    assert exc_info.value.extra == {"code": ErrorCode.TOTP_STEPUP_REQUIRED}
+
+    # required_when_enrolled remains unchanged for non-TOTP user types.
+    await require_totp_stepup(
+        cast("Any", DummyRequest(user=cast("Any", user))),
+        TotpStepUpCheck(
+            endpoint="users.update_self",
+            policy={"users.update_self": "required_when_enrolled"},
+            user_manager=manager,
+        ),
+    )
 
 
 async def test_require_totp_stepup_ignores_unreadable_secret_when_not_always_required() -> None:

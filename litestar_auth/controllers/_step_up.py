@@ -11,13 +11,13 @@ from litestar.openapi.spec import Example
 
 from litestar_auth.controllers._error_responses import raise_step_up_required, raise_wrong_current_password
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.totp import verify_totp
+from litestar_auth.totp import TotpReplayProtection, verify_totp_with_store
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
     from litestar import Request
 
-    from litestar_auth.totp import TotpAlgorithm
+    from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
 
 type TotpStepUpEndpoint = Literal[
     "totp.disable",
@@ -127,31 +127,55 @@ class TotpStepUpCheck[UP: UserProtocol[Any]]:
     user_manager: TotpStepUpVerifierProtocol[UP]
     totp_code: str | None = field(default=None, repr=False)
     totp_algorithm: TotpAlgorithm = "SHA256"
+    used_tokens_store: UsedTotpCodeStore | None = None
+    require_replay_protection: bool = True
+    unsafe_testing: bool = False
+    code_already_verified: bool = False
+    """Set when the call site already verified ``totp_code`` against the replay
+    store in this request; the step-up check then accepts it without consuming
+    a second counter entry."""
 
 
 async def require_totp_stepup[UP: UserProtocol[Any]](
     request: Request[Any, Any, Any],
     check: TotpStepUpCheck[UP],
 ) -> None:
-    """Enforce endpoint-level TOTP step-up policy before sensitive mutations."""
+    """Enforce endpoint-level TOTP step-up policy before sensitive mutations.
+
+    Inline codes are verified through the replay store, so one code cannot
+    satisfy two step-ups within the same TOTP window. ``always_required`` fails
+    closed for users that cannot present a TOTP factor at all.
+    """
     mode = check.policy.get(check.endpoint, _DEFAULT_TOTP_STEPUP_POLICY[check.endpoint])
     if mode == "off":
         return
     user = request.user
-    if not isinstance(user, TotpUserProtocol):
-        return
-    if user.totp_secret is None:
-        if mode == "always_required":
-            raise_step_up_required()
-        return
-    secret = await check.user_manager.read_totp_secret(user.totp_secret)
+    secret = None
+    if isinstance(user, TotpUserProtocol) and user.totp_secret is not None:
+        secret = await check.user_manager.read_totp_secret(user.totp_secret)
     if secret is None:
+        # No usable TOTP factor: fail closed under always_required instead of
+        # silently skipping enforcement for non-TOTP user models.
         if mode == "always_required":
             raise_step_up_required()
         return
 
-    if check.totp_code is not None and verify_totp(secret, check.totp_code, algorithm=check.totp_algorithm):
-        return
+    if check.totp_code is not None:
+        if check.code_already_verified:
+            return
+        totp_verified = await verify_totp_with_store(
+            secret,
+            check.totp_code,
+            replay=TotpReplayProtection(
+                user_id=user.id,
+                used_tokens_store=check.used_tokens_store,
+                require_replay_protection=check.require_replay_protection,
+                unsafe_testing=check.unsafe_testing,
+            ),
+            algorithm=check.totp_algorithm,
+        )
+        if totp_verified:
+            return
     session_id = await _resolve_current_session_id(request, user_manager=check.user_manager)
     if session_id is not None and await check.user_manager.has_recent_totp_verification(cast("UP", user), session_id):
         return

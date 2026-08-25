@@ -93,8 +93,8 @@ def _build_config(
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="0123456789abcdef" * 4,
-            reset_password_token_secret="fedcba9876543210" * 4,
+            verification_token_secret="157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe",
+            reset_password_token_secret="6a04e4ffd25866a9cce15600e9ff4bd0865b84e7474f6c7eb2d75fef3c0a81d8",
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -150,7 +150,7 @@ async def test_middleware_hook_can_wrap_auth_middleware_without_breaking_cookie_
         strategy=build_test_redis_strategy(key_prefix="plugin-hooks-cookie"),
     )
     config = _build_config(backend=cookie_backend)
-    config.csrf_secret = "0123456789abcdef" * 4
+    config.csrf_secret = "157261932c2bdecb9f6c6ee849a24e3a979a9bf46cf50e99a739b4cd5545cebe"
 
     def middleware_hook(middleware: DefineMiddleware) -> DefineMiddleware:
         return DefineMiddleware(HeaderInjectingAuthMiddleware, *middleware.args, **middleware.kwargs)
