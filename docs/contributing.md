@@ -10,6 +10,8 @@ just test
 just docs-build
 ```
 
+`just check` includes Ruff, ty, import-linter, dependency pin validation, and protocol vectors.
+
 Each distribution under `packages/` has an independent CI gate. Run the matching commands from the
 changed package directory (replace the placeholders with its distribution and import-package names):
 

@@ -61,6 +61,13 @@ hooks = [
     pass_filenames = false
   },
   {
+    id = "import-linter",
+    name = "import-linter",
+    entry = "uv run --no-sync lint-imports",
+    language = "system",
+    pass_filenames = false
+  },
+  {
     id = "pip-audit",
     name = "pip-audit",
     entry = "uv run pip-audit",

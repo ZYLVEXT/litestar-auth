@@ -22,6 +22,12 @@ public X.509 credential lifecycle, and sender-constrained Resource Server integr
 `authweave-otel` implements the optional observer seam. `authweave-webhooks` and
 `authweave-http-signatures` are message-integrity packages, not authentication providers.
 
+That import direction is checked by import-linter (`uv run lint-imports`, also part of
+`just check`). `authweave-core` must not import Litestar, SQLAlchemy, Redis, PyJWT, or
+cryptography. Persistence protocols in `litestar_auth.db` must not import SQLAlchemy; the
+adapter is `litestar_auth.db.sqlalchemy`. The `authweave-workload` package root must not
+import extra modules. Webhooks, HTTP signatures, and OTel must not import each other.
+
 All distributions use one exact lockstep version, require Python
 `>=3.12,<3.15`, and reject mixed workspace versions. Optional workload
 implementations remain behind `sqlalchemy`, `mtls`, `jwt`, `dpop`, `spiffe`,

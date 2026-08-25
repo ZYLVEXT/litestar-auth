@@ -67,6 +67,7 @@ dev = [
     "deptry>=0.25.1",
     "prek>=0.4.14",
     "fakeredis[lua]>=2.37.1",
+    "import-linter>=2.13",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.6",
@@ -101,6 +102,81 @@ DEP001 = ["uvicorn"]
 DEP004 = ["dotenv", "yaml"]
 DEP002 = ["redis", "httpx-oauth", "litestar-auth", "cryptography"]
 DEP003 = ["msgspec", "sqlalchemy"]
+
+[tool.importlinter]
+root_packages = [
+    "litestar_auth",
+    "authweave_core",
+    "authweave_workload",
+    "authweave_otel",
+    "authweave_webhooks",
+    "authweave_http_signatures",
+]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "authweave-core stays framework-free"
+type = "forbidden"
+source_modules = ["authweave_core"]
+forbidden_modules = ["litestar", "sqlalchemy", "advanced_alchemy", "redis", "jwt", "cryptography"]
+
+[[tool.importlinter.contracts]]
+name = "db protocols stay ORM-free"
+type = "forbidden"
+source_modules = ["litestar_auth.db", "litestar_auth.db.base"]
+forbidden_modules = ["sqlalchemy", "advanced_alchemy"]
+as_packages = false
+
+[[tool.importlinter.contracts]]
+name = "sqlalchemy adapter does not import reference models"
+type = "forbidden"
+source_modules = ["litestar_auth.db.sqlalchemy"]
+forbidden_modules = ["litestar_auth.models"]
+
+[[tool.importlinter.contracts]]
+name = "integrity packages are independent"
+type = "independence"
+modules = [
+    "authweave_webhooks",
+    "authweave_http_signatures",
+    "authweave_otel",
+]
+
+[[tool.importlinter.contracts]]
+name = "http-signatures package does not import litestar or redis"
+type = "forbidden"
+source_modules = ["authweave_http_signatures"]
+forbidden_modules = ["litestar", "redis"]
+
+[[tool.importlinter.contracts]]
+name = "webhooks package does not import litestar or redis"
+type = "forbidden"
+source_modules = ["authweave_webhooks"]
+forbidden_modules = ["litestar", "redis"]
+
+[[tool.importlinter.contracts]]
+name = "workload root stays extra-free"
+type = "forbidden"
+source_modules = ["authweave_workload"]
+forbidden_modules = [
+    "litestar",
+    "sqlalchemy",
+    "cryptography",
+    "jwt",
+    "authweave_workload.dpop",
+    "authweave_workload.spiffe",
+    "authweave_workload.introspection",
+    "authweave_workload.redis_store",
+    "authweave_workload.sqlalchemy",
+    "authweave_workload.integrations",
+]
+as_packages = false
+
+[[tool.importlinter.contracts]]
+name = "other distributions do not import litestar_auth internals"
+type = "protected"
+protected_modules = ["litestar_auth._plugin", "litestar_auth._manager"]
+allowed_importers = ["litestar_auth"]
 
 [tool.uv]
 default-groups = []
