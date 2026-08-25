@@ -397,6 +397,15 @@ def test_verify_totp_rejects_invalid_codes_and_secrets(monkeypatch: pytest.Monke
     assert totp.verify_totp("invalid***", "287082") is False
 
 
+def test_verify_totp_rejects_unicode_digit_codes_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-ASCII digit codes return False instead of raising from compare_digest."""
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
+    arabic_indic_code = "١٢٣٤٥٦"  # ١٢٣٤٥٦
+
+    assert arabic_indic_code.isdigit()  # the trap this guards against
+    assert totp.verify_totp(RFC_SECRET, arabic_indic_code) is False
+
+
 async def test_verify_totp_with_store_rejects_same_window_replay(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replay protection rejects the same `(user, counter)` after one success."""
     monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
