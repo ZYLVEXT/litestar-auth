@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:0.12.5-python3.14-trixie-slim@sha256:dc360d7e5f968c682e8b59e83027a315a0232dead15cb9dfe3e707a12ba390e1
+FROM ghcr.io/astral-sh/uv:0.12.13-python3.14-trixie-slim@sha256:d2525beeae88affd18389bf69292abf9b5cbbb3f5c5242b6da3d20e304959b37
 
 ENV UV_CACHE_DIR=/tmp/uv-cache \
     UV_PROJECT_ENVIRONMENT=/opt/sts-venv
